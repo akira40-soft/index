@@ -1,3 +1,4 @@
+// index.js
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -11,6 +12,8 @@ const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
 const qrcode = require('qrcode');
+const fs = require('fs');
+const path = require('path');
 
 const logger = pino({ level: 'silent' });
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
@@ -22,37 +25,49 @@ let lastProcessedTime = 0;
 let healthInterval;
 let isConnecting = false;
 let currentQR = null;
-let isReady = false; // GARANTE SESSÃO PRONTA
 
-// SERVIDOR
+// SERVIDOR WEB
 const app = express();
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor na porta ${server.address().port}`);
 });
 
-app.get('/', (req, res) => res.send(`AKIRA BOT ONLINE | ${new Date().toLocaleString()}`));
+app.get('/', (req, res) => {
+  res.send(`AKIRA BOT ONLINE | ${new Date().toLocaleString()}`);
+});
 
 app.get('/qr', (req, res) => {
   if (currentQR) {
-    qrcode.toDataURL(currentQR, { scale: 10 }, (err, url) => {
-      if (err) return res.send(`<h1>Erro QR</h1>`);
+    qrcode.toDataURL(currentQR, { scale: 10, margin: 2 }, (err, url) => {
+      if (err) return res.send(`<h1>Erro ao gerar QR</h1>`);
       res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Akira Bot QR</title>
+  <title>Akira Bot - QR Code</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: sans-serif; text-align: center; padding: 20px; background: #000; color: #0f0; }
-    .qr { margin: 30px; }
-    .status { font-size: 1.2em; margin: 20px; }
+    body { font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; background: #0f0f0f; color: #fff; }
+    .container { max-width: 400px; margin: 0 auto; background: #1a1a1a; padding: 30px; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+    h1 { color: #00ff88; margin-bottom: 10px; }
+    .qr { margin: 25px 0; }
+    .status { padding: 10px; background: #00ff8820; border-radius: 8px; font-weight: bold; }
+    .link { margin-top: 20px; font-size: 0.9em; color: #aaa; }
+    .link a { color: #00ff88; text-decoration: none; }
+    .reload { margin-top: 15px; color: #666; font-size: 0.8em; }
   </style>
 </head>
 <body>
-  <h1>AKIRA BOT</h1>
-  <div class="status">AGUARDANDO QR</div>
-  <div class="qr"><img src="${url}" alt="QR"></div>
-  <p><small><a href="/" style="color:#0f0;">Health Check</a></small></p>
+  <div class="container">
+    <h1>AKIRA BOT</h1>
+    <div class="status">AGUARDANDO CONEXÃO</div>
+    <p>Escaneie com o WhatsApp:</p>
+    <div class="qr"><img src="${url}" alt="QR Code" style="width:100%; max-width:300px;"></div>
+    <div class="link">
+      <strong>QR Code:</strong> <a href="${req.protocol}://${req.get('host')}/qr" target="_blank">${req.protocol}://${req.get('host')}/qr</a>
+    </div>
+    <div class="reload">Atualiza em 5s...</div>
+  </div>
   <script>setTimeout(() => location.reload(), 5000);</script>
 </body>
 </html>
@@ -65,8 +80,9 @@ app.get('/qr', (req, res) => {
 <head><title>Akira Bot</title></head>
 <body style="text-align:center; font-family:sans-serif; padding:50px; background:#000; color:#0f0;">
   <h1>AKIRA BOT</h1>
-  <p style="color:#0f0;">ONLINE!</p>
-  <p><a href="/qr" style="color:#0f0;">Ver QR</a></p>
+  <p style="color:#0f0;">CONECTADO!</p>
+  <p>O bot já está online.</p>
+  <p><a href="/qr" style="color:#0f0;">Ver QR Code</a></p>
 </body>
 </html>
     `);
@@ -78,7 +94,11 @@ async function connect() {
   isConnecting = true;
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const authDir = 'auth_info_baileys';
+    
+    // NÃO LIMPA A PASTA! DEIXA O BAILEYS CRIAR
+    // Render FREE perde arquivos, mas Baileys recria automaticamente
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
@@ -95,7 +115,10 @@ async function connect() {
       printQRInTerminal: false,
       getMessage: async () => ({ conversation: '' }),
       shouldSyncHistoryMessage: () => false,
-      patchMessageBeforeSending: (msg) => ({ text: msg.text || '' }),
+      patchMessageBeforeSending: (msg) => {
+        if (msg.text) return { text: msg.text };
+        return msg;
+      }
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -113,22 +136,20 @@ async function connect() {
         console.log('AKIRA BOT ONLINE! (Multi-device ativo)');
         console.log('botJid:', BOT_REAL_JID);
         lastProcessedTime = Date.now();
-        isReady = true; // SESSÃO PRONTA
         startHealthCheck();
         isConnecting = false;
       }
 
       if (connection === 'close') {
         isConnecting = false;
-        isReady = false;
         const reason = lastDisconnect?.error?.output?.statusCode;
 
         if (reason === DisconnectReason.loggedOut) {
-          console.log('Sessão encerrada. Escaneie novo QR.');
+          console.log('Sessão encerrada. Escaneie novo QR em /qr');
           return;
         }
 
-        const delay = [428, 440].includes(reason) ? 45000 : 15000;
+        const delay = [428, 440, 515].includes(reason) ? 45000 : 15000;
         console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
         setTimeout(connect, delay);
       }
@@ -146,7 +167,7 @@ async function connect() {
 
         let numero = 'desconhecido';
         if (isGroup && msg.key.participant) {
-          numero = msg.key.participant.replace('@s.whatsapp.net', '');
+          numero = msg.key.participant.replace('@s.whatsapp.net', '').replace('@lid', '');
         } else if (from.includes('@s.whatsapp.net')) {
           numero = from.replace('@s.whatsapp.net', '');
         }
@@ -159,40 +180,55 @@ async function connect() {
 
         if (!(await shouldActivate(msg, isGroup))) return;
 
-        // ESPERA SESSÃO ESTÁVEL
-        if (!isReady) {
-          console.log('[AGUARDANDO] Sessão ainda não pronta...');
-          return;
-        }
-
-        // FORÇA SESSÃO COM O CONTATO
-        try {
-          await sock.presenceSubscribe(from);
-          await delay(2000);
-        } catch {}
-
         await sock.sendPresenceUpdate('composing', from);
         const start = Date.now();
 
         try {
           const res = await axios.post(AKIRA_API_URL, { usuario: nome, mensagem: text, numero }, { timeout: 30000 });
-          const resposta = res.data.resposta || "Não entendi.";
+          let resposta = res.data.resposta || "Não entendi.";
+
+          // LIMITA TAMANHO (evita not-acceptable)
+          if (resposta.length > 4000) resposta = resposta.slice(0, 3990) + '...';
 
           const typing = Math.min(Math.max(resposta.length * 50, 1000), 5000);
           if (Date.now() - start < typing) await delay(typing - (Date.now() - start));
 
           await sock.sendPresenceUpdate('paused', from);
 
-          // ENVIA COM TEXTO PURO
-          await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+          // FORÇA SESSÃO COM PING
+          try {
+            await sock.presenceSubscribe(from);
+            await sock.sendPresenceUpdate('available', from);
+            await delay(1000);
+          } catch {}
+
+          // ENVIA COM RETRY
+          let attempts = 0;
+          while (attempts < 3) {
+            try {
+              await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+              console.log(`[RESPOSTA] Enviada para ${from}`);
+              break;
+            } catch (err) {
+              attempts++;
+              console.error(`Tentativa ${attempts} falhou: ${err.message}`);
+              await delay(1500 * attempts);
+            }
+          }
+
+          if (attempts >= 3) {
+            await sock.sendMessage(from, { text: "Erro ao responder. Tente novamente." }, { quoted: msg });
+          }
 
         } catch (err) {
-          console.error('Erro ao enviar:', err.message);
+          console.error('Erro na API:', err.message);
           try {
-            await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
+            await sock.sendMessage(from, { text: "Erro interno. Tente novamente." }, { quoted: msg });
           } catch {}
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error('Erro geral:', err.message);
+      }
     });
 
   } catch (err) {
