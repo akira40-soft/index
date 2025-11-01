@@ -30,19 +30,14 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${server.address().port}`);
 });
 
-// ROTA 1: / → HEALTH CHECK (mantém Render acordado)
 app.get('/', (req, res) => {
   res.send(`AKIRA BOT ONLINE | ${new Date().toLocaleString()}`);
 });
 
-// ROTA 2: /qr → QR CODE NA WEB
 app.get('/qr', (req, res) => {
   if (currentQR) {
     qrcode.toDataURL(currentQR, { scale: 10, margin: 2 }, (err, url) => {
-      if (err) {
-        res.send(`<h1>Erro ao gerar QR</h1>`);
-        return;
-      }
+      if (err) return res.send(`<h1>Erro ao gerar QR</h1>`);
       res.send(`
 <!DOCTYPE html>
 <html>
@@ -71,9 +66,7 @@ app.get('/qr', (req, res) => {
     </div>
     <div class="reload">Atualiza em 5s...</div>
   </div>
-  <script>
-    setTimeout(() => location.reload(), 5000);
-  </script>
+  <script>setTimeout(() => location.reload(), 5000);</script>
 </body>
 </html>
       `);
@@ -82,7 +75,7 @@ app.get('/qr', (req, res) => {
     res.send(`
 <!DOCTYPE html>
 <html>
-<head><title>Akira Bot</title><meta charset="utf-8"></head>
+<head><title>Akira Bot</title></head>
 <body style="text-align:center; font-family:sans-serif; padding:50px; background:#000; color:#0f0;">
   <h1>AKIRA BOT</h1>
   <p style="color:#0f0;">CONECTADO!</p>
@@ -150,7 +143,7 @@ async function connect() {
           return;
         }
 
-        const delay = [428, 440].includes(reason) ? 45000 : 15000;
+        const delay = [428, 440, 515].includes(reason) ? 45000 : 15000;
         console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
         setTimeout(connect, delay);
       }
@@ -168,7 +161,7 @@ async function connect() {
 
         let numero = 'desconhecido';
         if (isGroup && msg.key.participant) {
-          numero = msg.key.participant.replace('@s.whatsapp.net', '');
+          numero = msg.key.participant.replace('@s.whatsapp.net', '').replace('@lid', '');
         } else if (from.includes('@s.whatsapp.net')) {
           numero = from.replace('@s.whatsapp.net', '');
         }
@@ -193,6 +186,13 @@ async function connect() {
 
           await sock.sendPresenceUpdate('paused', from);
 
+          // FORÇA SESSÃO ANTES DE ENVIAR
+          try {
+            await sock.sendMessage(from, { text: '' }); // cria sessão
+            await delay(500);
+          } catch {}
+
+          // ENVIA RESPOSTA REAL
           await sock.sendMessage(from, { text: resposta }, { quoted: msg });
 
         } catch (err) {
