@@ -23,13 +23,13 @@ let lastProcessedTime = 0;
 let healthInterval;
 let isConnecting = false;
 
-// LIMPA SESSÃO CORROMPIDA SEM APAGAR QR
-async function resetSignalStore() {
+// LIMPA APENAS SENDER KEYS CORROMPIDOS
+async function clearSenderKeys() {
   const authDir = 'auth_info_baileys';
   if (!fs.existsSync(authDir)) return;
   const files = fs.readdirSync(authDir);
   for (const file of files) {
-    if (file.includes('session') || file.includes('prekey') || file.includes('sender-key')) {
+    if (file.includes('sender-key')) {
       fs.unlinkSync(path.join(authDir, file));
     }
   }
@@ -60,9 +60,7 @@ async function connect() {
       // ENVIA TEXTO PURO
       patchMessageBeforeSending: (msg) => {
         if (msg.text) {
-          const clean = { text: msg.text };
-          if (msg.quoted) clean.quoted = msg.quoted;
-          return clean;
+          return { text: msg.text };
         }
         return msg;
       }
@@ -96,9 +94,9 @@ async function connect() {
         }
 
         if (reason === 440 || reason === 428) {
-          console.log('Conflito detectado. Limpando signal store...');
-          await resetSignalStore();
-          setTimeout(connect, 8000);
+          console.log('Conflito detectado. Limpando sender keys...');
+          await clearSenderKeys();
+          setTimeout(connect, 10000);
           return;
         }
 
@@ -112,18 +110,19 @@ async function connect() {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
-        // IGNORA MENSAGENS DE SISTEMA
         if (msg.messageStubType || msg.message.protocolMessage) return;
         if (msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
         const from = msg.key.remoteJid;
         const isGroup = from.endsWith('@g.us');
 
-        // NÚMERO CORRETO: PV E GRUPO
+        // NÚMERO CORRETO: MESMO EM PV E GRUPO
         let numero = 'desconhecido';
         let participantJid = null;
+
         if (isGroup && msg.key.participant) {
           participantJid = msg.key.participant;
+          // Remove @s.whatsapp.net → número real
           numero = participantJid.replace('@s.whatsapp.net', '').replace('@lid', '');
         } else if (from.includes('@s.whatsapp.net')) {
           numero = from.replace('@s.whatsapp.net', '');
@@ -149,11 +148,15 @@ async function connect() {
 
           await sock.sendPresenceUpdate('paused', from);
 
-          // ENVIA NO GRUPO COM TEXTO SIMPLES
+          // LIMPA SENDER KEY ANTES DE ENVIAR NO GRUPO
+          if (isGroup) {
+            await clearSenderKeys();
+          }
+
+          // ENVIA NO GRUPO COM TEXTO PURO
           await sock.sendMessage(from, {
-            text: resposta,
-            quoted: msg
-          });
+            text: resposta
+          }, { quoted: msg });
 
         } catch (err) {
           console.error('Erro ao enviar:', err.message);
@@ -205,7 +208,7 @@ function startHealthCheck() {
   }, 20 * 60 * 1000);
 }
 
-// SERVIDOR EXPRESS
+// SERVIDOR
 const app = express();
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Health check na porta ${server.address().port}`);
