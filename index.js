@@ -10,8 +10,6 @@ const {
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 
 const logger = pino({ level: 'silent' });
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
@@ -23,16 +21,9 @@ let lastProcessedTime = 0;
 let healthInterval;
 let isConnecting = false;
 
-// LIMPA APENAS SENDER KEYS CORROMPIDOS
-async function clearSenderKeys() {
-  const authDir = 'auth_info_baileys';
-  if (!fs.existsSync(authDir)) return;
-  const files = fs.readdirSync(authDir);
-  for (const file of files) {
-    if (file.includes('sender-key')) {
-      fs.unlinkSync(path.join(authDir, file));
-    }
-  }
+function normalizeJid(jid) {
+  if (!jid) return null;
+  return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
 }
 
 async function connect() {
@@ -93,15 +84,9 @@ async function connect() {
           return;
         }
 
-        if (reason === 440 || reason === 428) {
-          console.log('Conflito detectado. Limpando sender keys...');
-          await clearSenderKeys();
-          setTimeout(connect, 10000);
-          return;
-        }
-
-        console.log(`Reconectando em 15s... (código: ${reason})`);
-        setTimeout(connect, 15000);
+        const delay = [428, 440].includes(reason) ? 45000 : 15000;
+        console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
+        setTimeout(connect, delay);
       }
     });
 
@@ -116,14 +101,10 @@ async function connect() {
         const from = msg.key.remoteJid;
         const isGroup = from.endsWith('@g.us');
 
-        // NÚMERO CORRETO: MESMO EM PV E GRUPO
+        // NÚMERO CORRETO: PV E GRUPO
         let numero = 'desconhecido';
-        let participantJid = null;
-
         if (isGroup && msg.key.participant) {
-          participantJid = msg.key.participant;
-          // Remove @s.whatsapp.net → número real
-          numero = participantJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+          numero = msg.key.participant.replace('@s.whatsapp.net', '');
         } else if (from.includes('@s.whatsapp.net')) {
           numero = from.replace('@s.whatsapp.net', '');
         }
@@ -147,11 +128,6 @@ async function connect() {
           if (Date.now() - start < typing) await delay(typing - (Date.now() - start));
 
           await sock.sendPresenceUpdate('paused', from);
-
-          // LIMPA SENDER KEY ANTES DE ENVIAR NO GRUPO
-          if (isGroup) {
-            await clearSenderKeys();
-          }
 
           // ENVIA NO GRUPO COM TEXTO PURO
           await sock.sendMessage(from, {
@@ -194,11 +170,6 @@ async function shouldActivate(msg, isGroup) {
   }
 
   return false;
-}
-
-function normalizeJid(jid) {
-  if (!jid) return null;
-  return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
 }
 
 function startHealthCheck() {
