@@ -9,161 +9,176 @@ const {
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 
 const logger = pino({ level: 'info' });
-const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
+const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
+const BOT_REAL_JID = process.env.BOT_REAL_JID || '37839265886398@lid';
 const PORT = process.env.PORT || 3000;
-
-// JID real do bot (mantém consistência entre @lid e @s.whatsapp.net)
-const BOT_REAL_JID = '37839265886398@lid';
 
 let sock;
 let lastProcessedTime = 0;
+let healthInterval;
 
-// 🔧 Função para normalizar JIDs
+// Normaliza JID
 function normalizeJid(jid) {
   if (!jid) return null;
   return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
 }
 
 async function connect() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-  const { version } = await fetchLatestBaileysVersion();
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { version } = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({
-    version,
-    auth: state,
-    logger,
-    browser: Browsers.macOS('Desktop'),
-    markOnlineOnConnect: true,
-    keepAliveIntervalMs: 30000,
-    connectTimeoutMs: 60000,
-    defaultQueryTimeoutMs: 60000,
-    syncFullHistory: false,
-    generateHighQualityLinkPreview: false,
-  });
+    sock = makeWASocket({
+      version,
+      auth: state,
+      logger,
+      browser: Browsers.macOS('Desktop'),
+      markOnlineOnConnect: true,
+      keepAliveIntervalMs: 30000,
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+      syncFullHistory: false,
+      generateHighQualityLinkPreview: false,
+      printQRInTerminal: true,
+    });
 
-  sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', (update) => {
-    const { connection, qr } = update;
+    sock.ev.on('connection.update', (update) => {
+      const { connection, qr, lastDisconnect } = update;
 
-    if (qr) {
-      require('qrcode-terminal').generate(qr, { small: true });
-      console.log('\nESCANEIE O QR AGORA!\n');
-    }
+      if (qr) {
+        console.log('\n[QR CODE] Escaneie AGORA:\n');
+        require('qrcode-terminal').generate(qr, { small: true });
+      }
 
-    if (connection === 'open') {
-      console.log('AKIRA BOT ONLINE! (Multi-device ativo)');
-      console.log('botJid definido como:', BOT_REAL_JID);
-      lastProcessedTime = Date.now();
-    }
+      if (connection === 'open') {
+        console.log('AKIRA BOT ONLINE! (Multi-device ativo)');
+        console.log('botJid:', BOT_REAL_JID);
+        lastProcessedTime = Date.now();
+        startHealthCheck();
+      }
 
-    if (connection === 'close') {
-      console.log('Conexão fechada. Reconectando...');
-      setTimeout(connect, 5000);
-    }
-  });
+      if (connection === 'close') {
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
 
-  sock.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
-    if (!msg.message || msg.key.fromMe) return;
+        if (statusCode === 401) {
+          console.log('Sessão expirada. Escaneie novo QR.');
+          fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+          setTimeout(connect, 5000);
+          return;
+        }
 
-    // Evita mensagens antigas
-    if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) {
-      console.log(`[IGNORADO] Mensagem antiga: ${msg.messageTimestamp}`);
-      return;
-    }
+        if (statusCode === 428) {
+          console.log('Conflito detectado! Limpando sessão antiga...');
+          fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+          setTimeout(connect, 15000);
+          return;
+        }
 
-    const from = msg.key.remoteJid;
-    const isGroup = from.endsWith('@g.us');
+        console.log(`Conexão fechada (código ${statusCode}). Reconectando em 10s...`);
+        setTimeout(connect, 10000);
+      }
+    });
 
-    // Extrai número do remetente
-    let numero = 'desconhecido';
-    if (isGroup && msg.key.participant) {
-      numero = msg.key.participant.split('@')[0];
-    } else if (from.includes('@s.whatsapp.net')) {
-      numero = from.split('@')[0];
-    }
+    sock.ev.on('messages.upsert', async (m) => {
+      const msg = m.messages[0];
+      if (!msg.message || msg.key.fromMe) return;
 
-    const nome = msg.pushName?.trim() || numero;
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      '';
+      if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) {
+        return;
+      }
 
-    if (!text.trim()) return;
-    console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${numero}): ${text}`);
+      const from = msg.key.remoteJid;
+      const isGroup = from.endsWith('@g.us');
 
-    const ativar = await shouldActivate(msg, isGroup);
-    if (!ativar) {
-      console.log('[IGNORADO] Não ativado para responder (não reply ou não menção).');
-      return;
-    }
+      let numero = 'desconhecido';
+      if (isGroup && msg.key.participant) {
+        numero = msg.key.participant.split('@')[0];
+      } else if (from.includes('@s.whatsapp.net')) {
+        numero = from.split('@')[0];
+      }
 
-    await sock.sendPresenceUpdate('composing', from);
-    const start = Date.now();
+      const nome = msg.pushName?.trim() || numero;
+      const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+      if (!text.trim()) return;
 
-    try {
-      const res = await axios.post(AKIRA_API_URL, {
-        usuario: nome,
-        mensagem: text,
-        numero: numero
-      }, { timeout: 30000 });
+      console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${numero}): ${text}`);
 
-      const resposta = res.data.resposta || "Não entendi.";
-      console.log(`[RESPOSTA] ${resposta}`);
+      if (!(await shouldActivate(msg, isGroup))) return;
 
-      const typing = Math.min(Math.max(resposta.length * 50, 1000), 5000);
-      if (Date.now() - start < typing) await delay(typing - (Date.now() - start));
+      await sock.sendPresenceUpdate('composing', from);
+      const start = Date.now();
 
-      await sock.sendPresenceUpdate('paused', from);
-      await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+      try {
+        const res = await axios.post(AKIRA_API_URL, { usuario: nome, mensagem: text, numero }, { timeout: 30000 });
+        const resposta = res.data.resposta || "Não entendi.";
 
-    } catch (err) {
-      console.error('Erro API:', err.message);
-      await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
-    }
-  });
+        const typing = Math.min(Math.max(resposta.length * 50, 1000), 5000);
+        if (Date.now() - start < typing) await delay(typing - (Date.now() - start));
+
+        await sock.sendPresenceUpdate('paused', from);
+        await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+
+      } catch (err) {
+        console.error('Erro API:', err.message);
+        await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
+      }
+    });
+
+  } catch (err) {
+    console.error('Erro crítico:', err.message);
+    setTimeout(connect, 15000);
+  }
 }
 
-// 💡 Função de ativação (reply ou menção)
 async function shouldActivate(msg, isGroup) {
   const context = msg.message?.extendedTextMessage?.contextInfo;
   const text = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').toLowerCase();
 
-  // ✅ Caso 1: reply direto ao bot
+  // REPLY AO BOT
   if (context?.quotedMessage && context.stanzaId) {
-    const quotedParticipant = context.participant || context.quotedMessage?.key?.participant;
-    if (quotedParticipant) {
-      const botBase = normalizeJid(BOT_REAL_JID);
-      const quotedBase = normalizeJid(quotedParticipant);
-      if (botBase === quotedBase) {
-        console.log(`[ATIVAÇÃO] Reply ao bot detectado (${BOT_REAL_JID})`);
-        return true;
-      } else {
-        console.log(`[IGNORADO] Reply mas não cita mensagem da bot: ${quotedParticipant}`);
-        return false;
-      }
+    const quotedJid = context.participant || context.quotedMessage?.key?.participant;
+    if (quotedJid && normalizeJid(quotedJid) === normalizeJid(BOT_REAL_JID)) {
+      return true;
     }
   }
 
-  // ✅ Caso 2: menção direta no grupo
+  // MENÇÃO OU "akira"
   if (isGroup) {
     const mentions = context?.mentionedJid || [];
-    const mentionMatch = mentions.some(j => normalizeJid(j) === normalizeJid(BOT_REAL_JID));
-    if (text.includes('akira') || mentionMatch) return true;
+    const isMentioned = mentions.some(j => normalizeJid(j) === normalizeJid(BOT_REAL_JID));
+    if (text.includes('akira') || isMentioned) return true;
   }
 
   return false;
 }
 
-// 🔥 Servidor de health check
+// HEALTH CHECK A CADA 20 MIN
+function startHealthCheck() {
+  if (healthInterval) clearInterval(healthInterval);
+  healthInterval = setInterval(() => {
+    console.log(`[HEALTH] ${new Date().toLocaleString()} - Bot ativo`);
+    if (sock?.user?.id) {
+      console.log(`[HEALTH] Conectado como: ${sock.user.id}`);
+    }
+  }, 20 * 60 * 1000);
+}
+
+// SERVIDOR EXPRESS
 const app = express();
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Health check na porta ${server.address().port}`);
 });
-app.get('/', (req, res) => res.send('AKIRA BOT ONLINE'));
+
+app.get('/', (req, res) => {
+  res.send(`AKIRA BOT ONLINE | ${new Date().toLocaleString()}`);
+});
+
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.log(`Porta ${PORT} em uso. Tentando outra...`);
