@@ -11,7 +11,7 @@ const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
 
-const logger = pino({ level: 'silent' }); // Silencia logs internos
+const logger = pino({ level: 'silent' });
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
 const BOT_REAL_JID = process.env.BOT_REAL_JID || '37839265886398@lid';
 const PORT = process.env.PORT || 3000;
@@ -19,6 +19,7 @@ const PORT = process.env.PORT || 3000;
 let sock;
 let lastProcessedTime = 0;
 let healthInterval;
+let isConnecting = false;
 
 function normalizeJid(jid) {
   if (!jid) return null;
@@ -26,6 +27,9 @@ function normalizeJid(jid) {
 }
 
 async function connect() {
+  if (isConnecting) return;
+  isConnecting = true;
+
   try {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
@@ -41,8 +45,11 @@ async function connect() {
       defaultQueryTimeoutMs: 60000,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
-      printQRInTerminal: false, // QR no log do Render é ruim
-      getMessage: async () => ({ conversation: 'Mensagem não disponível' }),
+      printQRInTerminal: false,
+      getMessage: async () => ({ conversation: '' }),
+      // DESATIVA HISTÓRICO E SENDER KEYS
+      shouldSyncHistoryMessage: () => false,
+      transactionOpts: { timeout: 10000 },
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -50,8 +57,8 @@ async function connect() {
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr) {
-        console.log('\n[QR CODE] Escaneie com o WhatsApp (use celular):\n');
+      if (qr && connection !== 'open') {
+        console.log('\n[QR CODE] Escaneie com o celular:\n');
         require('qrcode-terminal').generate(qr, { small: true });
       }
 
@@ -60,38 +67,31 @@ async function connect() {
         console.log('botJid:', BOT_REAL_JID);
         lastProcessedTime = Date.now();
         startHealthCheck();
+        isConnecting = false;
       }
 
       if (connection === 'close') {
+        isConnecting = false;
         const reason = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = reason !== DisconnectReason.loggedOut;
 
-        if (reason === 428 || reason === 440) {
-          console.log('Conflito detectado. Aguardando 30s antes de reconectar...');
-          setTimeout(() => connect(), 30000);
+        if (reason === DisconnectReason.loggedOut) {
+          console.log('Sessão encerrada. Pare o serviço.');
           return;
         }
 
-        if (shouldReconnect) {
-          console.log(`Reconectando em 15s... (motivo: ${reason})`);
-          setTimeout(() => connect(), 15000);
-        } else {
-          console.log('Sessão encerrada. Pare o serviço e escaneie novo QR.');
-        }
+        const delay = reason === 428 || reason === 440 ? 35000 : 15000;
+        console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
+        setTimeout(() => connect(), delay);
       }
     });
-
-    // IGNORA MENSAGENS CORROMPIDAS
-    sock.ev.on('messaging-history.set', () => {});
-    sock.ev.on('message-receipt.update', () => {});
 
     sock.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
-        // IGNORA MENSAGENS DE SISTEMA
-        if (msg.messageStubType || msg.message.protocolMessage) {
+        // IGNORA TUDO QUE PODE CORROMPER
+        if (msg.messageStubType || msg.message.protocolMessage || msg.messageStubParameters) {
           return;
         }
 
@@ -113,10 +113,7 @@ async function connect() {
 
         console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${numero}): ${text}`);
 
-        if (!(await shouldActivate(msg, isGroup))) {
-          console.log('[IGNORADO] Sem ativação');
-          return;
-        }
+        if (!(await shouldActivate(msg, isGroup))) return;
 
         await sock.sendPresenceUpdate('composing', from);
         const start = Date.now();
@@ -130,25 +127,27 @@ async function connect() {
 
           await sock.sendPresenceUpdate('paused', from);
 
-          // ENVIA COMO TEXTO PURO (EVITA CRIPTOGRAFIA CORROMPIDA)
-          await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+          // ENVIA SEM CRIPTOGRAFIA DE GRUPO
+          await sock.sendMessage(from, {
+            text: resposta,
+            mentions: isGroup ? [msg.key.participant] : []
+          }, { quoted: msg });
 
         } catch (err) {
           console.error('Erro API:', err.message);
           try {
             await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
-          } catch (sendErr) {
-            console.log('Falha ao enviar erro:', sendErr.message);
-          }
+          } catch {}
         }
       } catch (err) {
-        console.log('Erro ao processar mensagem:', err.message);
+        // Silencia tudo
       }
     });
 
   } catch (err) {
-    console.error('Erro crítico:', err.message);
-    setTimeout(connect, 20000);
+    isConnecting = false;
+    console.error('Erro ao iniciar:', err.message);
+    setTimeout(() => connect(), 20000);
   }
 }
 
