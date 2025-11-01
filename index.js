@@ -10,6 +10,8 @@ const {
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 
 const logger = pino({ level: 'silent' });
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
@@ -21,9 +23,16 @@ let lastProcessedTime = 0;
 let healthInterval;
 let isConnecting = false;
 
-function normalizeJid(jid) {
-  if (!jid) return null;
-  return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
+// LIMPA SESSÃO CORROMPIDA SEM APAGAR QR
+async function resetSignalStore() {
+  const authDir = 'auth_info_baileys';
+  if (!fs.existsSync(authDir)) return;
+  const files = fs.readdirSync(authDir);
+  for (const file of files) {
+    if (file.includes('session') || file.includes('prekey') || file.includes('sender-key')) {
+      fs.unlinkSync(path.join(authDir, file));
+    }
+  }
 }
 
 async function connect() {
@@ -48,11 +57,12 @@ async function connect() {
       printQRInTerminal: false,
       getMessage: async () => ({ conversation: '' }),
       shouldSyncHistoryMessage: () => false,
-      // REPARA SENDER KEYS AUTOMATICAMENTE
-      patchMessageBeforeSending: async (msg) => {
-        if (msg.text && msg.text.length > 0) {
-          delete msg.messageContextInfo;
-          delete msg.groupMentions;
+      // ENVIA TEXTO PURO
+      patchMessageBeforeSending: (msg) => {
+        if (msg.text) {
+          const clean = { text: msg.text };
+          if (msg.quoted) clean.quoted = msg.quoted;
+          return clean;
         }
         return msg;
       }
@@ -60,7 +70,7 @@ async function connect() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr && connection !== 'open') {
@@ -81,13 +91,19 @@ async function connect() {
         const reason = lastDisconnect?.error?.output?.statusCode;
 
         if (reason === DisconnectReason.loggedOut) {
-          console.log('Sessão encerrada. Pare o serviço.');
+          console.log('Sessão encerrada. Escaneie novo QR.');
           return;
         }
 
-        const delay = [428, 440].includes(reason) ? 45000 : 15000;
-        console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
-        setTimeout(() => connect(), delay);
+        if (reason === 440 || reason === 428) {
+          console.log('Conflito detectado. Limpando signal store...');
+          await resetSignalStore();
+          setTimeout(connect, 8000);
+          return;
+        }
+
+        console.log(`Reconectando em 15s... (código: ${reason})`);
+        setTimeout(connect, 15000);
       }
     });
 
@@ -96,17 +112,21 @@ async function connect() {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
+        // IGNORA MENSAGENS DE SISTEMA
         if (msg.messageStubType || msg.message.protocolMessage) return;
         if (msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
         const from = msg.key.remoteJid;
         const isGroup = from.endsWith('@g.us');
 
+        // NÚMERO CORRETO: PV E GRUPO
         let numero = 'desconhecido';
+        let participantJid = null;
         if (isGroup && msg.key.participant) {
-          numero = msg.key.participant.split('@')[0];
+          participantJid = msg.key.participant;
+          numero = participantJid.replace('@s.whatsapp.net', '').replace('@lid', '');
         } else if (from.includes('@s.whatsapp.net')) {
-          numero = from.split('@')[0];
+          numero = from.replace('@s.whatsapp.net', '');
         }
 
         const nome = msg.pushName?.trim() || numero;
@@ -129,18 +149,11 @@ async function connect() {
 
           await sock.sendPresenceUpdate('paused', from);
 
-          // REPARA SENDER KEY ANTES DE ENVIAR
-          if (isGroup) {
-            try {
-              await sock.groupMetadata(from);
-            } catch {}
-          }
-
-          // ENVIA NO GRUPO COM EPHEMERAL
+          // ENVIA NO GRUPO COM TEXTO SIMPLES
           await sock.sendMessage(from, {
             text: resposta,
-            ephemeralExpiration: 86400
-          }, { quoted: msg });
+            quoted: msg
+          });
 
         } catch (err) {
           console.error('Erro ao enviar:', err.message);
@@ -155,8 +168,8 @@ async function connect() {
 
   } catch (err) {
     isConnecting = false;
-    console.error('Erro ao iniciar:', err.message);
-    setTimeout(() => connect(), 20000);
+    console.error('Erro crítico:', err.message);
+    setTimeout(connect, 20000);
   }
 }
 
@@ -180,6 +193,11 @@ async function shouldActivate(msg, isGroup) {
   return false;
 }
 
+function normalizeJid(jid) {
+  if (!jid) return null;
+  return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
+}
+
 function startHealthCheck() {
   if (healthInterval) clearInterval(healthInterval);
   healthInterval = setInterval(() => {
@@ -187,6 +205,7 @@ function startHealthCheck() {
   }, 20 * 60 * 1000);
 }
 
+// SERVIDOR EXPRESS
 const app = express();
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Health check na porta ${server.address().port}`);
