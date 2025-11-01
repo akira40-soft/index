@@ -1,5 +1,5 @@
 // ===============================================================
-// AKIRA BOT — Sessões estáveis e correção total de descriptografia
+// AKIRA BOT — FIX: JIDs, grupos, timeouts e descriptografia
 // ===============================================================
 
 const {
@@ -22,16 +22,15 @@ const SESSION_PATH = './auth_info_baileys';
 
 let sock;
 let BOT_JID = null;
-let lastProcessedTime = 0;
 
 // ===============================================================
-// 🔧 UTILITÁRIOS
+// 🧩 UTILITÁRIOS
 // ===============================================================
 function normalizeJid(jid = '') {
   if (!jid) return null;
   jid = jid.toString().trim();
-  jid = jid.replace(/[:@].*/g, '');
-  if (jid.startsWith('37')) return BOT_JID || '244952786417@s.whatsapp.net';
+  jid = jid.replace(/(:\d+)?@s\.whatsapp\.net$/, '@s.whatsapp.net'); // remove :xx
+  jid = jid.replace(/[:@].*/g, ''); // remove qualquer resíduo
   if (!jid.startsWith('244') && /^9\d{8}$/.test(jid)) jid = '244' + jid;
   return `${jid}@s.whatsapp.net`;
 }
@@ -47,12 +46,11 @@ function extractNumber(input = '') {
 }
 
 function isBotJid(jid) {
-  const norm = normalizeJid(jid);
-  return norm === normalizeJid(BOT_JID);
+  return normalizeJid(jid) === normalizeJid(BOT_JID);
 }
 
 // ===============================================================
-// 🧠 RECONSTRUÇÃO DE SESSÃO AUTOMÁTICA
+// 🔁 CONECTAR E RECONSTRUIR
 // ===============================================================
 async function rebuildSession() {
   console.warn('🧹 Limpando sessão corrompida...');
@@ -66,9 +64,6 @@ async function rebuildSession() {
   return connect(true);
 }
 
-// ===============================================================
-// ⚙️ CONEXÃO PRINCIPAL
-// ===============================================================
 async function connect(forceReconnect = false) {
   try {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
@@ -100,13 +95,12 @@ async function connect(forceReconnect = false) {
         BOT_JID = normalizeJid(sock.user.id);
         console.log('✅ AKIRA BOT ONLINE!');
         console.log('botJid detectado:', BOT_JID);
-        lastProcessedTime = Date.now();
       }
 
       if (connection === 'close') {
         const error = lastDisconnect?.error?.message || '';
         if (error.includes('conflict') || error.includes('replaced')) {
-          console.warn('⚠️ Sessão substituída — forçando reconexão limpa...');
+          console.warn('⚠️ Sessão substituída — reconectando...');
           await rebuildSession();
           return;
         }
@@ -124,11 +118,8 @@ async function connect(forceReconnect = false) {
 
       const from = msg.key.remoteJid;
       const isGroup = from.endsWith('@g.us');
-
-      if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
-
-      let sender = msg.key.participant || msg.participant || from;
-      let senderNumber = extractNumber(sender);
+      const sender = msg.key.participant || msg.participant || from;
+      const senderNumber = extractNumber(sender);
       const nome = msg.pushName || senderNumber;
 
       const text =
@@ -139,7 +130,13 @@ async function connect(forceReconnect = false) {
         '';
 
       if (!text.trim()) return;
+
       console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
+
+      // garantir que o bot tenha chaves válidas para o grupo
+      if (isGroup) {
+        await sock.presenceSubscribe(from).catch(() => {});
+      }
 
       const ativar = await shouldActivate(msg, isGroup, text);
       if (!ativar) {
@@ -147,9 +144,9 @@ async function connect(forceReconnect = false) {
         return;
       }
 
-      await sock.sendPresenceUpdate('composing', from);
-
       try {
+        await sock.sendPresenceUpdate('composing', from);
+
         const res = await axios.post(AKIRA_API_URL, {
           usuario: nome,
           mensagem: text,
@@ -159,10 +156,12 @@ async function connect(forceReconnect = false) {
         const resposta = res.data.resposta || '...';
         console.log(`[RESPOSTA] ${resposta}`);
 
-        await delay(Math.min(resposta.length * 50, 5000));
+        await delay(Math.min(resposta.length * 40, 4000));
         await sock.sendPresenceUpdate('paused', from);
 
-        await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+        // corrigir JID caso venha com sufixo
+        const fixedFrom = from.replace(/:\d+/, '');
+        await sock.sendMessage(fixedFrom, { text: resposta }, { quoted: msg });
       } catch (err) {
         console.error('⚠️ Erro na API:', err.message);
         await sock.sendMessage(from, { text: 'Erro interno. 😴' }, { quoted: msg });
@@ -170,22 +169,21 @@ async function connect(forceReconnect = false) {
     });
 
     // ===============================================================
-    // 🔒 CORREÇÃO COMPLETA DE SESSÕES E DESCRIPTOGRAFIA
+    // 🔒 DESCRIPTOGRAFIA & SESSÃO
     // ===============================================================
     sock.ev.on('message-decrypt-failed', async (msgKey) => {
       try {
         const jid = msgKey?.key?.remoteJid;
         if (!jid) return;
-        console.warn(`⚠️ Falha ao descriptografar mensagem de ${jid}. Tentando nova chave...`);
+        console.warn(`⚠️ Falha ao descriptografar mensagem de ${jid}.`);
         await sock.sendRetryRequest(msgKey.key).catch(() => {});
         if (sock.store?.sessions) delete sock.store.sessions[jid];
         await sock.presenceSubscribe(jid).catch(() => {});
       } catch (e) {
-        console.error('Erro ao tentar corrigir sessão:', e.message || e);
+        console.error('Erro ao corrigir sessão:', e.message);
       }
     });
 
-    // Hook para qualquer erro geral
     sock.ev.on('error', async (err) => {
       const msg = err.message || err.toString();
       if (
@@ -197,7 +195,6 @@ async function connect(forceReconnect = false) {
         await rebuildSession();
       }
     });
-
   } catch (e) {
     console.error('❌ Falha crítica ao iniciar conexão:', e.message);
     await rebuildSession();
@@ -205,27 +202,24 @@ async function connect(forceReconnect = false) {
 }
 
 // ===============================================================
-// 🎯 LÓGICA DE ATIVAÇÃO (reply / menção / PV)
+// 🎯 ATIVAÇÃO: reply, menção, PV
 // ===============================================================
 async function shouldActivate(msg, isGroup, text) {
   const context = msg.message?.extendedTextMessage?.contextInfo;
   const lowered = text.toLowerCase();
 
-  if (context?.participant) {
-    const quoted = normalizeJid(context.participant);
-    if (isBotJid(quoted)) {
-      console.log(`[ATIVAÇÃO] Reply ao bot detectado (${BOT_JID})`);
-      return true;
-    }
+  if (context?.participant && isBotJid(context.participant)) {
+    console.log('[ATIVAÇÃO] Reply ao bot detectado.');
+    return true;
   }
 
   if (isGroup) {
     const mentions = context?.mentionedJid || [];
     const mentionMatch = mentions.some(
-      j => isBotJid(j) || j.startsWith('37') || j.includes(BOT_JID.split('@')[0])
+      (j) => isBotJid(j) || j.includes(BOT_JID.split('@')[0])
     );
     if (lowered.includes('akira') || mentionMatch) {
-      console.log('[ATIVAÇÃO] Menção direta a Akira detectada.');
+      console.log('[ATIVAÇÃO] Menção direta detectada.');
       return true;
     }
   }
