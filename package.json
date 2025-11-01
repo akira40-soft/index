@@ -1,20 +1,16 @@
 {
   "name": "akira-bot",
   "version": "1.0.0",
-  "description": "Akira Bot com WhatsApp Multi-Device + API HF + Render Deploy",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": ["whatsapp", "bot", "baileys", "render", "akira"],
-  "author": "Isaac Quarenta",
-  "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.7",
     "axios": "^1.7.7",
     "express": "^4.21.0",
     "pino": "^9.4.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode": "^1.5.3"
   },
   "engines": {
     "node": ">=18.0.0"
