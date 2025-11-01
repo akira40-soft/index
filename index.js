@@ -63,7 +63,10 @@ async function connect() {
 
       if (qr && connection !== 'open') {
         console.log('\n[QR CODE] Escaneie com o celular:\n');
-        qrcode.generate(qr, { small: true });
+        // QR CODE EXTREMAMENTE PEQUENO
+        qrcode.generate(qr, { small: true }, (qrcode) => {
+          console.log(qrcode.replace(/█/g, '█').replace(/ /g, ' ')); // minifica
+        });
       }
 
       if (connection === 'open') {
