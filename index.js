@@ -48,11 +48,9 @@ async function connect() {
       printQRInTerminal: false,
       getMessage: async () => ({ conversation: '' }),
       shouldSyncHistoryMessage: () => false,
-      transactionOpts: { timeout: 10000 },
-      // DESATIVA SENDER KEYS
-      patchMessageBeforeSending: (msg) => {
-        const requiresSignal = msg.groupMentions || msg.messageContextInfo;
-        if (requiresSignal) {
+      // REPARA SENDER KEYS AUTOMATICAMENTE
+      patchMessageBeforeSending: async (msg) => {
+        if (msg.text && msg.text.length > 0) {
           delete msg.messageContextInfo;
           delete msg.groupMentions;
         }
@@ -87,7 +85,7 @@ async function connect() {
           return;
         }
 
-        const delay = [428, 440].includes(reason) ? 40000 : 15000;
+        const delay = [428, 440].includes(reason) ? 45000 : 15000;
         console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
         setTimeout(() => connect(), delay);
       }
@@ -105,13 +103,10 @@ async function connect() {
         const isGroup = from.endsWith('@g.us');
 
         let numero = 'desconhecido';
-        let participantJid = null;
         if (isGroup && msg.key.participant) {
           numero = msg.key.participant.split('@')[0];
-          participantJid = msg.key.participant;
         } else if (from.includes('@s.whatsapp.net')) {
           numero = from.split('@')[0];
-          participantJid = from;
         }
 
         const nome = msg.pushName?.trim() || numero;
@@ -122,7 +117,7 @@ async function connect() {
 
         if (!(await shouldActivate(msg, isGroup))) return;
 
-        await sock.sendPresenceUpdate('composing', isGroup ? participantJid : from);
+        await sock.sendPresenceUpdate('composing', from);
         const start = Date.now();
 
         try {
@@ -132,20 +127,25 @@ async function connect() {
           const typing = Math.min(Math.max(resposta.length * 50, 1000), 5000);
           if (Date.now() - start < typing) await delay(typing - (Date.now() - start));
 
-          await sock.sendPresenceUpdate('paused', isGroup ? participantJid : from);
+          await sock.sendPresenceUpdate('paused', from);
 
-          // ENVIA NO PV DO USUÁRIO (100% ESTÁVEL)
-          if (isGroup && participantJid) {
-            await sock.sendMessage(participantJid, { text: resposta }, { quoted: msg });
-          } else {
-            await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+          // REPARA SENDER KEY ANTES DE ENVIAR
+          if (isGroup) {
+            try {
+              await sock.groupMetadata(from);
+            } catch {}
           }
 
+          // ENVIA NO GRUPO COM EPHEMERAL
+          await sock.sendMessage(from, {
+            text: resposta,
+            ephemeralExpiration: 86400
+          }, { quoted: msg });
+
         } catch (err) {
-          console.error('Erro API:', err.message);
+          console.error('Erro ao enviar:', err.message);
           try {
-            const target = isGroup && participantJid ? participantJid : from;
-            await sock.sendMessage(target, { text: 'Erro interno.' }, { quoted: msg });
+            await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
           } catch {}
         }
       } catch (err) {
