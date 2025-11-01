@@ -47,9 +47,17 @@ async function connect() {
       generateHighQualityLinkPreview: false,
       printQRInTerminal: false,
       getMessage: async () => ({ conversation: '' }),
-      // DESATIVA HISTÓRICO E SENDER KEYS
       shouldSyncHistoryMessage: () => false,
       transactionOpts: { timeout: 10000 },
+      // DESATIVA SENDER KEYS
+      patchMessageBeforeSending: (msg) => {
+        const requiresSignal = msg.groupMentions || msg.messageContextInfo;
+        if (requiresSignal) {
+          delete msg.messageContextInfo;
+          delete msg.groupMentions;
+        }
+        return msg;
+      }
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -79,7 +87,7 @@ async function connect() {
           return;
         }
 
-        const delay = reason === 428 || reason === 440 ? 35000 : 15000;
+        const delay = [428, 440].includes(reason) ? 40000 : 15000;
         console.log(`Reconectando em ${delay/1000}s... (código: ${reason})`);
         setTimeout(() => connect(), delay);
       }
@@ -90,21 +98,20 @@ async function connect() {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
-        // IGNORA TUDO QUE PODE CORROMPER
-        if (msg.messageStubType || msg.message.protocolMessage || msg.messageStubParameters) {
-          return;
-        }
-
+        if (msg.messageStubType || msg.message.protocolMessage) return;
         if (msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
         const from = msg.key.remoteJid;
         const isGroup = from.endsWith('@g.us');
 
         let numero = 'desconhecido';
+        let participantJid = null;
         if (isGroup && msg.key.participant) {
           numero = msg.key.participant.split('@')[0];
+          participantJid = msg.key.participant;
         } else if (from.includes('@s.whatsapp.net')) {
           numero = from.split('@')[0];
+          participantJid = from;
         }
 
         const nome = msg.pushName?.trim() || numero;
@@ -115,7 +122,7 @@ async function connect() {
 
         if (!(await shouldActivate(msg, isGroup))) return;
 
-        await sock.sendPresenceUpdate('composing', from);
+        await sock.sendPresenceUpdate('composing', isGroup ? participantJid : from);
         const start = Date.now();
 
         try {
@@ -125,22 +132,24 @@ async function connect() {
           const typing = Math.min(Math.max(resposta.length * 50, 1000), 5000);
           if (Date.now() - start < typing) await delay(typing - (Date.now() - start));
 
-          await sock.sendPresenceUpdate('paused', from);
+          await sock.sendPresenceUpdate('paused', isGroup ? participantJid : from);
 
-          // ENVIA SEM CRIPTOGRAFIA DE GRUPO
-          await sock.sendMessage(from, {
-            text: resposta,
-            mentions: isGroup ? [msg.key.participant] : []
-          }, { quoted: msg });
+          // ENVIA NO PV DO USUÁRIO (100% ESTÁVEL)
+          if (isGroup && participantJid) {
+            await sock.sendMessage(participantJid, { text: resposta }, { quoted: msg });
+          } else {
+            await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+          }
 
         } catch (err) {
           console.error('Erro API:', err.message);
           try {
-            await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
+            const target = isGroup && participantJid ? participantJid : from;
+            await sock.sendMessage(target, { text: 'Erro interno.' }, { quoted: msg });
           } catch {}
         }
       } catch (err) {
-        // Silencia tudo
+        // Silencia
       }
     });
 
@@ -178,7 +187,6 @@ function startHealthCheck() {
   }, 20 * 60 * 1000);
 }
 
-// SERVIDOR
 const app = express();
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Health check na porta ${server.address().port}`);
