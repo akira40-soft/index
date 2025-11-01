@@ -11,7 +11,7 @@ const {
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
-const qrcode = require('qrcode-terminal');
+const qrcode = require('qrcode');
 
 const logger = pino({ level: 'silent' });
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
@@ -22,11 +22,59 @@ let sock;
 let lastProcessedTime = 0;
 let healthInterval;
 let isConnecting = false;
+let currentQR = null;
 
-function normalizeJid(jid) {
-  if (!jid) return null;
-  return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
-}
+// SERVIDOR WEB
+const app = express();
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Health check na porta ${server.address().port}`);
+});
+
+app.get('/', (req, res) => {
+  if (currentQR) {
+    qrcode.toDataURL(currentQR, { scale: 8 }, (err, url) => {
+      if (err) {
+        res.send(`<h1>AKIRA BOT ONLINE</h1><p>QR Code em carregamento...</p>`);
+        return;
+      }
+      res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Akira Bot QR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+    .qr { margin: 30px auto; max-width: 300px; }
+    .status { font-size: 1.2em; margin: 20px; }
+    .online { color: green; }
+    .offline { color: red; }
+  </style>
+</head>
+<body>
+  <h1>🤖 AKIRA BOT</h1>
+  <div class="status online">🟢 ONLINE</div>
+  <p>Escaneie o QR Code com o WhatsApp:</p>
+  <div class="qr"><img src="${url}" alt="QR Code"></div>
+  <p><small>Link: <a href="${req.protocol}://${req.get('host')}">${req.protocol}://${req.get('host')}</a></small></p>
+</body>
+</html>
+      `);
+    });
+  } else {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head><title>Akira Bot</title></head>
+<body>
+  <h1>🤖 AKIRA BOT</h1>
+  <p>Conectando... QR Code será exibido em segundos.</p>
+  <script>setTimeout(() => location.reload(), 5000);</script>
+</body>
+</html>
+    `);
+  }
+});
 
 async function connect() {
   if (isConnecting) return;
@@ -61,15 +109,13 @@ async function connect() {
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr && connection !== 'open') {
-        console.log('\n[QR CODE] Escaneie com o celular:\n');
-        // QR CODE EXTREMAMENTE PEQUENO
-        qrcode.generate(qr, { small: true }, (qrcode) => {
-          console.log(qrcode.replace(/█/g, '█').replace(/ /g, ' ')); // minifica
-        });
+      if (qr) {
+        currentQR = qr;
+        console.log(`[QR CODE] Atualizado na web: ${req.protocol}://${req.get('host')}`);
       }
 
       if (connection === 'open') {
+        currentQR = null;
         console.log('AKIRA BOT ONLINE! (Multi-device ativo)');
         console.log('botJid:', BOT_REAL_JID);
         lastProcessedTime = Date.now();
@@ -165,21 +211,16 @@ async function shouldActivate(msg, isGroup) {
   return false;
 }
 
+function normalizeJid(jid) {
+  if (!jid) return null;
+  return jid.replace(/@lid|@s\.whatsapp\.net|@c\.us/g, '').trim();
+}
+
 function startHealthCheck() {
   if (healthInterval) clearInterval(healthInterval);
   healthInterval = setInterval(() => {
     console.log(`[HEALTH] ${new Date().toLocaleString()} - Bot ativo`);
   }, 20 * 60 * 1000);
 }
-
-// SERVIDOR
-const app = express();
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Health check na porta ${server.address().port}`);
-});
-
-app.get('/', (req, res) => {
-  res.send(`AKIRA BOT ONLINE | ${new Date().toLocaleString()}`);
-});
 
 connect();
