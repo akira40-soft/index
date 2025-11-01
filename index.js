@@ -12,6 +12,8 @@ const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
 const qrcode = require('qrcode');
+const fs = require('fs');
+const path = require('path');
 
 const logger = pino({ level: 'silent' });
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akra35567-akira.hf.space/api/akira';
@@ -92,7 +94,11 @@ async function connect() {
   isConnecting = true;
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const authDir = 'auth_info_baileys';
+    if (fs.existsSync(authDir)) {
+      fs.rmSync(authDir, { recursive: true, force: true }); // Limpa sessões corrompidas
+    }
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
@@ -186,27 +192,48 @@ async function connect() {
 
           await sock.sendPresenceUpdate('paused', from);
 
-          // FORÇA SESSÃO ANTES DE ENVIAR
-          try {
-            await sock.sendMessage(from, { text: '' }); // cria sessão
-            await delay(500);
-          } catch {}
+          // TENTA ENVIAR COM RETRY
+          let attempts = 0;
+          const maxAttempts = 3;
+          while (attempts < maxAttempts) {
+            try {
+              // CRIA SESSÃO SILENCIOSA
+              await sock.sendPresenceUpdate('available', from);
+              await delay(500);
 
-          // ENVIA RESPOSTA REAL
-          await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+              // ENVIA MENSAGEM
+              await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+              break; // Sucesso, sai do loop
+            } catch (err) {
+              attempts++;
+              console.error(`Tentativa ${attempts} falhou: ${err.message}`);
+              if (err.message.includes('No sessions')) {
+                await delay(1000 * attempts); // Aguarda mais a cada tentativa
+              } else if (err.message.includes('not-acceptable')) {
+                resposta = "Erro na mensagem. Tente novamente.";
+                await delay(500);
+              } else {
+                throw err; // Erro crítico, sai
+              }
+            }
+          }
+
+          if (attempts === maxAttempts) {
+            await sock.sendMessage(from, { text: "Falha ao responder. Tente novamente mais tarde." }, { quoted: msg });
+          }
 
         } catch (err) {
-          console.error('Erro ao enviar:', err.message);
-          try {
-            await sock.sendMessage(from, { text: 'Erro interno.' }, { quoted: msg });
-          } catch {}
+          console.error('Erro crítico:', err.message);
+          await sock.sendMessage(from, { text: "Erro interno. Tente novamente." }, { quoted: msg });
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error('Erro geral:', err.message);
+      }
     });
 
   } catch (err) {
     isConnecting = false;
-    console.error('Erro crítico:', err.message);
+    console.error('Erro crítico na conexão:', err.message);
     setTimeout(connect, 20000);
   }
 }
