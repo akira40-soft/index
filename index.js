@@ -27,36 +27,53 @@ let currentQR = null;
 // SERVIDOR WEB
 const app = express();
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Health check na porta ${server.address().port}`);
+  console.log(`Servidor rodando na porta ${server.address().port}`);
 });
 
+// ROTA 1: / → HEALTH CHECK (mantém Render acordado)
 app.get('/', (req, res) => {
+  res.send(`AKIRA BOT ONLINE | ${new Date().toLocaleString()}`);
+});
+
+// ROTA 2: /qr → QR CODE NA WEB
+app.get('/qr', (req, res) => {
   if (currentQR) {
-    qrcode.toDataURL(currentQR, { scale: 8 }, (err, url) => {
+    qrcode.toDataURL(currentQR, { scale: 10, margin: 2 }, (err, url) => {
       if (err) {
-        res.send(`<h1>AKIRA BOT ONLINE</h1><p>QR Code em carregamento...</p>`);
+        res.send(`<h1>Erro ao gerar QR</h1>`);
         return;
       }
       res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Akira Bot QR</title>
+  <title>Akira Bot - QR Code</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
-    .qr { margin: 30px auto; max-width: 300px; }
-    .status { font-size: 1.2em; margin: 20px; }
-    .online { color: green; }
-    .offline { color: red; }
+    body { font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; background: #0f0f0f; color: #fff; }
+    .container { max-width: 400px; margin: 0 auto; background: #1a1a1a; padding: 30px; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+    h1 { color: #00ff88; margin-bottom: 10px; }
+    .qr { margin: 25px 0; }
+    .status { padding: 10px; background: #00ff8820; border-radius: 8px; font-weight: bold; }
+    .link { margin-top: 20px; font-size: 0.9em; color: #aaa; }
+    .link a { color: #00ff88; text-decoration: none; }
+    .reload { margin-top: 15px; color: #666; font-size: 0.8em; }
   </style>
 </head>
 <body>
-  <h1>🤖 AKIRA BOT</h1>
-  <div class="status online">🟢 ONLINE</div>
-  <p>Escaneie o QR Code com o WhatsApp:</p>
-  <div class="qr"><img src="${url}" alt="QR Code"></div>
-  <p><small>Link: <a href="${req.protocol}://${req.get('host')}">${req.protocol}://${req.get('host')}</a></small></p>
+  <div class="container">
+    <h1>AKIRA BOT</h1>
+    <div class="status">AGUARDANDO CONEXÃO</div>
+    <p>Escaneie com o WhatsApp:</p>
+    <div class="qr"><img src="${url}" alt="QR Code" style="width:100%; max-width:300px;"></div>
+    <div class="link">
+      <strong>QR Code:</strong> <a href="${req.protocol}://${req.get('host')}/qr" target="_blank">${req.protocol}://${req.get('host')}/qr</a>
+    </div>
+    <div class="reload">Atualiza em 5s...</div>
+  </div>
+  <script>
+    setTimeout(() => location.reload(), 5000);
+  </script>
 </body>
 </html>
       `);
@@ -65,11 +82,12 @@ app.get('/', (req, res) => {
     res.send(`
 <!DOCTYPE html>
 <html>
-<head><title>Akira Bot</title></head>
-<body>
-  <h1>🤖 AKIRA BOT</h1>
-  <p>Conectando... QR Code será exibido em segundos.</p>
-  <script>setTimeout(() => location.reload(), 5000);</script>
+<head><title>Akira Bot</title><meta charset="utf-8"></head>
+<body style="text-align:center; font-family:sans-serif; padding:50px; background:#000; color:#0f0;">
+  <h1>AKIRA BOT</h1>
+  <p style="color:#0f0;">CONECTADO!</p>
+  <p>O bot já está online.</p>
+  <p><a href="/qr" style="color:#0f0;">Ver QR Code</a></p>
 </body>
 </html>
     `);
@@ -111,7 +129,7 @@ async function connect() {
 
       if (qr) {
         currentQR = qr;
-        console.log(`[QR CODE] Atualizado na web: ${req.protocol}://${req.get('host')}`);
+        console.log(`[QR CODE] Acesse: https://index-dev5.onrender.com/qr`);
       }
 
       if (connection === 'open') {
@@ -128,7 +146,7 @@ async function connect() {
         const reason = lastDisconnect?.error?.output?.statusCode;
 
         if (reason === DisconnectReason.loggedOut) {
-          console.log('Sessão encerrada. Escaneie novo QR.');
+          console.log('Sessão encerrada. Escaneie novo QR em /qr');
           return;
         }
 
