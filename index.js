@@ -1,5 +1,5 @@
 // ===============================================================
-// AKIRA BOT — JID unificado + QR compacto + correção de sessão
+// AKIRA BOT — versão estável Render + correção QR + sessão de grupo
 // ===============================================================
 
 const {
@@ -12,7 +12,8 @@ const {
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
-const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
+const fs = require('fs');
 
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
@@ -68,29 +69,28 @@ async function connect() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // ===============================================================
+  // 🔳 QR CODE — otimizado para Render (fundo sólido)
+  // ===============================================================
   sock.ev.on('connection.update', async (update) => {
     const { connection, qr } = update;
 
     if (qr) {
       console.clear();
-      // Fundo preto sólido
-      process.stdout.write('\x1b[40m');
       console.log('\n==============================');
-      console.log('📱 ESCANEIE O QR ABAIXO PARA CONECTAR:');
-      console.log('==============================\n');
-
-      // Gera QR com alto contraste e compacto
-      qrcode.generate(qr, {
-        small: true,
-        margin: 1,
-        chars: {
-          dark: '█',
-          light: ' '
-        }
-      });
-
+      console.log('📱 ESCANEIE O QR ABAIXO PARA CONECTAR:\n');
+      try {
+        const qrString = await QRCode.toString(qr, {
+          type: 'terminal',
+          margin: 1,
+          scale: 1,
+          small: true
+        });
+        console.log(qrString);
+      } catch (err) {
+        console.log('Erro ao gerar QR:', err.message);
+      }
       console.log('\n==============================\n');
-      process.stdout.write('\x1b[0m'); // Reset de cor
     }
 
     if (connection === 'open') {
@@ -152,9 +152,9 @@ async function connect() {
 
       await delay(Math.min(resposta.length * 50, 5000));
       await sock.sendPresenceUpdate('paused', from);
-      await sock.sendMessage(from, { text: resposta }, { quoted: msg });
 
-      if (!isGroup) return; // PV → responde uma vez só
+      await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+      if (!isGroup) return;
     } catch (err) {
       console.error('⚠️ Erro na API:', err.message);
       await sock.sendMessage(from, { text: 'Erro interno. 😴' }, { quoted: msg });
@@ -162,7 +162,7 @@ async function connect() {
   });
 
   // ===============================================================
-  // 🔒 RECUPERAÇÃO DE SESSÃO AUTOMÁTICA
+  // 🔒 RECUPERAÇÃO DE SESSÕES CORROMPIDAS
   // ===============================================================
   sock.ev.on('message-decrypt-failed', async (msgKey) => {
     try {
@@ -179,7 +179,7 @@ async function connect() {
 }
 
 // ===============================================================
-// 🎯 LÓGICA DE ATIVAÇÃO (reply / menção / PV)
+// 🎯 ATIVAÇÃO (reply / menção / PV)
 // ===============================================================
 async function shouldActivate(msg, isGroup, text) {
   const context = msg.message?.extendedTextMessage?.contextInfo;
@@ -209,6 +209,30 @@ async function shouldActivate(msg, isGroup, text) {
 
   return false;
 }
+
+// ===============================================================
+// 🩹 PATCH CONTRA ERROS DE GRUPO (senderMessageKeys)
+// ===============================================================
+process.on('uncaughtException', async (err) => {
+  if (err?.message?.includes("senderMessageKeys") || err?.message?.includes("No SenderKeyRecord")) {
+    console.log("⚠️ Erro de sessão corrompida detectado. Reinicializando chaves de grupo...");
+    try {
+      const authDir = './auth_info_baileys';
+      fs.readdirSync(authDir).forEach(f => {
+        if (f.includes('sender-key') || f.includes('app-state-sync')) {
+          fs.unlinkSync(`${authDir}/${f}`);
+        }
+      });
+      console.log("🔑 Chaves de grupo limpas com sucesso. Reconectando...");
+      setTimeout(() => connect(), 4000);
+    } catch (e) {
+      console.error("Erro ao limpar cache:", e.message);
+      process.exit(1);
+    }
+  } else {
+    console.error("⚠️ Erro inesperado:", err);
+  }
+});
 
 // ===============================================================
 // 🌐 HEALTH CHECK SERVER
