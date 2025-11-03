@@ -1,20 +1,24 @@
-# Usa Node 20 (necessário para Baileys)
+# Dockerfile — use node 20
 FROM node:20-alpine
 
-# Define diretório de trabalho
+# criar usuario não-root (opcional, mas bom para segurança)
+RUN addgroup -S app && adduser -S app -G app
+
 WORKDIR /app
 
-# Copia apenas arquivos de dependências para melhor cache
+# copia dependencias primeiro (cache)
 COPY package*.json ./
 
-# Instala dependências (omitindo dev)
-RUN npm install --omit=dev
+# instala sem dev deps
+RUN npm ci --omit=dev
 
-# Copia o restante do projeto
+# copia o restante do projeto
 COPY . .
 
-# Expõe a porta do Express (usada no health check)
+# ajusta permissões e troca usuário
+RUN chown -R app:app /app
+USER app
+
 EXPOSE 3000
 
-# Comando padrão
 CMD ["npm", "start"]
