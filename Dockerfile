@@ -1,18 +1,24 @@
-# Usa Node 20 (necessário para Baileys)
+# Usa Node 20
 FROM node:20-alpine
 
-# Cria usuário não-root (opcional)
+# Instala dependências básicas de build (evita erros de npm install)
+RUN apk add --no-cache python3 make g++
+
+# Cria usuário não-root
 RUN addgroup -S app && adduser -S app -G app
 
 WORKDIR /app
 
-# Copia dependências primeiro (cache eficiente)
+# Copia dependências primeiro
 COPY package*.json ./
+
+# Atualiza npm (corrige bugs de versões antigas do Alpine)
+RUN npm install -g npm@latest
 
 # Instala dependências (sem dev)
 RUN npm install --omit=dev
 
-# Copia o restante do projeto
+# Copia o resto do projeto
 COPY . .
 
 # Ajusta permissões
