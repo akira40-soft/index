@@ -2,6 +2,7 @@
   "name": "akira-baileys-bot",
   "version": "1.0.0",
   "description": "Bot Akira integrado com Baileys e API IA",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
