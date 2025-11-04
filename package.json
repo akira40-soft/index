@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Bot Akira integrado com Baileys e API IA",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
