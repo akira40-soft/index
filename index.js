@@ -5,31 +5,58 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import axios from 'axios';
 import express from 'express';
-import qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode';
 import P from 'pino';
 import fs from 'fs';
+import { Boom } from '@hapi/boom';
 
 const AKIRA_API_URL = process.env.AKIRA_API_URL || 'https://akira-api.onrender.com/responder';
 const PORT = process.env.PORT || 8080;
 
 // ===============================================================
-// 🔹 EXPRESS SERVER (para QRCode)
+// 🔹 EXPRESS SERVER (rota para QRCode visível no Railway)
 // ===============================================================
 const app = express();
-app.get('/', (req, res) => res.send('✅ Akira-Baileys está rodando.'));
-app.listen(PORT, () =>
-  console.log(`🌐 Servidor ativo na porta ${PORT}\n🔗 Acesse: http://localhost:${PORT}/qr`)
-);
+let qrCodeData = null; // armazena o último QR gerado
+
+app.get('/', (req, res) => {
+  res.send(`<h1>✅ Akira-Baileys ativo!</h1>
+            <p>Acesse <a href="/qr">/qr</a> para escanear o QRCode do WhatsApp.</p>`);
+});
+
+app.get('/qr', async (req, res) => {
+  if (!qrCodeData) {
+    return res.send('<h2>⏳ Nenhum QRCode disponível no momento. Aguarde...</h2>');
+  }
+  try {
+    const qrImage = await qrcode.toDataURL(qrCodeData);
+    res.send(`
+      <html>
+      <head><title>QR Code Akira</title></head>
+      <body style="text-align:center; font-family:sans-serif; background:#111; color:#eee;">
+        <h1>📱 Escaneie o QRCode abaixo:</h1>
+        <img src="${qrImage}" style="width:300px; border:8px solid #333; border-radius:20px;" />
+        <p>Atualize esta página se o código expirar.</p>
+      </body>
+      </html>
+    `);
+  } catch (err) {
+    res.send('Erro ao gerar QRCode.');
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Servidor ativo na porta ${PORT}`);
+  console.log(`🔗 Acesse: http://localhost:${PORT}/qr`);
+});
 
 // ===============================================================
 // 🔹 Funções auxiliares
 // ===============================================================
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-
 function extractNumber(jid = '') {
   return jid.replace(/\D/g, '').replace(/@.*/, '');
 }
-
 function normalizeJid(jid = '') {
   return jid.toString().replace('@s.whatsapp.net', '').replace('@lid', '').replace(/\D/g, '');
 }
@@ -43,7 +70,7 @@ async function startBot() {
 
   const sock = makeWASocket({
     version,
-    printQRInTerminal: true,
+    printQRInTerminal: false, // desativa QR no terminal
     auth: state,
     logger: P({ level: 'silent' }),
     syncFullHistory: false,
@@ -53,20 +80,27 @@ async function startBot() {
   sock.ev.on('creds.update', saveCreds);
 
   // ===============================================================
-  // 🔹 Conexão e Log
+  // 🔹 Atualiza QR em tempo real
   // ===============================================================
   sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, qr, lastDisconnect } = update;
+
+    if (qr) {
+      qrCodeData = qr;
+      console.log('📱 QRCode atualizado! Acesse /qr para escanear.');
+    }
+
+    if (connection === 'open') {
+      qrCodeData = null;
+      console.log('✅ AKIRA BOT ONLINE!');
+      console.log('BOT_JID:', sock.user.id);
+      console.log('BOT_LID:', sock.user?.lid || 'sem LID');
+    }
+
     if (connection === 'close') {
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       console.log(`⚠️ Conexão perdida (${reason}). Reconectando...`);
       if (reason !== DisconnectReason.loggedOut) startBot();
-    } else if (connection === 'open') {
-      console.log('✅ AKIRA BOT ONLINE!');
-      console.log('BOT_JID:', sock.user.id);
-      console.log('BOT_LID:', sock.user?.lid || 'sem LID');
-    } else if (update.qr) {
-      console.log('📱 QRCode atualizado! Acesse /qr para escanear.');
     }
   });
 
@@ -80,7 +114,7 @@ async function startBot() {
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith('@g.us');
 
-    // === PARTICIPANTE REAL (com prioridade correta)
+    // === PARTICIPANTE REAL (prioridade correta)
     let senderJid =
       msg.key.participantAlt ||
       msg.key.participant_pn ||
@@ -157,7 +191,7 @@ async function startBot() {
 }
 
 // ===============================================================
-// 🎯 ATIVAÇÃO (Reply / Menção / PV) — com fallback duplo real
+// 🎯 ATIVAÇÃO (Reply / Menção / PV)
 // ===============================================================
 async function shouldActivate(sock, msg, isGroup, text) {
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
@@ -167,17 +201,15 @@ async function shouldActivate(sock, msg, isGroup, text) {
   const BOT_LID = sock.user?.lid || '';
   const mentions = ctx?.mentionedJid || [];
 
-  if (mentions.length > 0) {
-    console.log('📣 JIDs mencionados:', mentions);
-  }
+  if (mentions.length > 0) console.log('📣 JIDs mencionados:', mentions);
 
-  // === REPLY DIRETO AO BOT (lid ou whatsapp.net)
+  // Reply direto ao bot
   if (ctx?.participant && isBotJid(ctx.participant, BOT_JID, BOT_LID)) {
     console.log('↩️ Reply direto ao bot detectado via', ctx.participant);
     return true;
   }
 
-  // === MENÇÃO AO BOT EM GRUPO
+  // Menção ao bot em grupo
   if (isGroup) {
     const mentioned = mentions.some((jid) => isBotJid(jid, BOT_JID, BOT_LID));
     if (mentioned || lowered.includes('akira')) {
@@ -186,7 +218,7 @@ async function shouldActivate(sock, msg, isGroup, text) {
     }
   }
 
-  // === MENSAGEM PRIVADA
+  // Mensagem privada
   return !isGroup;
 }
 
