@@ -1,19 +1,21 @@
 {
   "name": "akira-baileys-bot",
   "version": "1.0.0",
-  "description": "Bot WhatsApp com Baileys + Integração com Akira API (HF)",
+  "description": "Bot Akira integrado com Baileys e API IA",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.19",
-    "axios": "^1.7.7",
+    "@whiskeysockets/baileys": "^6.7.8",
+    "axios": "^1.7.3",
     "express": "^4.19.2",
-    "pino": "^9.0.0",
-    "qrcode-terminal": "^0.12.0"
+    "pino": "^9.3.2",
+    "qrcode": "^1.5.3",
+    "@hapi/boom": "^10.0.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.0.0"
   }
 }
