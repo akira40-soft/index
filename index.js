@@ -1,5 +1,5 @@
 // ===============================================================
-// AKIRA BOT — Smart JID Fix + Blue Tick Simulation + Stable Session
+// AKIRA BOT — Reply Context + Participant Fix + Dual JID Unify
 // ===============================================================
 
 const {
@@ -15,24 +15,22 @@ const axios = require('axios');
 const express = require('express');
 const fs = require('fs');
 
-// ===============================================================
-// ⚙️ CONFIGURAÇÕES
-// ===============================================================
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
 const PORT = process.env.PORT || 8080;
 
 let sock;
 let BOT_JID = null;
-let reconnecting = false;
+let BOT_LID = null;
 let currentQR = null;
+let reconnecting = false;
 
 // ===============================================================
-// 🔧 UTILITÁRIOS
+// 🧩 UTILITÁRIOS
 // ===============================================================
-function extractNumber(input = '') {
-  if (!input) return 'desconhecido';
-  const clean = input.toString();
+function extractNumber(jid = '') {
+  if (!jid) return 'desconhecido';
+  const clean = jid.toString();
   const match = clean.match(/2449\d{8}/);
   if (match) return match[0];
   const local = clean.match(/9\d{8}/);
@@ -48,8 +46,13 @@ function normalizeJid(jid = '') {
   return `${jid}@s.whatsapp.net`;
 }
 
-function isBotJid(jid) {
-  return normalizeJid(jid) === normalizeJid(BOT_JID);
+function isBotJid(jid = '') {
+  if (!jid) return false;
+  jid = jid.toString();
+  return (
+    normalizeJid(jid) === normalizeJid(BOT_JID) ||
+    jid.includes(BOT_LID?.split('@')[0])
+  );
 }
 
 // ===============================================================
@@ -75,9 +78,6 @@ async function connect() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ===============================================================
-  // 🔁 EVENTOS DE CONEXÃO
-  // ===============================================================
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -88,10 +88,12 @@ async function connect() {
 
     if (connection === 'open') {
       BOT_JID = normalizeJid(sock.user.id);
+      BOT_LID = sock.user?.lid || BOT_JID.replace('s.whatsapp.net', 'lid');
       reconnecting = false;
       currentQR = null;
       console.log('✅ AKIRA BOT ONLINE!');
-      console.log('botJid detectado:', BOT_JID);
+      console.log('BOT_JID:', BOT_JID);
+      console.log('BOT_LID:', BOT_LID);
     }
 
     if (connection === 'close') {
@@ -101,9 +103,9 @@ async function connect() {
         fs.rmSync('auth_info_baileys', { recursive: true, force: true });
         process.exit(0);
       }
-      console.log(`⚠️ Conexão perdida (reason: ${reason}). Reconectando...`);
+      console.log(`⚠️ Conexão perdida (${reason}). Reconectando...`);
       reconnecting = false;
-      setTimeout(connect, 5000);
+      setTimeout(connect, 4000);
     }
   });
 
@@ -117,23 +119,18 @@ async function connect() {
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith('@g.us');
 
-    // ===== CORREÇÃO DO PARTICIPANTE (GROUP FIX) =====
-    let senderJid;
-    if (isGroup) {
-      const alt = msg.key.participantAlt || '';
-      const main = msg.key.participant || '';
-      const ctx = msg.message?.extendedTextMessage?.contextInfo?.participant || '';
-      // Prioriza o que contém '@whatsapp.net'
-      senderJid =
-        [alt, main, ctx].find(j => j && j.includes('@whatsapp.net')) ||
-        alt || main || ctx || from;
-    } else {
-      senderJid = msg.key.remoteJid;
-    }
+    // === CORRIGE PARTICIPANTE REAL ===
+    let senderJid =
+      msg.key.participant_pn ||
+      msg.key.participantAlt ||
+      msg.key.participant ||
+      msg.message?.extendedTextMessage?.contextInfo?.participant ||
+      from;
 
     const senderNumber = extractNumber(senderJid);
     const nome = msg.pushName || senderNumber;
 
+    // === MENSAGEM E CONTEÚDO ===
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -141,50 +138,59 @@ async function connect() {
       msg.message?.videoMessage?.caption ||
       '';
 
+    // === MENSAGEM CITADA (REPLY) ===
+    const quoted =
+      msg.message?.extendedTextMessage?.contextInfo?.quotedMessage ||
+      msg.message?.contextInfo?.quotedMessage;
+
+    let replyText = '';
+    if (quoted) {
+      // tenta extrair o conteúdo textual da citação
+      replyText =
+        quoted.conversation ||
+        quoted.extendedTextMessage?.text ||
+        quoted.imageMessage?.caption ||
+        quoted.videoMessage?.caption ||
+        '';
+    }
+
     if (!text.trim()) return;
 
-    console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
+    console.log(
+      `\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`
+    );
 
     const ativar = await shouldActivate(msg, isGroup, text);
     if (!ativar) return;
 
-    // ===== SIMULA PRESENÇA E LEITURA =====
     try {
       await sock.sendPresenceUpdate('composing', from);
-      await sock.readMessages([msg.key]); // Simula "duplo check azul"
-    } catch (e) {
-      console.log('⚠️ Falha ao marcar leitura:', e.message);
-    }
+      await sock.readMessages([msg.key]); // ✔✔ azul
+    } catch (_) {}
 
-    // ===== RESPOSTA DA AKIRA =====
+    // === PREPARA PAYLOAD COM CONTEXTO DO REPLY ===
+    const payload = {
+      usuario: nome,
+      mensagem: text,
+      numero: senderNumber
+    };
+
+    if (replyText)
+      payload.mensagem += `\n\n🗨️ *Resposta a:* "${replyText.trim()}"`;
+
+    // === ENVIA PARA API ===
     try {
-      const res = await axios.post(AKIRA_API_URL, {
-        usuario: nome,
-        mensagem: text,
-        numero: senderNumber
-      });
-
+      const res = await axios.post(AKIRA_API_URL, payload);
       const resposta = res.data.resposta || '...';
+
       console.log(`[RESPOSTA] ${resposta}`);
 
-      await delay(Math.min(resposta.length * 50, 4000));
+      await delay(Math.min(resposta.length * 40, 4000));
       await sock.sendPresenceUpdate('paused', from);
       await sock.sendMessage(from, { text: resposta }, { quoted: msg });
     } catch (err) {
       console.error('⚠️ Erro na API:', err.message);
       await sock.sendMessage(from, { text: 'Erro interno. 😴' }, { quoted: msg });
-    }
-  });
-
-  // ===============================================================
-  // 🔐 ERROS DE SESSÃO
-  // ===============================================================
-  sock.ev.on('message-decrypt-failed', async (msgKey) => {
-    console.log('⚠️ Tentando regenerar sessão perdida...');
-    try {
-      await sock.sendRetryRequest(msgKey.key);
-    } catch (e) {
-      console.log('❌ Falha ao regenerar sessão:', e.message);
     }
   });
 }
@@ -193,14 +199,19 @@ async function connect() {
 // 🎯 ATIVAÇÃO (Reply / Menção / PV)
 // ===============================================================
 async function shouldActivate(msg, isGroup, text) {
-  const context = msg.message?.extendedTextMessage?.contextInfo;
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
   const lowered = text.toLowerCase();
 
-  if (context?.participant && isBotJid(context.participant)) return true;
+  // === REPLY AO BOT (lid ou whatsapp.net) ===
+  if (ctx?.participant && isBotJid(ctx.participant)) return true;
+
+  // === MENÇÃO EM GRUPO ===
   if (isGroup) {
-    const mentions = context?.mentionedJid || [];
-    if (mentions.some(j => isBotJid(j)) || lowered.includes('akira')) return true;
+    const mentions = ctx?.mentionedJid || [];
+    if (mentions.some(isBotJid) || lowered.includes('akira')) return true;
   }
+
+  // === PV ===
   return !isGroup;
 }
 
@@ -209,17 +220,16 @@ async function shouldActivate(msg, isGroup, text) {
 // ===============================================================
 const app = express();
 
-app.get('/', (_, res) => res.send('✅ Akira Bot está online!'));
+app.get('/', (_, res) => res.send('✅ Akira Bot está online e funcional!'));
 
 app.get('/qr', (_, res) => {
-  if (!currentQR) {
+  if (!currentQR)
     return res.send(`
       <html><body style="text-align:center;font-family:sans-serif;">
         <h2>✅ Akira já está conectado ao WhatsApp!</h2>
         <p>Se desconectar, recarregue esta página.</p>
       </body></html>
     `);
-  }
 
   const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(currentQR)}`;
   res.send(`
@@ -232,10 +242,9 @@ app.get('/qr', (_, res) => {
   `);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🌐 Servidor ativo na porta ${PORT}`);
-  console.log(`🔗 Acesse: http://localhost:${PORT}/qr`);
-});
+app.listen(PORT, '0.0.0.0', () =>
+  console.log(`🌐 Servidor ativo na porta ${PORT}`)
+);
 
 // ===============================================================
 // 🚀 INICIA CONEXÃO
