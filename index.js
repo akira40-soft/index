@@ -1,5 +1,5 @@
 // ===============================================================
-// AKIRA BOT — Baileys + Express + QR HTML + Railway Ready
+// AKIRA BOT — Baileys + Express + QR HTML Base64 + Railway Ready
 // ===============================================================
 
 import express from "express";
@@ -11,7 +11,11 @@ import makeWASocket, {
   Browsers
 } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
+import QRCode from "qrcode"; // <-- gera QR base64 para HTML
 
+// ===============================================================
+// 🔧 CONFIGURAÇÃO GERAL
+// ===============================================================
 const AKIRA_API_URL = process.env.AKIRA_API_URL || "https://akra35567-akira.hf.space/api/akira";
 const PORT = process.env.PORT || 8080;
 
@@ -94,6 +98,9 @@ async function connect() {
     }
   });
 
+  // ===============================================================
+  // 💬 MENSAGENS
+  // ===============================================================
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
@@ -101,7 +108,9 @@ async function connect() {
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith("@g.us");
     const senderJid = isGroup
-      ? msg.key.participant || msg.key.participantAlt || msg.message?.extendedTextMessage?.contextInfo?.participant
+      ? msg.key.participant ||
+        msg.key.participantAlt ||
+        msg.message?.extendedTextMessage?.contextInfo?.participant
       : from;
     const senderNumber = extractNumber(senderJid);
     const nome =
@@ -155,7 +164,7 @@ async function shouldActivate(msg, isGroup, text) {
 }
 
 // ===============================================================
-// 🌐 EXPRESS SERVER — Health + QR HTML
+// 🌐 EXPRESS SERVER — Health + QR HTML (com Base64)
 // ===============================================================
 const app = express();
 
@@ -168,7 +177,7 @@ app.get("/", (_, res) => {
   `);
 });
 
-app.get("/qr", (_, res) => {
+app.get("/qr", async (_, res) => {
   if (!currentQR) {
     res.send(`
       <html><body style="font-family:sans-serif;text-align:center;margin-top:10%;">
@@ -177,17 +186,19 @@ app.get("/qr", (_, res) => {
       </body></html>
     `);
   } else {
-    const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
-      currentQR
-    )}`;
-    res.send(`
-      <html><head><meta http-equiv="refresh" content="10"></head>
-      <body style="font-family:sans-serif;text-align:center;margin-top:10%;">
-        <h2>📱 Escaneie este QR Code no WhatsApp</h2>
-        <img src="${qrImg}" alt="QR Code"/>
-        <p style="color:gray;">Atualiza automaticamente a cada 10 segundos.</p>
-      </body></html>
-    `);
+    try {
+      const qrBase64 = await QRCode.toDataURL(currentQR);
+      res.send(`
+        <html><head><meta http-equiv="refresh" content="10"></head>
+        <body style="font-family:sans-serif;text-align:center;margin-top:10%;">
+          <h2>📱 Escaneie este QR Code no WhatsApp</h2>
+          <img src="${qrBase64}" alt="QR Code" />
+          <p style="color:gray;">Atualiza automaticamente a cada 10 segundos.</p>
+        </body></html>
+      `);
+    } catch (err) {
+      res.status(500).send(`<p>Erro ao gerar QR: ${err.message}</p>`);
+    }
   }
 });
 
