@@ -1,5 +1,5 @@
 // ===============================================================
-// AKIRA BOT — JID/LID unify + Session fix + Reply PV/Group logic
+// AKIRA BOT — Stable Baileys + Session Fix + Reply PV/Group Logic
 // ===============================================================
 
 const {
@@ -7,13 +7,18 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   Browsers,
-  delay
+  delay,
+  DisconnectReason
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
 const qrcode = require('qrcode-terminal');
+const fs = require('fs');
 
+// ===============================================================
+// 🔧 CONFIGURAÇÕES
+// ===============================================================
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
 const PORT = process.env.PORT || 3000;
@@ -21,11 +26,11 @@ const PORT = process.env.PORT || 3000;
 let sock;
 let BOT_JID = null;
 let lastProcessedTime = 0;
+let reconnecting = false;
 
 // ===============================================================
 // 🔧 UTILITÁRIOS
 // ===============================================================
-
 function extractNumber(input = '') {
   if (!input) return 'desconhecido';
   const clean = input.toString();
@@ -53,16 +58,14 @@ function isBotJid(jid) {
 }
 
 // ===============================================================
-// ⚙️ CONEXÃO
+// ⚙️ CONEXÃO ESTÁVEL COM RECONEXÃO AUTOMÁTICA
 // ===============================================================
 async function connect() {
+  if (reconnecting) return; // evita reconexões múltiplas simultâneas
+  reconnecting = true;
+
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
   const { version } = await fetchLatestBaileysVersion();
-
-  if (sock && sock.user) {
-    console.log('🔄 Fechando sessão antiga...');
-    await sock.logout();
-  }
 
   sock = makeWASocket({
     version,
@@ -86,14 +89,24 @@ async function connect() {
 
     if (connection === 'open') {
       BOT_JID = normalizeJid(sock.user.id);
+      reconnecting = false;
       console.log('✅ AKIRA BOT ONLINE!');
       console.log('botJid detectado:', BOT_JID);
       lastProcessedTime = Date.now();
     }
 
     if (connection === 'close') {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      console.log(`⚠️ Conexão perdida (reason: ${reason}). Reconectando em 5s...`);
+      const reason = lastDisconnect?.error?.output?.statusCode || 0;
+
+      // Se foi logout manual (ex: escaneou outro QR), apagar sessão
+      if (reason === DisconnectReason.loggedOut) {
+        console.log('🔒 Sessão expirada. Removendo auth_info_baileys...');
+        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+        process.exit(0);
+      }
+
+      console.log(`⚠️ Conexão perdida (reason: ${reason}). Tentando reconectar...`);
+      reconnecting = false;
       setTimeout(connect, 5000);
     }
   });
@@ -112,7 +125,6 @@ async function connect() {
     // ===== EXTRAÇÃO DO NÚMERO =====
     let senderJid;
     if (isGroup) {
-      // Prioridade: participantAlt → participant → contextInfo.participant → fallback
       senderJid =
         msg.key.participantAlt ||
         msg.key.participant ||
@@ -163,6 +175,9 @@ async function connect() {
     }
   });
 
+  // ===============================================================
+  // 🔄 RECUPERAÇÃO DE SESSÃO PERDIDA
+  // ===============================================================
   sock.ev.on('message-decrypt-failed', async (msgKey) => {
     console.log('⚠️ Tentando regenerar sessão perdida...');
     try {
