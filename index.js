@@ -1,5 +1,5 @@
 // ===============================================================
-// AKIRA BOT — Stable Baileys + Session Fix + Reply PV/Group Logic
+// AKIRA BOT — QR via /qr + Reconexão estável + Sessão persistente
 // ===============================================================
 
 const {
@@ -13,20 +13,20 @@ const {
 const pino = require('pino');
 const axios = require('axios');
 const express = require('express');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 
 // ===============================================================
-// 🔧 CONFIGURAÇÕES
+// ⚙️ CONFIGURAÇÕES
 // ===============================================================
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 let sock;
 let BOT_JID = null;
 let lastProcessedTime = 0;
 let reconnecting = false;
+let currentQR = null;
 
 // ===============================================================
 // 🔧 UTILITÁRIOS
@@ -34,11 +34,11 @@ let reconnecting = false;
 function extractNumber(input = '') {
   if (!input) return 'desconhecido';
   const clean = input.toString();
-  const match = clean.match(/2449\d{8}/);
+  const match = clean.match(/2449\\d{8}/);
   if (match) return match[0];
-  const local = clean.match(/9\d{8}/);
+  const local = clean.match(/9\\d{8}/);
   if (local) return `244${local[0]}`;
-  return clean.replace(/\D/g, '').slice(-12);
+  return clean.replace(/\\D/g, '').slice(-12);
 }
 
 function normalizeJid(jid = '') {
@@ -47,7 +47,7 @@ function normalizeJid(jid = '') {
   jid = jid.replace(/[:@].*/g, '');
   if (jid.startsWith('37') || jid.startsWith('202') || jid.length < 9)
     return BOT_JID || '244952786417@s.whatsapp.net';
-  if (!jid.startsWith('244') && /^9\d{8}$/.test(jid))
+  if (!jid.startsWith('244') && /^9\\d{8}$/.test(jid))
     jid = '244' + jid;
   return `${jid}@s.whatsapp.net`;
 }
@@ -58,10 +58,10 @@ function isBotJid(jid) {
 }
 
 // ===============================================================
-// ⚙️ CONEXÃO ESTÁVEL COM RECONEXÃO AUTOMÁTICA
+// ⚙️ CONEXÃO PRINCIPAL
 // ===============================================================
 async function connect() {
-  if (reconnecting) return; // evita reconexões múltiplas simultâneas
+  if (reconnecting) return;
   reconnecting = true;
 
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -83,13 +83,14 @@ async function connect() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      qrcode.generate(qr, { small: true });
-      console.log('\n📱 ESCANEIE O QR PARA CONECTAR\n');
+      currentQR = qr;
+      console.log('📱 QRCode atualizado! Acesse /qr para escanear.');
     }
 
     if (connection === 'open') {
       BOT_JID = normalizeJid(sock.user.id);
       reconnecting = false;
+      currentQR = null;
       console.log('✅ AKIRA BOT ONLINE!');
       console.log('botJid detectado:', BOT_JID);
       lastProcessedTime = Date.now();
@@ -97,14 +98,11 @@ async function connect() {
 
     if (connection === 'close') {
       const reason = lastDisconnect?.error?.output?.statusCode || 0;
-
-      // Se foi logout manual (ex: escaneou outro QR), apagar sessão
       if (reason === DisconnectReason.loggedOut) {
         console.log('🔒 Sessão expirada. Removendo auth_info_baileys...');
         fs.rmSync('auth_info_baileys', { recursive: true, force: true });
         process.exit(0);
       }
-
       console.log(`⚠️ Conexão perdida (reason: ${reason}). Tentando reconectar...`);
       reconnecting = false;
       setTimeout(connect, 5000);
@@ -122,7 +120,6 @@ async function connect() {
     const isGroup = from.endsWith('@g.us');
     if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
-    // ===== EXTRAÇÃO DO NÚMERO =====
     let senderJid;
     if (isGroup) {
       senderJid =
@@ -146,13 +143,10 @@ async function connect() {
 
     if (!text.trim()) return;
 
-    console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
+    console.log(`\\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
 
     const ativar = await shouldActivate(msg, isGroup, text);
-    if (!ativar) {
-      console.log('[IGNORADO] Não ativado para responder (não reply ou não menção).');
-      return;
-    }
+    if (!ativar) return;
 
     await sock.sendPresenceUpdate('composing', from);
 
@@ -175,9 +169,6 @@ async function connect() {
     }
   });
 
-  // ===============================================================
-  // 🔄 RECUPERAÇÃO DE SESSÃO PERDIDA
-  // ===============================================================
   sock.ev.on('message-decrypt-failed', async (msgKey) => {
     console.log('⚠️ Tentando regenerar sessão perdida...');
     try {
@@ -189,45 +180,60 @@ async function connect() {
 }
 
 // ===============================================================
-// 🎯 ATIVAÇÃO (reply / menção / PV)
+// 🎯 ATIVAÇÃO
 // ===============================================================
 async function shouldActivate(msg, isGroup, text) {
   const context = msg.message?.extendedTextMessage?.contextInfo;
   const lowered = text.toLowerCase();
 
-  // Reply ao bot
-  if (context?.participant) {
-    const quoted = normalizeJid(context.participant);
-    if (isBotJid(quoted)) {
-      console.log(`[ATIVAÇÃO] Reply ao bot detectado (${BOT_JID})`);
-      return true;
-    }
-  }
-
-  // Menção direta no grupo
+  if (context?.participant && isBotJid(normalizeJid(context.participant))) return true;
   if (isGroup) {
     const mentions = context?.mentionedJid || [];
-    const mentionMatch = mentions.some(
-      j => isBotJid(j) || j.includes(BOT_JID.split('@')[0])
-    );
-    if (lowered.includes('akira') || mentionMatch) {
-      console.log('[ATIVAÇÃO] Menção direta a Akira detectada.');
-      return true;
-    }
+    if (mentions.some(j => isBotJid(j)) || lowered.includes('akira')) return true;
   }
-
-  // PV → sempre responde
-  if (!isGroup) return true;
-  return false;
+  return !isGroup;
 }
 
 // ===============================================================
-// 🌐 HEALTH CHECK
+// 🌐 EXPRESS SERVER (health + QR)
 // ===============================================================
 const app = express();
+
 app.get('/', (req, res) => res.send('AKIRA BOT ONLINE ✅'));
+
+app.get('/qr', (req, res) => {
+  if (!currentQR) {
+    res.send(`
+      <html>
+        <head><title>QR Code Akira</title></head>
+        <body style="font-family:sans-serif;text-align:center;">
+          <h2>✅ Akira já está conectado ao WhatsApp!</h2>
+          <p>Se desconectar, recarregue esta página.</p>
+        </body>
+      </html>
+    `);
+    return;
+  }
+
+  const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(currentQR)}`;
+  res.send(`
+    <html>
+      <head>
+        <meta http-equiv="refresh" content="10">
+        <title>Escaneie o QR Code - Akira</title>
+      </head>
+      <body style="font-family:sans-serif;text-align:center;">
+        <h2>📱 Escaneie este QR para conectar o Akira Bot</h2>
+        <img src="${qrImg}" alt="QR Code do WhatsApp"/>
+        <p style="color:gray;">Atualiza automaticamente a cada 10 segundos.</p>
+      </body>
+    </html>
+  `);
+});
+
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Health check na porta ${server.address().port}`);
+  console.log(`🌐 Servidor ativo na porta ${PORT}`);
+  console.log(`🔗 Acesse para escanear o QR: http://localhost:${PORT}/qr`);
 });
 
 // ===============================================================
