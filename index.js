@@ -12,7 +12,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
 
-const AKIRA_API_URL = process.env.AKIRA_API_URL || "https://akira-api.vercel.app/responder";
+const AKIRA_API_URL = process.env.AKIRA_API_URL || "https://akra35567-akira.hf.space/api/akira";
 const PORT = process.env.PORT || 8080;
 
 let sock;
