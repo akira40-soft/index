@@ -1,18 +1,19 @@
 // ===============================================================
 // AKIRA BOT — JID/LID unify + Session fix + Reply PV/Group logic
+// (versão ESM — compatível com Railway e Node 20+)
 // ===============================================================
 
-const {
-  default: makeWASocket,
+import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   Browsers,
   delay
-} = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const axios = require('axios');
-const express = require('express');
-const qrcode = require('qrcode-terminal');
+} from '@whiskeysockets/baileys';
+import pino from 'pino';
+import axios from 'axios';
+import express from 'express';
+import qrcode from 'qrcode';
+import QRCode from 'qrcode';
 
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
@@ -21,11 +22,11 @@ const PORT = process.env.PORT || 3000;
 let sock;
 let BOT_JID = null;
 let lastProcessedTime = 0;
+let currentQR = null;
 
 // ===============================================================
 // 🔧 UTILITÁRIOS
 // ===============================================================
-
 function extractNumber(input = '') {
   if (!input) return 'desconhecido';
   const clean = input.toString();
@@ -80,12 +81,13 @@ async function connect() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      qrcode.generate(qr, { small: true });
+      currentQR = qr;
       console.log('\n📱 ESCANEIE O QR PARA CONECTAR\n');
     }
 
     if (connection === 'open') {
       BOT_JID = normalizeJid(sock.user.id);
+      currentQR = null;
       console.log('✅ AKIRA BOT ONLINE!');
       console.log('botJid detectado:', BOT_JID);
       lastProcessedTime = Date.now();
@@ -112,7 +114,6 @@ async function connect() {
     // ===== EXTRAÇÃO DO NÚMERO =====
     let senderJid;
     if (isGroup) {
-      // Prioridade: participantAlt → participant → contextInfo.participant → fallback
       senderJid =
         msg.key.participantAlt ||
         msg.key.participant ||
@@ -205,7 +206,6 @@ async function shouldActivate(msg, isGroup, text) {
   if (!isGroup) return true;
   return false;
 }
-
 
 // ===============================================================
 // 🌐 EXPRESS SERVER — Health + QR HTML (com Base64)
