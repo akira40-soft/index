@@ -115,8 +115,8 @@ async function connect() {
     let senderJid;
     if (isGroup) {
       senderJid =
+        msg.key.participan ||
         msg.key.participantAlt ||
-        msg.key.participant ||
         msg.message?.extendedTextMessage?.contextInfo?.participant ||
         msg.key.remoteJid;
     } else {
