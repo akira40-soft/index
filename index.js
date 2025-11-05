@@ -1,19 +1,17 @@
 // ===============================================================
-// AKIRA BOT — Debug detalhado + Visualização + Fix PV duplicado
+// AKIRA BOT — Baileys v6.7.8 (Log detalhado + reply/menção fix)
 // ===============================================================
 
-const {
-  default: makeWASocket,
+import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   Browsers,
   delay
-} = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const axios = require('axios');
-const express = require('express');
-const QRCode = require('qrcode');
-const qrcodeTerminal = require('qrcode-terminal');
+} from '@whiskeysockets/baileys';
+import pino from 'pino';
+import axios from 'axios';
+import express from 'express';
+import * as QRCode from 'qrcode';
 
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
@@ -21,11 +19,11 @@ const PORT = process.env.PORT || 8080;
 
 let sock;
 let BOT_JID = null;
-let currentQR = null;
 let lastProcessedTime = 0;
+let currentQR = null;
 
 // ===============================================================
-// 🔧 UTILITÁRIOS
+// 🔧 FUNÇÕES UTILITÁRIAS
 // ===============================================================
 function extractNumber(input = '') {
   if (!input) return 'desconhecido';
@@ -60,6 +58,11 @@ async function connect() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
   const { version } = await fetchLatestBaileysVersion();
 
+  if (sock && sock.user) {
+    console.log('🔄 Fechando sessão antiga...');
+    await sock.logout();
+  }
+
   sock = makeWASocket({
     version,
     auth: state,
@@ -77,8 +80,8 @@ async function connect() {
 
     if (qr) {
       currentQR = qr;
-      qrcodeTerminal.generate(qr, { small: true });
-      console.log('\n📱 ESCANEIE O QR PARA CONECTAR\n');
+      console.clear();
+      console.log('📱 ESCANEIE O QR PARA CONECTAR');
     }
 
     if (connection === 'open') {
@@ -97,7 +100,7 @@ async function connect() {
   });
 
   // ===============================================================
-  // 💬 MENSAGENS
+  // 💬 EVENTO DE MENSAGEM
   // ===============================================================
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
@@ -105,41 +108,41 @@ async function connect() {
 
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith('@g.us');
-    const timestamp = msg.messageTimestamp * 1000;
-
-    // Evita resposta duplicada no PV ao conectar
-    if (timestamp < lastProcessedTime - 5000) return;
+    if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
     // ===== DEBUG DETALHADO =====
     console.log('\n====================== MENSAGEM RECEBIDA ======================');
     console.log(JSON.stringify({
       remoteJid: msg.key.remoteJid,
       fromMe: msg.key.fromMe,
+      pushName: msg.pushName,
       participant: msg.key.participant,
       participantAlt: msg.key.participantAlt,
       participant_pn: msg.participant_pn,
-      pushName: msg.pushName,
+      contextInfo_participant: msg.message?.extendedTextMessage?.contextInfo?.participant,
+      contextInfo_participant_pn: msg.message?.extendedTextMessage?.contextInfo?.participant_pn,
       messageType: Object.keys(msg.message)[0],
-      contextInfo: msg.message?.extendedTextMessage?.contextInfo
+      textContent: msg.message.conversation ||
+                   msg.message.extendedTextMessage?.text ||
+                   msg.message?.imageMessage?.caption ||
+                   msg.message?.videoMessage?.caption ||
+                   '',
     }, null, 2));
     console.log('===============================================================\n');
 
-    // ===== IDENTIFICA O REMETENTE =====
-    let senderJid;
-    if (isGroup) {
-      senderJid =
-        msg.key.participantAlt ||
-        msg.key.participant ||
-        msg.message?.extendedTextMessage?.contextInfo?.participant ||
-        msg.key.remoteJid;
-    } else {
-      senderJid = msg.key.remoteJid;
-    }
+    // ===== EXTRAÇÃO DE NÚMERO =====
+    const numeroExtraido = extractNumber(
+      msg.key.participantAlt ||
+      msg.key.participant ||
+      msg.participant_pn ||
+      msg.message?.extendedTextMessage?.contextInfo?.participant_pn ||
+      msg.message?.extendedTextMessage?.contextInfo?.participant ||
+      msg.key.remoteJid
+    );
+    console.log(`📞 Número extraído final: ${numeroExtraido}`);
 
-    const senderNumber = extractNumber(senderJid);
-    const nome = msg.pushName || senderNumber;
+    const nome = msg.pushName || numeroExtraido;
 
-    // ===== TEXTO E CONTEXTO DO REPLY =====
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -147,42 +150,41 @@ async function connect() {
       msg.message?.videoMessage?.caption ||
       '';
 
-    const quotedText =
-      msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
-      msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text ||
-      null;
-
     if (!text.trim()) return;
 
-    console.log(`\n💬 ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
-    if (quotedText) console.log(`↪️ (Em resposta a): "${quotedText}"`);
+    console.log(`💬 ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${numeroExtraido}): ${text}`);
 
     const ativar = await shouldActivate(msg, isGroup, text);
     if (!ativar) {
-      console.log('[IGNORADO] Não ativado (sem menção ou reply).');
+      console.log('[IGNORADO] Não ativado para responder (não reply ou não menção).');
       return;
+    }
+
+    // ===== SIMULAÇÃO DE LEITURA =====
+    if (!isGroup) {
+      try {
+        await sock.readMessages([msg.key]);
+        await sock.sendReceipt(from, msg.key.participant, ['read']);
+        console.log('✅ Simulação de visualização (dois tiques azuis)');
+      } catch (e) {
+        console.log('⚠️ Falha ao marcar como lida:', e.message);
+      }
     }
 
     await sock.sendPresenceUpdate('composing', from);
 
     try {
-      const payload = {
+      const res = await axios.post(AKIRA_API_URL, {
         usuario: nome,
         mensagem: text,
-        numero: senderNumber,
-        contexto: quotedText || null
-      };
+        numero: numeroExtraido
+      });
 
-      const res = await axios.post(AKIRA_API_URL, payload);
       const resposta = res.data.resposta || '...';
+      console.log(`[RESPOSTA] ${resposta}`);
 
-      console.log(`[RESPOSTA] → ${resposta}`);
-
-      // Simula tempo de digitação + double tick azul
-      await delay(Math.min(resposta.length * 50, 3000));
+      await delay(Math.min(resposta.length * 50, 4000));
       await sock.sendPresenceUpdate('paused', from);
-      await sock.readMessages([msg.key]); // marca como lida (✔️✔️ azul)
-
       await sock.sendMessage(from, { text: resposta }, { quoted: msg });
     } catch (err) {
       console.error('⚠️ Erro na API:', err.message);
@@ -207,7 +209,6 @@ async function shouldActivate(msg, isGroup, text) {
   const context = msg.message?.extendedTextMessage?.contextInfo;
   const lowered = text.toLowerCase();
 
-  // Reply ao bot
   if (context?.participant) {
     const quoted = normalizeJid(context.participant);
     if (isBotJid(quoted)) {
@@ -216,27 +217,27 @@ async function shouldActivate(msg, isGroup, text) {
     }
   }
 
-  // Menção direta
   if (isGroup) {
     const mentions = context?.mentionedJid || [];
-    const mentionMatch = mentions.some(j => isBotJid(j) || j.includes(BOT_JID.split('@')[0]));
+    const mentionMatch = mentions.some(
+      j => isBotJid(j) || j.includes(BOT_JID.split('@')[0])
+    );
     if (lowered.includes('akira') || mentionMatch) {
       console.log('[ATIVAÇÃO] Menção direta a Akira detectada.');
       return true;
     }
   }
 
-  // PV → sempre ativo
   if (!isGroup) return true;
   return false;
 }
 
 // ===============================================================
-// 🌐 SERVIDOR EXPRESS — Health + QR HTML
+// 🌐 EXPRESS SERVER (Health + QR HTML)
 // ===============================================================
 const app = express();
 
-app.get('/', (_, res) => {
+app.get("/", (_, res) => {
   res.send(`
     <html><body style="font-family:sans-serif;text-align:center;margin-top:10%;">
       <h2>✅ Akira Bot está online!</h2>
@@ -245,7 +246,7 @@ app.get('/', (_, res) => {
   `);
 });
 
-app.get('/qr', async (_, res) => {
+app.get("/qr", async (_, res) => {
   if (!currentQR) {
     res.send(`
       <html><body style="font-family:sans-serif;text-align:center;margin-top:10%;">
@@ -270,7 +271,7 @@ app.get('/qr', async (_, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🌐 Servidor ativo na porta ${PORT}`);
   console.log(`🔗 Acesse: http://localhost:${PORT}/qr`);
 });
