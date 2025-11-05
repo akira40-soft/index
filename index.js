@@ -1,28 +1,28 @@
 // ===============================================================
-// AKIRA BOT — JID/LID unify + Session fix + Reply PV/Group logic
-// (versão ESM — compatível com Railway e Node 20+)
+// AKIRA BOT — Debug detalhado + Visualização + Fix PV duplicado
 // ===============================================================
 
-import makeWASocket, {
+const {
+  default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   Browsers,
   delay
-} from '@whiskeysockets/baileys';
-import pino from 'pino';
-import axios from 'axios';
-import express from 'express';
-import qrcode from 'qrcode';
-import QRCode from 'qrcode';
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const axios = require('axios');
+const express = require('express');
+const QRCode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 
 const logger = pino({ level: 'info' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 let sock;
 let BOT_JID = null;
-let lastProcessedTime = 0;
 let currentQR = null;
+let lastProcessedTime = 0;
 
 // ===============================================================
 // 🔧 UTILITÁRIOS
@@ -60,11 +60,6 @@ async function connect() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
   const { version } = await fetchLatestBaileysVersion();
 
-  if (sock && sock.user) {
-    console.log('🔄 Fechando sessão antiga...');
-    await sock.logout();
-  }
-
   sock = makeWASocket({
     version,
     auth: state,
@@ -82,15 +77,16 @@ async function connect() {
 
     if (qr) {
       currentQR = qr;
+      qrcodeTerminal.generate(qr, { small: true });
       console.log('\n📱 ESCANEIE O QR PARA CONECTAR\n');
     }
 
     if (connection === 'open') {
       BOT_JID = normalizeJid(sock.user.id);
-      currentQR = null;
       console.log('✅ AKIRA BOT ONLINE!');
-      console.log('botJid detectado:', BOT_JID);
+      console.log('BOT_JID detectado:', BOT_JID);
       lastProcessedTime = Date.now();
+      currentQR = null;
     }
 
     if (connection === 'close') {
@@ -109,14 +105,31 @@ async function connect() {
 
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith('@g.us');
-    if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
+    const timestamp = msg.messageTimestamp * 1000;
 
-    // ===== EXTRAÇÃO DO NÚMERO =====
+    // Evita resposta duplicada no PV ao conectar
+    if (timestamp < lastProcessedTime - 5000) return;
+
+    // ===== DEBUG DETALHADO =====
+    console.log('\n====================== MENSAGEM RECEBIDA ======================');
+    console.log(JSON.stringify({
+      remoteJid: msg.key.remoteJid,
+      fromMe: msg.key.fromMe,
+      participant: msg.key.participant,
+      participantAlt: msg.key.participantAlt,
+      participant_pn: msg.participant_pn,
+      pushName: msg.pushName,
+      messageType: Object.keys(msg.message)[0],
+      contextInfo: msg.message?.extendedTextMessage?.contextInfo
+    }, null, 2));
+    console.log('===============================================================\n');
+
+    // ===== IDENTIFICA O REMETENTE =====
     let senderJid;
     if (isGroup) {
       senderJid =
-        msg.key.participan ||
         msg.key.participantAlt ||
+        msg.key.participant ||
         msg.message?.extendedTextMessage?.contextInfo?.participant ||
         msg.key.remoteJid;
     } else {
@@ -126,6 +139,7 @@ async function connect() {
     const senderNumber = extractNumber(senderJid);
     const nome = msg.pushName || senderNumber;
 
+    // ===== TEXTO E CONTEXTO DO REPLY =====
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -133,30 +147,42 @@ async function connect() {
       msg.message?.videoMessage?.caption ||
       '';
 
+    const quotedText =
+      msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
+      msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text ||
+      null;
+
     if (!text.trim()) return;
 
-    console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
+    console.log(`\n💬 ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
+    if (quotedText) console.log(`↪️ (Em resposta a): "${quotedText}"`);
 
     const ativar = await shouldActivate(msg, isGroup, text);
     if (!ativar) {
-      console.log('[IGNORADO] Não ativado para responder (não reply ou não menção).');
+      console.log('[IGNORADO] Não ativado (sem menção ou reply).');
       return;
     }
 
     await sock.sendPresenceUpdate('composing', from);
 
     try {
-      const res = await axios.post(AKIRA_API_URL, {
+      const payload = {
         usuario: nome,
         mensagem: text,
-        numero: senderNumber
-      });
+        numero: senderNumber,
+        contexto: quotedText || null
+      };
 
+      const res = await axios.post(AKIRA_API_URL, payload);
       const resposta = res.data.resposta || '...';
-      console.log(`[RESPOSTA] ${resposta}`);
 
-      await delay(Math.min(resposta.length * 50, 4000));
+      console.log(`[RESPOSTA] → ${resposta}`);
+
+      // Simula tempo de digitação + double tick azul
+      await delay(Math.min(resposta.length * 50, 3000));
       await sock.sendPresenceUpdate('paused', from);
+      await sock.readMessages([msg.key]); // marca como lida (✔️✔️ azul)
+
       await sock.sendMessage(from, { text: resposta }, { quoted: msg });
     } catch (err) {
       console.error('⚠️ Erro na API:', err.message);
@@ -190,29 +216,27 @@ async function shouldActivate(msg, isGroup, text) {
     }
   }
 
-  // Menção direta no grupo
+  // Menção direta
   if (isGroup) {
     const mentions = context?.mentionedJid || [];
-    const mentionMatch = mentions.some(
-      j => isBotJid(j) || j.includes(BOT_JID.split('@')[0])
-    );
+    const mentionMatch = mentions.some(j => isBotJid(j) || j.includes(BOT_JID.split('@')[0]));
     if (lowered.includes('akira') || mentionMatch) {
       console.log('[ATIVAÇÃO] Menção direta a Akira detectada.');
       return true;
     }
   }
 
-  // PV → sempre responde
+  // PV → sempre ativo
   if (!isGroup) return true;
   return false;
 }
 
 // ===============================================================
-// 🌐 EXPRESS SERVER — Health + QR HTML (com Base64)
+// 🌐 SERVIDOR EXPRESS — Health + QR HTML
 // ===============================================================
 const app = express();
 
-app.get("/", (_, res) => {
+app.get('/', (_, res) => {
   res.send(`
     <html><body style="font-family:sans-serif;text-align:center;margin-top:10%;">
       <h2>✅ Akira Bot está online!</h2>
@@ -221,7 +245,7 @@ app.get("/", (_, res) => {
   `);
 });
 
-app.get("/qr", async (_, res) => {
+app.get('/qr', async (_, res) => {
   if (!currentQR) {
     res.send(`
       <html><body style="font-family:sans-serif;text-align:center;margin-top:10%;">
@@ -246,7 +270,7 @@ app.get("/qr", async (_, res) => {
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Servidor ativo na porta ${PORT}`);
   console.log(`🔗 Acesse: http://localhost:${PORT}/qr`);
 });
