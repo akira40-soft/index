@@ -1,167 +1,211 @@
 // ===============================================================
-// AKIRA BOT — Baileys + Express + QR HTML Base64 + Railway Ready
+// AKIRA BOT — JID/LID unify + Session fix + Reply PV/Group logic
 // ===============================================================
 
-import express from "express";
-import axios from "axios";
-import fs from "fs";
-import makeWASocket, {
+const {
+  default: makeWASocket,
   useMultiFileAuthState,
-  DisconnectReason,
-  Browsers
-} from "@whiskeysockets/baileys";
-import qrcode from "qrcode-terminal";
-import QRCode from "qrcode"; // <-- gera QR base64 para HTML
+  fetchLatestBaileysVersion,
+  Browsers,
+  delay
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const axios = require('axios');
+const express = require('express');
+const qrcode = require('qrcode-terminal');
 
-// ===============================================================
-// 🔧 CONFIGURAÇÃO GERAL
-// ===============================================================
-const AKIRA_API_URL = process.env.AKIRA_API_URL || "https://akra35567-akira.hf.space/api/akira";
-const PORT = process.env.PORT || 8080;
+const logger = pino({ level: 'info' });
+const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
+const PORT = process.env.PORT || 3000;
 
 let sock;
 let BOT_JID = null;
-let currentQR = null;
-let reconnecting = false;
+let lastProcessedTime = 0;
 
 // ===============================================================
-// 📞 FUNÇÕES AUXILIARES
+// 🔧 UTILITÁRIOS
 // ===============================================================
-function extractNumber(input = "") {
-  if (!input) return "desconhecido";
+
+function extractNumber(input = '') {
+  if (!input) return 'desconhecido';
   const clean = input.toString();
   const match = clean.match(/2449\d{8}/);
   if (match) return match[0];
   const local = clean.match(/9\d{8}/);
   if (local) return `244${local[0]}`;
-  return clean.replace(/\D/g, "").slice(-12);
+  return clean.replace(/\D/g, '').slice(-12);
 }
 
-function normalizeJid(jid = "") {
+function normalizeJid(jid = '') {
   if (!jid) return null;
   jid = jid.toString().trim();
-  jid = jid.replace(/[:@].*/g, "");
-  if (!jid.startsWith("244") && /^9\d{8}$/.test(jid)) jid = "244" + jid;
+  jid = jid.replace(/[:@].*/g, '');
+  if (jid.startsWith('37') || jid.startsWith('202') || jid.length < 9)
+    return BOT_JID || '244952786417@s.whatsapp.net';
+  if (!jid.startsWith('244') && /^9\d{8}$/.test(jid))
+    jid = '244' + jid;
   return `${jid}@s.whatsapp.net`;
 }
 
 function isBotJid(jid) {
-  return normalizeJid(jid) === normalizeJid(BOT_JID);
+  const norm = normalizeJid(jid);
+  return norm === normalizeJid(BOT_JID);
 }
 
 // ===============================================================
-// 🔌 CONEXÃO BAILEYS
+// ⚙️ CONEXÃO
 // ===============================================================
 async function connect() {
-  const { state, saveCreds } = await useMultiFileAuthState("./auth_info_baileys");
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  const { version } = await fetchLatestBaileysVersion();
+
+  if (sock && sock.user) {
+    console.log('🔄 Fechando sessão antiga...');
+    await sock.logout();
+  }
 
   sock = makeWASocket({
+    version,
     auth: state,
-    browser: Browsers.macOS("Desktop"),
+    logger,
+    browser: Browsers.macOS('Desktop'),
     markOnlineOnConnect: true,
-    printQRInTerminal: false,
-    connectTimeoutMs: 60000,
+    syncFullHistory: false,
+    connectTimeoutMs: 60000
   });
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on("connection.update", async (update) => {
+  sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      currentQR = qr;
-
-      // QR no console
       qrcode.generate(qr, { small: true });
-      console.log("\n📱 ESCANEIE O QR PARA CONECTAR AO WHATSAPP\n");
+      console.log('\n📱 ESCANEIE O QR PARA CONECTAR\n');
     }
 
-    if (connection === "open") {
+    if (connection === 'open') {
       BOT_JID = normalizeJid(sock.user.id);
-      console.log("✅ AKIRA BOT ONLINE!");
-      console.log("botJid detectado:", BOT_JID);
-      currentQR = null; // QR não é mais necessário
+      console.log('✅ AKIRA BOT ONLINE!');
+      console.log('botJid detectado:', BOT_JID);
+      lastProcessedTime = Date.now();
     }
 
-    if (connection === "close") {
-      const reason = lastDisconnect?.error?.output?.statusCode || 0;
-      if (reason === DisconnectReason.loggedOut) {
-        console.log("🔒 Sessão expirada. Limpando credenciais...");
-        fs.rmSync("./auth_info_baileys", { recursive: true, force: true });
-        process.exit(0);
-      }
-      console.log(`⚠️ Conexão perdida (reason: ${reason}). Tentando reconectar...`);
-      if (!reconnecting) {
-        reconnecting = true;
-        setTimeout(connect, 5000);
-      }
+    if (connection === 'close') {
+      const reason = lastDisconnect?.error?.output?.statusCode;
+      console.log(`⚠️ Conexão perdida (reason: ${reason}). Reconectando em 5s...`);
+      setTimeout(connect, 5000);
     }
   });
 
   // ===============================================================
   // 💬 MENSAGENS
   // ===============================================================
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    const msg = messages[0];
+  sock.ev.on('messages.upsert', async (m) => {
+    const msg = m.messages[0];
     if (!msg.message || msg.key.fromMe) return;
 
     const from = msg.key.remoteJid;
-    const isGroup = from.endsWith("@g.us");
-    const senderJid = isGroup
-      ? msg.key.participant ||
+    const isGroup = from.endsWith('@g.us');
+    if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
+
+    // ===== EXTRAÇÃO DO NÚMERO =====
+    let senderJid;
+    if (isGroup) {
+      // Prioridade: participantAlt → participant → contextInfo.participant → fallback
+      senderJid =
         msg.key.participantAlt ||
-        msg.message?.extendedTextMessage?.contextInfo?.participant
-      : from;
+        msg.key.participant ||
+        msg.message?.extendedTextMessage?.contextInfo?.participant ||
+        msg.key.remoteJid;
+    } else {
+      senderJid = msg.key.remoteJid;
+    }
+
     const senderNumber = extractNumber(senderJid);
-    const nome =
-      msg.pushName || msg.message?.senderName || msg.key.remoteJid.split("@")[0];
+    const nome = msg.pushName || senderNumber;
+
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      "";
+      msg.message?.imageMessage?.caption ||
+      msg.message?.videoMessage?.caption ||
+      '';
 
-    console.log(`\n💬 ${isGroup ? "GRUPO" : "PV"} | ${nome} (${senderNumber}): ${text}`);
+    if (!text.trim()) return;
+
+    console.log(`\n[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${senderNumber}): ${text}`);
 
     const ativar = await shouldActivate(msg, isGroup, text);
-    if (!ativar) return;
+    if (!ativar) {
+      console.log('[IGNORADO] Não ativado para responder (não reply ou não menção).');
+      return;
+    }
 
-    try {
-      await sock.sendPresenceUpdate("composing", from);
-      await sock.readMessages([msg.key]);
-    } catch {}
+    await sock.sendPresenceUpdate('composing', from);
 
     try {
       const res = await axios.post(AKIRA_API_URL, {
         usuario: nome,
         mensagem: text,
-        grupo: isGroup,
-        remetente: senderNumber,
+        numero: senderNumber
       });
 
-      const resposta = res.data?.resposta || "⚠️ Erro ao processar resposta.";
+      const resposta = res.data.resposta || '...';
+      console.log(`[RESPOSTA] ${resposta}`);
+
+      await delay(Math.min(resposta.length * 50, 4000));
+      await sock.sendPresenceUpdate('paused', from);
       await sock.sendMessage(from, { text: resposta }, { quoted: msg });
     } catch (err) {
-      console.error("❌ Erro ao enviar resposta:", err.message);
+      console.error('⚠️ Erro na API:', err.message);
+      await sock.sendMessage(from, { text: 'Erro interno. 😴' }, { quoted: msg });
+    }
+  });
+
+  sock.ev.on('message-decrypt-failed', async (msgKey) => {
+    console.log('⚠️ Tentando regenerar sessão perdida...');
+    try {
+      await sock.sendRetryRequest(msgKey.key);
+    } catch (e) {
+      console.log('❌ Falha ao regenerar sessão:', e.message);
     }
   });
 }
 
 // ===============================================================
-// 🎯 ATIVAÇÃO
+// 🎯 ATIVAÇÃO (reply / menção / PV)
 // ===============================================================
 async function shouldActivate(msg, isGroup, text) {
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  const context = msg.message?.extendedTextMessage?.contextInfo;
   const lowered = text.toLowerCase();
 
-  if (ctx?.participant && isBotJid(ctx.participant)) return true;
-  if (isGroup) {
-    const mentions = ctx?.mentionedJid || [];
-    if (mentions.some((j) => isBotJid(j)) || lowered.includes("akira")) return true;
-  } else return true;
+  // Reply ao bot
+  if (context?.participant) {
+    const quoted = normalizeJid(context.participant);
+    if (isBotJid(quoted)) {
+      console.log(`[ATIVAÇÃO] Reply ao bot detectado (${BOT_JID})`);
+      return true;
+    }
+  }
 
+  // Menção direta no grupo
+  if (isGroup) {
+    const mentions = context?.mentionedJid || [];
+    const mentionMatch = mentions.some(
+      j => isBotJid(j) || j.includes(BOT_JID.split('@')[0])
+    );
+    if (lowered.includes('akira') || mentionMatch) {
+      console.log('[ATIVAÇÃO] Menção direta a Akira detectada.');
+      return true;
+    }
+  }
+
+  // PV → sempre responde
+  if (!isGroup) return true;
   return false;
 }
+
 
 // ===============================================================
 // 🌐 EXPRESS SERVER — Health + QR HTML (com Base64)
