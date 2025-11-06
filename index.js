@@ -22,6 +22,7 @@ let BOT_JID = null;
 let lastProcessedTime = 0;
 let currentQR = null;
 
+// Prefixos conhecidos para JID de servidor que representa o bot (Ex: 37...)
 const NON_STANDARD_JID_PREFIX = '37';
 
 // ===============================================================
@@ -64,6 +65,27 @@ function normalizeJid(jid = '') {
   return null;
 }
 
+/**
+ * Pega a parte numérica limpa de um JID para comparação (e.g., '244952786417' ou '37...').
+ */
+function getJidNumberPart(jid) {
+    if (!jid) return '';
+    jid = jid.toString().trim();
+    
+    // 1. Limpa o JID de sufixos (@s.whatsapp.net e :XX)
+    const clean = jid.replace(/@.*/, '').replace(/:\d+$/, '');
+    
+    // 2. Se for o JID de servidor (37...), retorna ele mesmo.
+    if (clean.startsWith(NON_STANDARD_JID_PREFIX) && clean.length > 10) {
+        return clean;
+    }
+    
+    // 3. Caso contrário, retorna o número de 12 dígitos.
+    const extracted = extractNumber(clean);
+    return extracted.length === 12 ? extracted : ''; 
+}
+
+
 // ===============================================================
 // ATIVAÇÃO CORRIGIDA (AGORA RECONHECE JID 37... e Limpa JID)
 // ===============================================================
@@ -73,23 +95,22 @@ function isBotJid(jid) {
     return false;
   }
 
-  // JID do bot limpo (sem @s.whatsapp.net e sem :XX)
-  const botNumberClean = extractNumber(BOT_JID); 
-  // JID que está a ser verificado (o quoted JID)
-  const checkNumber = extractNumber(jid);
-  
-  logger.info(`[DEBUG:isBotJid] Bot: ${botNumberClean} | Check: ${checkNumber} | Original JID: ${jid}`);
+  // JID do bot limpo (apenas o número de 12 dígitos)
+  const botNumberClean = getJidNumberPart(BOT_JID); 
+  // JID que está a ser verificado (o quoted JID, que pode ser 244... ou 37...)
+  const checkNumberPart = getJidNumberPart(jid);
 
-  // CHECK PRIMÁRIO: O número real extraído coincide (e.g., 244952786417 == 244952786417)
-  if (botNumberClean === checkNumber) {
+  logger.info(`[DEBUG:isBotJid] Bot Part: ${botNumberClean} | Check Part: ${checkNumberPart} | Original JID: ${jid}`);
+
+  // CHECK 1: O número limpo do Bot coincide com o JID a verificar?
+  if (botNumberClean === checkNumberPart) {
     logger.info('[DEBUG:isBotJid] MATCH: Número real coincide.');
     return true;
   }
 
-  // CHECK SECUNDÁRIO (FALLBACK - SOLUÇÃO PARA JID 37...): 
-  // O JID do servidor que o Baileys/WhatsApp usa para replies.
-  if (checkNumber.startsWith(NON_STANDARD_JID_PREFIX) && checkNumber.length > 10) {
-      logger.info(`[DEBUG:isBotJid] MATCH: Fallback JID de servidor (${checkNumber}) coincide.`);
+  // CHECK 2 (FALLBACK): O JID a verificar é o JID de servidor (37...)?
+  if (checkNumberPart.startsWith(NON_STANDARD_JID_PREFIX) && checkNumberPart.length > 10) {
+      logger.info(`[DEBUG:isBotJid] MATCH: Fallback JID de servidor (${checkNumberPart}) coincide.`);
       return true;
   }
 
@@ -97,7 +118,7 @@ function isBotJid(jid) {
   return false;
 }
 
-async function shouldActivate(msg, isGroup, text) {
+async function shouldActivate(msg, isGroup, text, quotedSenderJid, mensagemCitada) {
   const context = msg.message?.extendedTextMessage?.contextInfo || 
                   msg.message?.imageMessage?.contextInfo ||
                   msg.message?.videoMessage?.contextInfo;
@@ -107,10 +128,9 @@ async function shouldActivate(msg, isGroup, text) {
   let activationReason = 'NÃO ATIVADO';
 
   // 1. Ativa se for Reply direto ao bot
-  if (context?.participant) {
-    const quotedJid = normalizeJid(context.participant);
-    if (isBotJid(quotedJid)) {
-      activationReason = `REPLY ao JID: ${quotedJid}`;
+  if (quotedSenderJid) {
+    if (isBotJid(quotedSenderJid)) {
+      activationReason = `REPLY ao JID: ${quotedSenderJid}`;
     }
   }
 
@@ -129,12 +149,18 @@ async function shouldActivate(msg, isGroup, text) {
     }
   }
 
-  // 3. Ativa sempre em chat privado (a menos que já tenha ativado por reply no grupo)
+  // 3. Ativa sempre em chat privado
   if (!isGroup && activationReason === 'NÃO ATIVADO') {
     activationReason = 'CHAT PRIVADO';
   }
 
   const activate = activationReason !== 'NÃO ATIVADO';
+  
+  // LOG DE DEBUG DO REPLY
+  if (quotedSenderJid) {
+    logger.info(`[DEBUG:REPLY] JID citado: ${quotedSenderJid} | Mensagem citada: "${mensagemCitada.substring(0, 30)}..." | Reconhecido como Bot: ${isBotJid(quotedSenderJid)}`);
+  }
+
   logger.info(`[ATIVAR] ${activate ? 'SIM' : 'NÃO'} | Motivo: ${activationReason} | De: ${msg.pushName} (${extractNumber(msg.key.remoteJid)}) | Mensagem: "${text.substring(0, 50)}..."`);
 
   return activate;
@@ -173,10 +199,10 @@ async function connect() {
       logger.info('ESCANEIE O QR PARA CONECTAR');
     }
     if (connection === 'open') {
-      // Normaliza o JID do bot, removendo o :XX
+      // Normaliza o JID do bot, garantindo que seja 244952786417@s.whatsapp.net
       BOT_JID = normalizeJid(sock.user.id);
       logger.info('AKIRA BOT ONLINE!');
-      logger.info(`BOT_JID detectado: ${BOT_JID}`);
+      logger.info(`BOT_JID detectado (Normalizado): ${BOT_JID}`);
       lastProcessedTime = Date.now();
       currentQR = null;
     }
@@ -197,6 +223,7 @@ async function connect() {
     const isGroup = from.endsWith('@g.us');
     if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
+    // A extração correta do JID do remetente
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const numeroExtraido = extractNumber(senderJid);
 
@@ -215,9 +242,13 @@ async function connect() {
 
     // ===== EXTRAÇÃO DA MENSAGEM CITADA (REPLY) =====
     let mensagemCitada = '';
+    let quotedSenderJid = null; // JID de quem enviou a mensagem citada
     
     if (contextInfo?.quotedMessage) {
       const quoted = contextInfo.quotedMessage;
+      // O JID do remetente citado está em contextInfo.participant
+      quotedSenderJid = contextInfo.participant;
+      
       mensagemCitada = 
         quoted.conversation || 
         quoted.extendedTextMessage?.text || 
@@ -229,7 +260,7 @@ async function connect() {
 
     if (!text.trim()) return;
 
-    const ativar = await shouldActivate(msg, isGroup, text);
+    const ativar = await shouldActivate(msg, isGroup, text, quotedSenderJid, mensagemCitada);
     if (!ativar) return;
 
     // ===== SIMULAÇÃO DE LEITURA (VISTO - DOIS TICKS AZUIS) =====
