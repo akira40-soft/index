@@ -12,7 +12,8 @@ import axios from 'axios';
 import express from 'express';
 import * as QRCode from 'qrcode';
 
-const logger = pino({ level: 'info' });
+// Usar pino.destination(1) para output síncrono para o console no Railway
+const logger = pino({ level: 'info' }, pino.destination(1)); 
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira'; 
 const PORT = process.env.PORT || 8080;
 
@@ -21,7 +22,6 @@ let BOT_JID = null;
 let lastProcessedTime = 0;
 let currentQR = null;
 
-// Prefixos conhecidos para JID de servidor que representa o bot (Ex: 37...)
 const NON_STANDARD_JID_PREFIX = '37';
 
 // ===============================================================
@@ -31,14 +31,14 @@ function extractNumber(input = '') {
   if (!input) return 'desconhecido';
   const clean = input.toString();
   
-  // Extração de 12 dígitos (244XXXXXXXXX) se for um JID completo
+  // 1. Extração de 12 dígitos (244XXXXXXXXX) se for um JID completo (2449...@s.whatsapp.net)
   const fullJidMatch = clean.match(/(\d{12})@/);
   if (fullJidMatch) return fullJidMatch[1];
   
-  // Busca o formato angolano 2449xxxxxxxxx
+  // 2. Busca o formato angolano 2449xxxxxxxxx
   const match = clean.match(/2449\d{8}/);
   if (match) return match[0];
-  // Busca o formato 9xxxxxxxxx e adiciona 244
+  // 3. Busca o formato 9xxxxxxxxx e adiciona 244
   const local = clean.match(/^9\d{8}$/);
   if (local) return `244${local[0]}`;
   
@@ -49,44 +49,51 @@ function normalizeJid(jid = '') {
   if (!jid) return null;
   jid = jid.toString().trim();
   
-  // Corrigir JIDs que o Baileys pode normalizar mal (ex: 2449...:XX)
-  jid = jid.replace(/:\d+$/, ''); 
+  // Remove o sufixo de servidor e a tag de sessão (ex: :40)
+  jid = jid.replace(/@.*/, '').replace(/:\d+$/, ''); 
 
   // Se o JID for um número puro (ex: 2449...)
-  if (!jid.includes('@')) {
-    if (jid.length >= 9 && jid.length <= 12) {
-      if (!jid.startsWith('244') && /^9\d{8}$/.test(jid)) {
-          jid = '244' + jid;
-      }
-      return `${jid}@s.whatsapp.net`;
+  if (jid.length >= 9 && jid.length <= 12) {
+    if (!jid.startsWith('244') && /^9\d{8}$/.test(jid)) {
+        jid = '244' + jid;
     }
+    return `${jid}@s.whatsapp.net`;
   }
   
-  // Retorna JID completo se já estiver no formato JID padrão
-  return jid;
+  // Retorna nulo se não for um JID válido ou número
+  return null;
 }
 
 // ===============================================================
-// ATIVAÇÃO CORRIGIDA (AGORA RECONHECE JID 37...)
+// ATIVAÇÃO CORRIGIDA (AGORA RECONHECE JID 37... e Limpa JID)
 // ===============================================================
 function isBotJid(jid) {
-  if (!BOT_JID) return false;
+  if (!BOT_JID) {
+    logger.warn('BOT_JID não está definido ao verificar isBotJid.');
+    return false;
+  }
 
-  // 1. Extrai o número real do bot (e.g., '244952786417')
-  const botNumber = extractNumber(BOT_JID); 
-  // 2. Extrai o número do JID que está sendo checado (o quoted JID)
+  // JID do bot limpo (sem @s.whatsapp.net e sem :XX)
+  const botNumberClean = extractNumber(BOT_JID); 
+  // JID que está a ser verificado (o quoted JID)
   const checkNumber = extractNumber(jid);
+  
+  logger.info(`[DEBUG:isBotJid] Bot: ${botNumberClean} | Check: ${checkNumber} | Original JID: ${jid}`);
 
-  // CHECK PRIMÁRIO: O número real extraído coincide (o caso normal)
-  if (botNumber === checkNumber) return true;
+  // CHECK PRIMÁRIO: O número real extraído coincide (e.g., 244952786417 == 244952786417)
+  if (botNumberClean === checkNumber) {
+    logger.info('[DEBUG:isBotJid] MATCH: Número real coincide.');
+    return true;
+  }
 
   // CHECK SECUNDÁRIO (FALLBACK - SOLUÇÃO PARA JID 37...): 
-  // Verifica se o JID é o ID de servidor não-padrão (37...) usado pelo WhatsApp/Baileys
+  // O JID do servidor que o Baileys/WhatsApp usa para replies.
   if (checkNumber.startsWith(NON_STANDARD_JID_PREFIX) && checkNumber.length > 10) {
-      console.log(`[BOT JID FALLBACK] JID citado (${checkNumber}) reconhecido como o Bot (Akira).`);
+      logger.info(`[DEBUG:isBotJid] MATCH: Fallback JID de servidor (${checkNumber}) coincide.`);
       return true;
   }
 
+  logger.info('[DEBUG:isBotJid] FAIL: Nenhuma correspondência.');
   return false;
 }
 
@@ -96,23 +103,41 @@ async function shouldActivate(msg, isGroup, text) {
                   msg.message?.videoMessage?.contextInfo;
 
   const lowered = text.toLowerCase();
+  
+  let activationReason = 'NÃO ATIVADO';
 
-  // Ativa se for Reply direto ao bot
+  // 1. Ativa se for Reply direto ao bot
   if (context?.participant) {
-    const quoted = normalizeJid(context.participant);
-    if (isBotJid(quoted)) return true;
+    const quotedJid = normalizeJid(context.participant);
+    if (isBotJid(quotedJid)) {
+      activationReason = `REPLY ao JID: ${quotedJid}`;
+    }
   }
 
-  if (isGroup) {
+  // 2. Lógica para Grupos
+  if (isGroup && activationReason === 'NÃO ATIVADO') {
     const mentions = context?.mentionedJid || [];
     const mentionMatch = mentions.some(j => isBotJid(j));
     
-    // Ativa se mencionar o bot ou a mensagem contiver "akira"
-    if (lowered.includes('akira') || mentionMatch) return true;
+    // Ativa se mencionar o bot
+    if (mentionMatch) {
+      activationReason = 'MENÇÃO direta';
+    } 
+    // Ativa se a mensagem contiver "akira"
+    else if (lowered.includes('akira')) {
+      activationReason = 'PALAVRA-CHAVE "akira"';
+    }
   }
 
-  // Ativa sempre em chat privado
-  return !isGroup;
+  // 3. Ativa sempre em chat privado (a menos que já tenha ativado por reply no grupo)
+  if (!isGroup && activationReason === 'NÃO ATIVADO') {
+    activationReason = 'CHAT PRIVADO';
+  }
+
+  const activate = activationReason !== 'NÃO ATIVADO';
+  logger.info(`[ATIVAR] ${activate ? 'SIM' : 'NÃO'} | Motivo: ${activationReason} | De: ${msg.pushName} (${extractNumber(msg.key.remoteJid)}) | Mensagem: "${text.substring(0, 50)}..."`);
+
+  return activate;
 }
 
 
@@ -124,7 +149,7 @@ async function connect() {
   const { version } = await fetchLatestBaileysVersion();
 
   if (sock && sock.user) {
-    console.log('Fechando sessão antiga...');
+    logger.info('Fechando sessão antiga...');
     await sock.logout();
   }
 
@@ -145,25 +170,25 @@ async function connect() {
     if (qr) {
       currentQR = qr;
       console.clear();
-      console.log('ESCANEIE O QR PARA CONECTAR');
+      logger.info('ESCANEIE O QR PARA CONECTAR');
     }
     if (connection === 'open') {
-      // Garante a normalização do JID do bot (removendo o :XX)
+      // Normaliza o JID do bot, removendo o :XX
       BOT_JID = normalizeJid(sock.user.id);
-      console.log('AKIRA BOT ONLINE!');
-      console.log('BOT_JID detectado:', BOT_JID);
+      logger.info('AKIRA BOT ONLINE!');
+      logger.info(`BOT_JID detectado: ${BOT_JID}`);
       lastProcessedTime = Date.now();
       currentQR = null;
     }
     if (connection === 'close') {
       const reason = lastDisconnect?.error?.output?.statusCode;
-      console.log(`Conexão perdida (reason: ${reason}). Reconectando em 5s...`);
+      logger.error(`Conexão perdida (reason: ${reason}). Reconectando em 5s...`);
       setTimeout(connect, 5000);
     }
   });
 
   // ===============================================================
-  // EVENTO DE MENSAGEM (Com extração de mensagem citada)
+  // EVENTO DE MENSAGEM
   // ===============================================================
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
@@ -210,24 +235,24 @@ async function connect() {
     // ===== SIMULAÇÃO DE LEITURA (VISTO - DOIS TICKS AZUIS) =====
     try {
         await sock.readMessages([msg.key]);
-        // O sendReceipt é opcional, mas garante o 'read' state em alguns casos
         await sock.sendReceipt(from, msg.key.participant, ['read']);
     } catch (e) {
-        // Ignorar falhas na leitura, não é crítico
+        logger.warn('Falha ao enviar visto/read receipt.');
     }
     // ==========================================================
-
 
     await sock.sendPresenceUpdate('composing', from);
 
     try {
       // ENVIO JSON PERFEITO!
-      const res = await axios.post(AKIRA_API_URL, {
+      const apiPayload = {
         usuario: nome,
         mensagem: text,
         numero: numeroExtraido,
         mensagem_citada: mensagemCitada 
-      }, {
+      };
+
+      const res = await axios.post(AKIRA_API_URL, apiPayload, {
         headers: {
           'Content-Type': 'application/json'
         },
@@ -235,14 +260,19 @@ async function connect() {
       });
 
       const resposta = res.data?.resposta || '...';
-      console.log(`[RESPOSTA] ${resposta}`);
+      logger.info(`[RESPOSTA API] ${resposta}`);
 
       await delay(Math.min(resposta.length * 50, 4000));
       await sock.sendPresenceUpdate('paused', from);
+      
       await sock.sendMessage(from, { text: resposta }, { quoted: msg });
+      
+      // LOG DE MENSAGEM ENVIADA
+      logger.info(`[AKIRA ENVIADA] Resposta enviada com sucesso para ${nome} em ${from}.`);
+
 
     } catch (err) {
-      console.error('Erro na API:', err.message);
+      logger.error(`Erro na API: ${err.message}`);
       await sock.sendMessage(from, { text: 'Erro interno. Tenta depois.' }, { quoted: msg });
     }
   });
@@ -288,8 +318,8 @@ app.get("/qr", async (_, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor na porta ${PORT}`);
-  console.log(`Acesse: http://localhost:${PORT}/qr`);
+  logger.info(`Servidor na porta ${PORT}`);
+  logger.info(`Acesse: http://localhost:${PORT}/qr`);
 });
 
 connect();
