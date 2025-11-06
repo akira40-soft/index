@@ -5,8 +5,8 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   Browsers,
-  delay,
-  WAMessage,
+  delay
+  // WAMessage removido, pois causa erro de exportação
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import axios from 'axios';
@@ -14,7 +14,6 @@ import express from 'express';
 import * as QRCode from 'qrcode';
 
 const logger = pino({ level: 'info' });
-// ATENÇÃO: Verifique se este URL do backend está correto
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira'; 
 const PORT = process.env.PORT || 8080;
 
@@ -105,7 +104,6 @@ async function connect() {
       console.log('ESCANEIE O QR PARA CONECTAR');
     }
     if (connection === 'open') {
-      // **CORREÇÃO JID do Bot:** Garante a normalização correta do JID do bot
       BOT_JID = normalizeJid(sock.user.id);
       console.log('AKIRA BOT ONLINE!');
       console.log('BOT_JID detectado:', BOT_JID);
@@ -129,7 +127,6 @@ async function connect() {
     const isGroup = from.endsWith('@g.us');
     if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
 
-    // **CORREÇÃO JID DO REMETENTE:** Prioriza 'participant' em grupo
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const numeroExtraido = extractNumber(senderJid);
 
@@ -146,12 +143,11 @@ async function connect() {
       msg.message?.videoMessage?.caption ||
       '';
 
-    // ===== EXTRAÇÃO DA MENSAGEM CITADA (REPLY) **NOVA LÓGICA** =====
+    // ===== EXTRAÇÃO DA MENSAGEM CITADA (REPLY) =====
     let mensagemCitada = '';
     
     if (contextInfo?.quotedMessage) {
       const quoted = contextInfo.quotedMessage;
-      // Puxa o conteúdo da mensagem citada (conversation, text, ou caption)
       mensagemCitada = 
         quoted.conversation || 
         quoted.extendedTextMessage?.text || 
@@ -182,7 +178,7 @@ async function connect() {
         usuario: nome,
         mensagem: text,
         numero: numeroExtraido,
-        mensagem_citada: mensagemCitada // <-- NOVO CAMPO ADICIONADO AQUI
+        mensagem_citada: mensagemCitada 
       }, {
         headers: {
           'Content-Type': 'application/json'
