@@ -6,7 +6,6 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   Browsers,
   delay
-  // WAMessage removido, pois causa erro de exportação
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import axios from 'axios';
@@ -63,12 +62,54 @@ function normalizeJid(jid = '') {
   return jid;
 }
 
+// ===============================================================
+// ATIVAÇÃO CORRIGIDA (reply / menção / PV) - LÓGICA ROBUSTA
+// ===============================================================
 function isBotJid(jid) {
   if (!BOT_JID) return false;
-  // Compara apenas a parte do número (2449...)
-  const botNumber = extractNumber(BOT_JID);
+
+  // 1. Extrai o número real do bot (e.g., '244952786417')
+  const botNumber = extractNumber(BOT_JID); 
+  // 2. Extrai o número do JID que está sendo checado (o quoted JID)
   const checkNumber = extractNumber(jid);
-  return botNumber === checkNumber;
+
+  // CHECK PRIMÁRIO: O número real extraído coincide (o caso normal)
+  if (botNumber === checkNumber) return true;
+
+  // CHECK SECUNDÁRIO (FALLBACK - SOLUÇÃO PARA JID 37...): 
+  // Verifica se o JID é o ID de servidor não-padrão (37...) usado pelo WhatsApp/Baileys
+  // para identificar as mensagens do bot quando são citadas.
+  if (checkNumber.startsWith('37') && checkNumber.length > 10) {
+      console.log(`[BOT JID FALLBACK] O JID citado (${checkNumber}) foi reconhecido como o Bot (Akira).`);
+      return true;
+  }
+
+  return false;
+}
+
+async function shouldActivate(msg, isGroup, text) {
+  const context = msg.message?.extendedTextMessage?.contextInfo || 
+                  msg.message?.imageMessage?.contextInfo ||
+                  msg.message?.videoMessage?.contextInfo;
+
+  const lowered = text.toLowerCase();
+
+  // Ativa se for Reply direto ao bot
+  if (context?.participant) {
+    const quoted = normalizeJid(context.participant);
+    if (isBotJid(quoted)) return true; // <-- Usa a lógica corrigida
+  }
+
+  if (isGroup) {
+    const mentions = context?.mentionedJid || [];
+    const mentionMatch = mentions.some(j => isBotJid(j));
+    
+    // Ativa se mencionar o bot ou a mensagem contiver "akira"
+    if (lowered.includes('akira') || mentionMatch) return true;
+  }
+
+  // Ativa sempre em chat privado
+  return !isGroup;
 }
 
 
@@ -104,6 +145,7 @@ async function connect() {
       console.log('ESCANEIE O QR PARA CONECTAR');
     }
     if (connection === 'open') {
+      // BOT_JID é normalizado aqui (removendo o :38)
       BOT_JID = normalizeJid(sock.user.id);
       console.log('AKIRA BOT ONLINE!');
       console.log('BOT_JID detectado:', BOT_JID);
@@ -204,34 +246,6 @@ async function connect() {
       await sock.sendRetryRequest(msgKey.key);
     } catch (e) {}
   });
-}
-
-// ===============================================================
-// ATIVAÇÃO (reply / menção / PV) - LÓGICA ROBUSTA
-// ===============================================================
-async function shouldActivate(msg, isGroup, text) {
-  const context = msg.message?.extendedTextMessage?.contextInfo || 
-                  msg.message?.imageMessage?.contextInfo ||
-                  msg.message?.videoMessage?.contextInfo;
-
-  const lowered = text.toLowerCase();
-
-  // Ativa se for Reply direto ao bot
-  if (context?.participant) {
-    const quoted = normalizeJid(context.participant);
-    if (isBotJid(quoted)) return true;
-  }
-
-  if (isGroup) {
-    const mentions = context?.mentionedJid || [];
-    const mentionMatch = mentions.some(j => isBotJid(j));
-    
-    // Ativa se mencionar o bot ou a mensagem contiver "akira"
-    if (lowered.includes('akira') || mentionMatch) return true;
-  }
-
-  // Ativa sempre em chat privado
-  return !isGroup;
 }
 
 // ===============================================================
