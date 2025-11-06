@@ -21,12 +21,20 @@ let BOT_JID = null;
 let lastProcessedTime = 0;
 let currentQR = null;
 
+// Prefixos conhecidos para JID de servidor que representa o bot (Ex: 37...)
+const NON_STANDARD_JID_PREFIX = '37';
+
 // ===============================================================
 // FUNÇÕES UTILITÁRIAS
 // ===============================================================
 function extractNumber(input = '') {
   if (!input) return 'desconhecido';
   const clean = input.toString();
+  
+  // Extração de 12 dígitos (244XXXXXXXXX) se for um JID completo
+  const fullJidMatch = clean.match(/(\d{12})@/);
+  if (fullJidMatch) return fullJidMatch[1];
+  
   // Busca o formato angolano 2449xxxxxxxxx
   const match = clean.match(/2449\d{8}/);
   if (match) return match[0];
@@ -34,10 +42,6 @@ function extractNumber(input = '') {
   const local = clean.match(/^9\d{8}$/);
   if (local) return `244${local[0]}`;
   
-  // Extração de 12 dígitos (244XXXXXXXXX) se for um JID completo
-  const fullJidMatch = clean.match(/(\d{12})@/);
-  if (fullJidMatch) return fullJidMatch[1];
-
   return clean.replace(/\D/g, '').slice(-12);
 }
 
@@ -63,7 +67,7 @@ function normalizeJid(jid = '') {
 }
 
 // ===============================================================
-// ATIVAÇÃO CORRIGIDA (reply / menção / PV) - LÓGICA ROBUSTA
+// ATIVAÇÃO CORRIGIDA (AGORA RECONHECE JID 37...)
 // ===============================================================
 function isBotJid(jid) {
   if (!BOT_JID) return false;
@@ -78,9 +82,8 @@ function isBotJid(jid) {
 
   // CHECK SECUNDÁRIO (FALLBACK - SOLUÇÃO PARA JID 37...): 
   // Verifica se o JID é o ID de servidor não-padrão (37...) usado pelo WhatsApp/Baileys
-  // para identificar as mensagens do bot quando são citadas.
-  if (checkNumber.startsWith('37') && checkNumber.length > 10) {
-      console.log(`[BOT JID FALLBACK] O JID citado (${checkNumber}) foi reconhecido como o Bot (Akira).`);
+  if (checkNumber.startsWith(NON_STANDARD_JID_PREFIX) && checkNumber.length > 10) {
+      console.log(`[BOT JID FALLBACK] JID citado (${checkNumber}) reconhecido como o Bot (Akira).`);
       return true;
   }
 
@@ -97,7 +100,7 @@ async function shouldActivate(msg, isGroup, text) {
   // Ativa se for Reply direto ao bot
   if (context?.participant) {
     const quoted = normalizeJid(context.participant);
-    if (isBotJid(quoted)) return true; // <-- Usa a lógica corrigida
+    if (isBotJid(quoted)) return true;
   }
 
   if (isGroup) {
@@ -145,7 +148,7 @@ async function connect() {
       console.log('ESCANEIE O QR PARA CONECTAR');
     }
     if (connection === 'open') {
-      // BOT_JID é normalizado aqui (removendo o :38)
+      // Garante a normalização do JID do bot (removendo o :XX)
       BOT_JID = normalizeJid(sock.user.id);
       console.log('AKIRA BOT ONLINE!');
       console.log('BOT_JID detectado:', BOT_JID);
@@ -204,13 +207,16 @@ async function connect() {
     const ativar = await shouldActivate(msg, isGroup, text);
     if (!ativar) return;
 
-    // ===== SIMULAÇÃO DE LEITURA =====
-    if (!isGroup) {
-      try {
+    // ===== SIMULAÇÃO DE LEITURA (VISTO - DOIS TICKS AZUIS) =====
+    try {
         await sock.readMessages([msg.key]);
+        // O sendReceipt é opcional, mas garante o 'read' state em alguns casos
         await sock.sendReceipt(from, msg.key.participant, ['read']);
-      } catch (e) {}
+    } catch (e) {
+        // Ignorar falhas na leitura, não é crítico
     }
+    // ==========================================================
+
 
     await sock.sendPresenceUpdate('composing', from);
 
