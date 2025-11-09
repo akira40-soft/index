@@ -277,7 +277,7 @@ async function connect() {
 
             const res = await axios.post(AKIRA_API_URL, apiPayload, {
                 headers: { 'Content-Type': 'application/json' },
-                timeout: 30000
+                timeout: 300000
             });
 
             const resposta = res.data?.resposta || '...';
