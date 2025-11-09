@@ -29,77 +29,43 @@ const NON_STANDARD_JID_PREFIX = '37';
 // ===============================================================
 // FUNÇÕES UTILITÁRIAS
 // ===============================================================
-
-/**
- * Funções de utilidade mantidas, mas a lógica de extração de JID para o "numero" 
- * será feita de forma mais direta no evento messages.upsert para garantir o JID completo.
- */
 function extractNumber(input = '') {
-    // Lógica original mantida para extrair APENAS o número limpo (ex: 2449xxxxxxx)
     if (!input) return 'desconhecido';
     const clean = input.toString();
-
-    // 1. Extração de 12 dígitos (244XXXXXXXXX) se for um JID completo (2449...@s.whatsapp.net)
     const fullJidMatch = clean.match(/(\d{12})@/);
     if (fullJidMatch) return fullJidMatch[1];
-
-    // 2. Busca o formato angolano 2449xxxxxxxxx
     const match = clean.match(/2449\d{8}/);
     if (match) return match[0];
-    // 3. Busca o formato 9xxxxxxxxx e adiciona 244
     const local = clean.match(/^9\d{8}$/);
     if (local) return `244${local[0]}`;
-
     return clean.replace(/\D/g, '').slice(-12);
 }
 
 function normalizeJid(jid = '') {
-    // Lógica original mantida.
     if (!jid) return null;
     jid = jid.toString().trim();
-
-    // Remove o sufixo de servidor e a tag de sessão (ex: :40)
     jid = jid.replace(/@.*/, '').replace(/:\d+$/, '');
-
-    // Se o JID for um número puro (ex: 2449...)
     if (jid.length >= 9 && jid.length <= 12) {
         if (!jid.startsWith('244') && /^9\d{8}$/.test(jid)) {
             jid = '244' + jid;
         }
         return `${jid}@s.whatsapp.net`;
     }
-
-    // Retorna nulo se não for um JID válido ou número
     return null;
 }
 
-/**
- * Pega a parte numérica limpa de um JID para comparação (e.g., '244952786417' ou '37...').
- */
 function getJidNumberPart(jid) {
-    // Lógica original mantida.
     if (!jid) return '';
-    jid = jid.toString().trim();
-
-    // 1. Limpa o JID de sufixos (@s.whatsapp.net e :XX)
-    const clean = jid.replace(/@.*/, '').replace(/:\d+$/, '');
-
-    // 2. Se for o JID de servidor (37...), retorna ele mesmo.
+    const clean = jid.toString().trim().replace(/@.*/, '').replace(/:\d+$/, '');
     if (clean.startsWith(NON_STANDARD_JID_PREFIX) && clean.length > 10) {
         return clean;
     }
-
-    // 3. Caso contrário, retorna o número de 12 dígitos.
     const extracted = extractNumber(clean);
     return extracted.length === 12 ? extracted : '';
 }
 
-/**
- * Função utilitária para extrair texto de diferentes tipos de mensagens (texto ou legenda).
- */
 function getMessageText(message) {
     const messageType = getContentType(message);
-
     switch (messageType) {
         case 'conversation':
             return message.conversation;
@@ -108,8 +74,6 @@ function getMessageText(message) {
         case 'imageMessage':
         case 'videoMessage':
             return message[messageType].caption || '';
-        case 'stickerMessage':
-            return 'Sticker (figurinha)';
         case 'templateButtonReplyMessage':
             return message.templateButtonReplyMessage.selectedDisplayText;
         case 'listResponseMessage':
@@ -121,88 +85,64 @@ function getMessageText(message) {
     }
 }
 
-// ===============================================================
-// ATIVAÇÃO CORRIGIDA (AGORA RECONHECE JID 37... e Limpa JID)
-// ===============================================================
 function isBotJid(jid) {
-    // Lógica original mantida.
     if (!BOT_JID) {
         logger.warn('BOT_JID não está definido ao verificar isBotJid.');
         return false;
     }
-
-    // JID do bot limpo (apenas o número de 12 dígitos)
     const botNumberClean = getJidNumberPart(BOT_JID);
-    // JID que está a ser verificado (o quoted JID, que pode ser 244... ou 37...)
     const checkNumberPart = getJidNumberPart(jid);
-
     logger.info(`[DEBUG:isBotJid] Bot Part: ${botNumberClean} | Check Part: ${checkNumberPart} | Original JID: ${jid}`);
-
-    // CHECK 1: O número limpo do Bot coincide com o JID a verificar?
     if (botNumberClean === checkNumberPart) {
         logger.info('[DEBUG:isBotJid] MATCH: Número real coincide.');
         return true;
     }
-
-    // CHECK 2 (FALLBACK): O JID a verificar é o JID de servidor (37...)?
     if (checkNumberPart.startsWith(NON_STANDARD_JID_PREFIX) && checkNumberPart.length > 10) {
         logger.info(`[DEBUG:isBotJid] MATCH: Fallback JID de servidor (${checkNumberPart}) coincide.`);
         return true;
     }
-
     logger.info('[DEBUG:isBotJid] FAIL: Nenhuma correspondência.');
     return false;
 }
 
 async function shouldActivate(msg, isGroup, text, quotedSenderJid, mensagemCitada) {
-    // Lógica original mantida.
     const context = msg.message?.extendedTextMessage?.contextInfo ||
         msg.message?.imageMessage?.contextInfo ||
-        msg.message?.videoMessage?.contextInfo;
-
+        msg.message?.videoMessage?.contextInfo ||
+        msg.message?.stickerMessage?.contextInfo ||
+        msg.message?.listResponseMessage?.contextInfo;
     const lowered = text.toLowerCase();
-
     let activationReason = 'NÃO ATIVADO';
 
-    // 1. Ativa se for Reply direto ao bot
     if (quotedSenderJid) {
         if (isBotJid(quotedSenderJid)) {
             activationReason = `REPLY ao JID: ${quotedSenderJid}`;
         }
     }
 
-    // 2. Lógica para Grupos
     if (isGroup && activationReason === 'NÃO ATIVADO') {
         const mentions = context?.mentionedJid || [];
         const mentionMatch = mentions.some(j => isBotJid(j));
-
-        // Ativa se mencionar o bot
         if (mentionMatch) {
             activationReason = 'MENÇÃO direta';
         }
-        // Ativa se a mensagem contiver "akira"
         else if (lowered.includes('akira')) {
             activationReason = 'PALAVRA-CHAVE "akira"';
         }
     }
 
-    // 3. Ativa sempre em chat privado
     if (!isGroup && activationReason === 'NÃO ATIVADO') {
         activationReason = 'CHAT PRIVADO';
     }
 
     const activate = activationReason !== 'NÃO ATIVADO';
 
-    // LOG DE DEBUG DO REPLY
     if (quotedSenderJid) {
-        logger.info(`[DEBUG:REPLY] JID citado: ${quotedSenderJid} | Mensagem citada: "${mensagemCitada.substring(0, 30)}..." | Reconhecido como Bot: ${isBotJid(quotedSenderJid)}`);
+        logger.info(`[DEBUG:REPLY] JID citado: ${quotedSenderJid} | Mensagem citada: "${mensagemCitada.substring(0,30)}..." | Reconhecido como Bot: ${isBotJid(quotedSenderJid)}`);
     }
-
-    logger.info(`[ATIVAR] ${activate ? 'SIM' : 'NÃO'} | Motivo: ${activationReason} | De: ${msg.pushName} (${extractNumber(msg.key.remoteJid)}) | Mensagem: "${text.substring(0, 50)}..."`);
-
+    logger.info(`[ATIVAR] ${activate ? 'SIM' : 'NÃO'} | Motivo: ${activationReason} | De: ${msg.pushName} (${extractNumber(msg.key.remoteJid)}) | Mensagem: "${text.substring(0,50)}..."`);
     return activate;
 }
-
 
 // ===============================================================
 // CONEXÃO
@@ -236,7 +176,6 @@ async function connect() {
             logger.info('ESCANEIE O QR PARA CONECTAR');
         }
         if (connection === 'open') {
-            // Normaliza o JID do bot, garantindo que seja 244952786417@s.whatsapp.net
             BOT_JID = normalizeJid(sock.user.id);
             logger.info('AKIRA BOT ONLINE!');
             logger.info(`BOT_JID detectado (Normalizado): ${BOT_JID}`);
@@ -250,111 +189,92 @@ async function connect() {
         }
     });
 
-    // ===============================================================
-    // EVENTO DE MENSAGEM
-    // ===============================================================
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
         const from = msg.key.remoteJid;
-        const isGroup = from.endsWith('@g.us');
-        if (msg.messageTimestamp && msg.messageTimestamp * 1000 < lastProcessedTime - 10000) return;
+        const isGroup = from && from.endsWith('@g.us');
+        if (msg.messageTimestamp && (msg.messageTimestamp * 1000) < lastProcessedTime - 10000) return;
 
-        // **RETIFICAÇÃO CRUCIAL (1): Extração do JID COMPLETO para o 'numero'**
-        // O JID do remetente (chave de contexto na api.py) é:
-        // - msg.key.participant para grupos (quem realmente falou)
-        // - msg.key.remoteJid para chats privados
+        // Extração de JID completo de quem enviou
         const senderJid = msg.key.participant || msg.key.remoteJid;
-        // JID COMPLETO (ex: 2449xxxxxxx@whatsapp.net)
-        const numeroContexto = senderJid; 
-        // Número limpo para uso em log e nome
-        const numeroExtraido = extractNumber(senderJid); 
-
+        const numeroContexto = senderJid;
+        const numeroExtraido = extractNumber(senderJid);
         const nome = msg.pushName || numeroExtraido;
+
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo ||
             msg.message?.imageMessage?.contextInfo ||
             msg.message?.videoMessage?.contextInfo ||
             msg.message?.stickerMessage?.contextInfo ||
-            msg.message?.listResponseMessage?.contextInfo; // Adicionar outros tipos que podem ter contextInfo
+            msg.message?.listResponseMessage?.contextInfo;
 
-        // ===== EXTRAÇÃO DO TEXTO DA MENSAGEM ATUAL =====
         const text = getMessageText(msg.message);
 
-        // ===== EXTRAÇÃO DA MENSAGEM CITADA (REPLY) =====
         let mensagemCitada = '';
-        let quotedSenderJid = null; // JID de quem enviou a mensagem citada
+        let quotedSenderJid = null;
 
         if (contextInfo?.quotedMessage) {
             const quoted = contextInfo.quotedMessage;
-            // O JID do remetente citado está em contextInfo.participant
             quotedSenderJid = contextInfo.participant;
-
-            // **RETIFICAÇÃO CRUCIAL (2): Extração perfeita da mensagem citada**
             mensagemCitada = getMessageText(quoted) || '';
-            
-            // Se a mensagem atual estiver vazia (apenas citou), garantimos que 'text' tenha um valor
-            if (!text.trim() && mensagemCitada.trim()) {
-                // A API precisa de algo em 'mensagem' para processar o comando
-                // A mensagem citada será o foco da resposta, mas precisamos de 'text'
-                // Se o usuário apenas citou e não escreveu, definimos 'text' para a própria mensagem citada
-                // ou um marcador, mas para simplificar, a API vai processar a citada.
-            }
         }
-        // ==============================================================
 
-        // Se não houver texto atual E não houver mensagem citada, ignora.
         if (!text.trim() && !mensagemCitada.trim()) return;
-        
-        // Se houver mensagem citada, mas não houver texto atual, passamos um 'vazio' para a mensagem atual
-        const mensagemAtual = text.trim() || ' '; 
-        
+        const mensagemAtual = text.trim() || ' ';
+
+        // Log detalhado
+        logger.info('\n====================== MENSAGEM RECEBIDA ======================');
+        logger.info(JSON.stringify({
+            remoteJid: msg.key.remoteJid,
+            fromMe: msg.key.fromMe,
+            pushName: msg.pushName,
+            participant: msg.key.participant,
+            participantAlt: msg.key.participantAlt,
+            participant_pn: msg.participant_pn,
+            contextInfo_participant: contextInfo?.participant,
+            contextInfo_participant_pn: contextInfo?.participant_pn,
+            messageType: Object.keys(msg.message)[0],
+            textContent: mensagemAtual,
+            quotedText: mensagemCitada
+        }, null, 2));
+        logger.info('===============================================================\n');
+        logger.info(`📞 Número extraído final: ${numeroExtraido}`);
 
         const ativar = await shouldActivate(msg, isGroup, mensagemAtual, quotedSenderJid, mensagemCitada);
         if (!ativar) return;
 
-        // ===== SIMULAÇÃO DE LEITURA (VISTO - DOIS TICKS AZUIS) =====
-        try {
-            await sock.readMessages([msg.key]);
-            // O sendReceipt é mais robusto para marcar como lida em grupos
-            await sock.sendReceipt(from, msg.key.participant, ['read']);
+        try { // Simulação de visto no PV
+            if (!isGroup) {
+                await sock.readMessages([msg.key]);
+                await sock.sendReceipt(from, msg.key.participant, ['read']);
+                logger.info('✅ Simulação de visualização (dois tiques azuis)');
+            }
         } catch (e) {
             logger.warn('Falha ao enviar visto/read receipt.');
         }
-        // ==========================================================
 
         await sock.sendPresenceUpdate('composing', from);
 
         try {
-            // ENVIO JSON PERFEITO!
             const apiPayload = {
                 usuario: nome,
                 mensagem: mensagemAtual,
-                // **RETIFICAÇÃO CRUCIAL (1): Usar o JID COMPLETO como 'numero'**
-                numero: numeroContexto, 
-                // **RETIFICAÇÃO CRUCIAL (2): Enviar a mensagem citada para contextualizar reply**
-                mensagem_citada: mensagemCitada 
+                numero: numeroContexto,
+                mensagem_citada: mensagemCitada
             };
-            
             logger.info(`[PAYLOAD] Usuario: ${apiPayload.usuario} | Numero: ${apiPayload.numero} | Reply: ${!!apiPayload.mensagem_citada}`);
 
             const res = await axios.post(AKIRA_API_URL, apiPayload, {
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 timeout: 30000
             });
-
             const resposta = res.data?.resposta || '...';
             logger.info(`[RESPOSTA API] ${resposta}`);
 
             await delay(Math.min(resposta.length * 50, 4000));
             await sock.sendPresenceUpdate('paused', from);
-
             await sock.sendMessage(from, { text: resposta }, { quoted: msg });
-
-            // LOG DE MENSAGEM ENVIADA
             logger.info(`[AKIRA ENVIADA] Resposta enviada com sucesso para ${nome} em ${from}.`);
-
 
         } catch (err) {
             logger.error(`Erro na API: ${err.message}`);
@@ -391,9 +311,9 @@ app.get("/qr", async (_, res) => {
             res.send(`
                 <html><head><meta http-equiv="refresh" content="10"></head>
                 <body style="text-align:center;">
-                    <h2>Escaneie o QR</h2>
-                    <img src="${qrBase64}" />
-                    <p>Atualiza em 10s...</p>
+                    <h2>Escaneie o QR Code</h2>
+                    <img src="${qrBase64}" alt="QR Code"/>
+                    <p>Atualiza automaticamente em 10 segundos.</p>
                 </body></html>
             `);
         } catch (err) {
