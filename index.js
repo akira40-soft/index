@@ -19,7 +19,7 @@ import * as QRCode from 'qrcode';
 // ===============================================================
 
 const logger = pino({ level: 'info' }, pino.destination(1));
-const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
+const AKIRA_API_URL = 'https://akra35567-akira.hf.space/akira';
 const PORT = process.env.PORT || 8080;
 
 let sock;
