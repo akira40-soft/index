@@ -55,6 +55,8 @@ function debugPermanente(m, numero) {
     console.log(`║ Tipo             : ${m.key.remoteJid.endsWith('@g.us') ? 'GRUPO' : 'PRIVADO'}`);
     console.log(`║ remoteJid        : ${m.key.remoteJid}`);
     console.log(`║ participant      : ${m.key.participant || 'N/A'}`);
+    console.log("→ participantAlt: " + (m.key.participantAlt || 'N/A'));
+    console.log("→ participant_Pn: " + (m.key.participant_Pn || 'N/A'));
     console.log(`║ pushName         : ${m.pushName || 'N/A'}`);
     console.log(`║ NÚMERO ENVIADO → ${numero}`);
     console.log("╚═══════════════════════════════════════════════════════════════════════════════\n");
