@@ -27,7 +27,7 @@ let BOT_JID = null;
 let lastProcessedTime = 0;
 let currentQR = null;
 
-// Prefixos conhecidos para JID de servidor que representa o bot (Ex: 37...)
+// Prefixos conhecidos
 const NON_STANDARD_JID_PREFIX = '37';
 
 // ===============================================================
@@ -38,15 +38,12 @@ function extractNumber(input = '') {
     if (!input) return 'desconhecido';
     const clean = input.toString();
 
-    // 1. Extração de 12 dígitos (244XXXXXXXXX)
     const fullJidMatch = clean.match(/(\d{12})@/);
     if (fullJidMatch) return fullJidMatch[1];
 
-    // 2. Busca o formato angolano 2449xxxxxxxxx
     const match = clean.match(/2449\d{8}/);
     if (match) return match[0];
 
-    // 3. Busca o formato 9xxxxxxxxx e adiciona 244
     const local = clean.match(/^9\d{8}$/);
     if (local) return `244${local[0]}`;
 
@@ -98,29 +95,20 @@ function getMessageText(message) {
     }
 }
 
-function isBotJid(jid) {
-    if (!BOT_JID) {
-        logger.warn('BOT_JID não está definido ao verificar isBotJid.');
-        return false;
-    }
+// ===============================================================
+// FUNÇÃO NOVA (fixada)
+// APENAS considera reply válido se o JID citado == BOT_JID
+// ===============================================================
 
-    const botNumberClean = getJidNumberPart(BOT_JID);
-    const checkNumberPart = getJidNumberPart(jid);
+function isReplyDirectoAoBot(jid) {
+    if (!jid || !BOT_JID) return false;
 
-    logger.info(`[DEBUG:isBotJid] Bot Part: ${botNumberClean} | Check Part: ${checkNumberPart} | Original JID: ${jid}`);
+    const botNorm = BOT_JID;
+    const quotedNorm = normalizeJid(jid);
 
-    if (botNumberClean === checkNumberPart) {
-        logger.info('[DEBUG:isBotJid] MATCH: Número real coincide.');
-        return true;
-    }
+    if (!quotedNorm) return false;
 
-    if (checkNumberPart.startsWith(NON_STANDARD_JID_PREFIX) && checkNumberPart.length > 10) {
-        logger.info(`[DEBUG:isBotJid] MATCH: Fallback JID de servidor (${checkNumberPart}) coincide.`);
-        return true;
-    }
-
-    logger.info('[DEBUG:isBotJid] FAIL: Nenhuma correspondência.');
-    return false;
+    return quotedNorm === botNorm;
 }
 
 async function shouldActivate(msg, isGroup, text, quotedSenderJid, mensagemCitada) {
@@ -131,17 +119,16 @@ async function shouldActivate(msg, isGroup, text, quotedSenderJid, mensagemCitad
     const lowered = text.toLowerCase();
     let activationReason = 'NÃO ATIVADO';
 
-    // 1. Ativa se for Reply direto ao bot
+    // ✔ FIXADO: resposta só com reply se for EXACTAMENTE ao bot
     if (quotedSenderJid) {
-        if (isBotJid(quotedSenderJid)) {
-            activationReason = `REPLY ao JID: ${quotedSenderJid}`;
+        if (isReplyDirectoAoBot(quotedSenderJid)) {
+            activationReason = `REPLY ao BOT`;
         }
     }
 
-    // 2. Lógica para Grupos
     if (isGroup && activationReason === 'NÃO ATIVADO') {
         const mentions = context?.mentionedJid || [];
-        const mentionMatch = mentions.some(j => isBotJid(j));
+        const mentionMatch = mentions.some(j => isReplyDirectoAoBot(j));
 
         if (mentionMatch) {
             activationReason = 'MENÇÃO direta';
@@ -150,19 +137,12 @@ async function shouldActivate(msg, isGroup, text, quotedSenderJid, mensagemCitad
         }
     }
 
-    // 3. Ativa sempre em chat privado
     if (!isGroup && activationReason === 'NÃO ATIVADO') {
         activationReason = 'CHAT PRIVADO';
     }
 
-    const activate = activationReason !== 'NÃO ATIVADO';
-
-    if (quotedSenderJid) {
-        logger.info(`[DEBUG:REPLY] JID citado: ${quotedSenderJid} | Mensagem citada: "${mensagemCitada.substring(0, 30)}..." | Reconhecido como Bot: ${isBotJid(quotedSenderJid)}`);
-    }
-
-    logger.info(`[ATIVAR] ${activate ? 'SIM' : 'NÃO'} | Motivo: ${activationReason} | De: ${msg.pushName} (${extractNumber(msg.key.remoteJid)}) | Mensagem: "${text.substring(0, 50)}..."`);
-    return activate;
+    logger.info(`[ATIVAR] ${activationReason !== 'NÃO ATIVADO' ? 'SIM' : 'NÃO'} | Motivo: ${activationReason}`);
+    return activationReason !== 'NÃO ATIVADO';
 }
 
 // ===============================================================
@@ -174,7 +154,6 @@ async function connect() {
     const { version } = await fetchLatestBaileysVersion();
 
     if (sock && sock.user) {
-        logger.info('Fechando sessão antiga...');
         await sock.logout();
     }
 
@@ -190,9 +169,7 @@ async function connect() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
         if (qr) {
             currentQR = qr;
             console.clear();
@@ -201,15 +178,14 @@ async function connect() {
 
         if (connection === 'open') {
             BOT_JID = normalizeJid(sock.user.id);
-            logger.info('AKIRA BOT ONLINE!');
-            logger.info(`BOT_JID detectado (Normalizado): ${BOT_JID}`);
+            logger.info(`BOT_JID detectado: ${BOT_JID}`);
             lastProcessedTime = Date.now();
             currentQR = null;
         }
 
         if (connection === 'close') {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            logger.error(`Conexão perdida (reason: ${reason}). Reconectando em 5s...`);
+            logger.error(`Conexão caída (${reason}). Tentando reconectar...`);
             setTimeout(connect, 5000);
         }
     });
@@ -255,13 +231,10 @@ async function connect() {
         const ativar = await shouldActivate(msg, isGroup, mensagemAtual, quotedSenderJid, mensagemCitada);
         if (!ativar) return;
 
-        // Simulação de leitura
         try {
             await sock.readMessages([msg.key]);
             await sock.sendReceipt(from, msg.key.participant, ['read']);
-        } catch (e) {
-            logger.warn('Falha ao enviar visto/read receipt.');
-        }
+        } catch { }
 
         await sock.sendPresenceUpdate('composing', from);
 
@@ -273,7 +246,7 @@ async function connect() {
                 mensagem_citada: mensagemCitada
             };
 
-            logger.info(`[PAYLOAD] Usuario: ${apiPayload.usuario} | Numero: ${apiPayload.numero} | Reply: ${!!apiPayload.mensagem_citada}`);
+            logger.info(`[PAYLOAD] Usuario: ${apiPayload.usuario} | Numero: ${apiPayload.numero}`);
 
             const res = await axios.post(AKIRA_API_URL, apiPayload, {
                 headers: { 'Content-Type': 'application/json' },
@@ -281,70 +254,41 @@ async function connect() {
             });
 
             const resposta = res.data?.resposta || '...';
-            logger.info(`[RESPOSTA API] ${resposta}`);
 
-            await delay(Math.min(resposta.length * 50, 4000));
+            await delay(Math.min(resposta.length * 50, 3000));
             await sock.sendPresenceUpdate('paused', from);
             await sock.sendMessage(from, { text: resposta }, { quoted: msg });
 
-            logger.info(`[AKIRA ENVIADA] Resposta enviada com sucesso para ${nome} em ${from}.`);
         } catch (err) {
-            logger.error(`Erro na API: ${err.message}`);
             await sock.sendMessage(from, { text: 'Erro interno. Tenta depois.' }, { quoted: msg });
         }
-    });
-
-    sock.ev.on('message-decrypt-failed', async (msgKey) => {
-        try { await sock.sendRetryRequest(msgKey.key); } catch (e) {}
     });
 }
 
 // ===============================================================
-// EXPRESS SERVER (Health + QR)
+// EXPRESS SERVER
 // ===============================================================
 
 const app = express();
 
 app.get("/", (_, res) => {
-    res.send(`
-        <html>
-        <body style="font-family:sans-serif;text-align:center;margin-top:10%;">
-            <h2>Akira Bot está online!</h2>
-            <p>Acesse <a href="/qr">/qr</a> para escanear o QR Code.</p>
-        </body>
-        </html>
-    `);
+    res.send(`<h2>Akira Bot Online</h2>`);
 });
 
 app.get("/qr", async (_, res) => {
     if (!currentQR) {
         res.send(`<h2>Já conectado!</h2>`);
     } else {
-        try {
-            const qrBase64 = await QRCode.toDataURL(currentQR);
-            res.send(`
-                <html>
-                <head><meta http-equiv="refresh" content="10"></head>
-                <body style="text-align:center;">
-                    <h2>Escaneie o QR</h2>
-                    <img src="${qrBase64}" />
-                    <p>Atualiza em 10s...</p>
-                </body>
-                </html>
-            `);
-        } catch (err) {
-            res.status(500).send(`Erro: ${err.message}`);
-        }
+        const qrBase64 = await QRCode.toDataURL(currentQR);
+        res.send(`
+            <h2>Escaneie o QR</h2>
+            <img src="${qrBase64}" />
+        `);
     }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
     logger.info(`Servidor na porta ${PORT}`);
-    logger.info(`Acesse: http://localhost:${PORT}/qr`);
 });
-
-// ===============================================================
-// INICIALIZAÇÃO
-// ===============================================================
 
 connect();
