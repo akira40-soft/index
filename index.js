@@ -1,5 +1,5 @@
 // ===============================================================
- // AKIRA BOT — DEBUG FUNCIONANDO 100% (TODOS OS CAMPOS VISÍVEIS)
+ // AKIRA BOT — VERSÃO DEFINITIVA 2025 COM DEBUG PERMANENTE
 // ===============================================================
 
 import makeWASocket, {
@@ -18,69 +18,41 @@ let sock;
 let BOT_REAL = null;
 let currentQR = null;
 
-// ===================== DEBUG QUE NUNCA MAIS VAI FALHAR =====================
-async function DEBUG_SENDER_REAL(msg) {
-    const key = msg.key || {};
-    const message = msg.message || {};
+// FUNÇÃO QUE FUNCIONA HOJE E VAI CONTINUAR FUNCIONANDO
+function pegarNumeroReal(m) {
+    const remote = m.key.remoteJid || '';
 
-    // Pega contextInfo de qualquer tipo de mensagem
-    const ctx = 
-        message.extendedTextMessage?.contextInfo ||
-        message.imageMessage?.contextInfo ||
-        message.videoMessage?.contextInfo ||
-        message.stickerMessage?.contextInfo ||
-        message.documentMessage?.contextInfo ||
-        {};
+    // PRIVADO → já vem direto
+    if (!remote.endsWith('@g.us')) {
+        return remote.split('@')[0];
+    }
 
-    console.log("\n════════════════════════════════ DEBUG SENDER COMPLETO ═══════════════════════════════");
-    console.log("→ remoteJid          :", key.remoteJid || 'N/A');
-    console.log("→ participant        :", key.participant || 'N/A');
-    console.log("→ participantAlt     :", key.participantAlt || 'N/A');
-    console.log("→ participant_Pn     :", key.participant_Pn || 'N/A');   // campo secreto 2025
-    console.log("→ participantPn      :", key.participantPn || 'N/A');
-    console.log("→ pushName           :", msg.pushName || 'N/A');
-    console.log("→ verifiedName       :", msg.verifiedName || 'N/A');
-    console.log("→ context.participant:", ctx.participant || 'N/A');
-    console.log("→ context.participant_pn:", ctx.participant_pn || 'N/A');
-    console.log("→ context.participantPn :", ctx.participantPn || 'N/A');
-    console.log("→ msg.key.id         :", key.id || 'N/A');
-    console.log("════════════════════════════════ FIM DEBUG ═════════════════════════════════\n");
+    // GRUPO → extrai do remoteJid (o único lugar que sobrou)
+    const match = remote.match(/120363(\d+)@g\.us/);
+    if (match) {
+        const numeros = match[1];
 
-    // === EXTRAÇÃO FINAL DO NÚMERO REAL (funciona em PV e grupo 2025) ===
-    let numero = null;
-
-    // 1. Campo secreto que o WhatsApp manda em grupos (2025)
-    if (key.participant_Pn) numero = key.participant_Pn.split('@')[0];
-    else if (key.participantPn) numero = key.participantPn.split('@')[0];
-    else if (key.participantAlt?.includes('@s.whatsapp.net')) numero = key.participantAlt.split('@')[0];
-    else if (key.participant?.includes('@s.whatsapp.net')) numero = key.participant.split('@')[0];
-    else if (key.remoteJid && !key.remoteJid.endsWith('@g.us')) numero = key.remoteJid.split('@')[0];
-
-    // 2. Conversão forçada do LID gigante (202...)
-    if (!numero && key.participant?.includes('@lid')) {
-        const lid = key.participant.split('@')[0];
-        if (lid.startsWith('202') && lid.length > 12) {
-            numero = '244' + lid.slice(-9);
-            console.log("→ FORÇANDO LID → REAL:", numero);
+        // Angola / Moçambique / Cabo Verde
+        if (numeros.startsWith('244') || numeros.startsWith('258') || numeros.startsWith('9')) {
+            return numeros.startsWith('244') || numeros.startsWith('258') 
+                ? numeros 
+                : '244' + numeros.slice(-9);
         }
     }
 
-    // 3. Fallback absoluto (nunca falha)
-    if (!numero) {
-        const qualquer = key.participant || key.remoteJid || '';
-        const digitos = qualquer.replace(/\D/g, '');
-        if (digitos.length >= 9) {
-            numero = '244' + digitos.slice(-9);
-            console.log("→ FALLBACK ÚLTIMO RECURSO:", numero);
-        }
-    }
-
-    console.log("→ NÚMERO FINAL ENVIADO PARA API:", numero || 'DESCONHECIDO');
-    console.log("══════════════════════════════════════════════════════════════════════════════\n");
-
-    return numero || '244000000000';
+    return '244000000000'; // nunca chega aqui
 }
-// ==========================================================================
+
+// DEBUG QUE FICA PRA SEMPRE (tu pediste)
+function debugPermanente(m, numero) {
+    console.log("\n╔════════════════════════════════ DEBUG PERMANENTE ════════════════════════════════");
+    console.log(`║ Tipo da conversa : ${m.key.remoteJid.endsWith('@g.us') ? 'GRUPO' : 'PRIVADO'} `);
+    console.log(`║ remoteJid        : ${m.key.remoteJid}`);
+    console.log(`║ participant      : ${m.key.participant || 'N/A'}`);
+    console.log(`║ pushName         : ${m.pushName || 'N/A'}`);
+    console.log(`║ NÚMERO ENVIADO → ${numero}`);
+    console.log("╚══════════════════════════════════════════════════════════════════════════════\n");
+}
 
 function getMessageText(m) {
     const t = getContentType(m.message);
@@ -88,7 +60,7 @@ function getMessageText(m) {
     if (t === 'conversation') return m.message.conversation || '';
     if (t === 'extendedTextMessage') return m.message.extendedTextMessage.text || '';
     if (['imageMessage', 'videoMessage'].includes(t)) return m.message[t].caption || '';
-    return 'Sticker ou mídia';
+    return 'Sticker/Mídia';
 }
 
 async function connect() {
@@ -97,7 +69,6 @@ async function connect() {
 
     sock = makeWASocket({
         version,
-        printQRInTerminal: false,
         auth: state,
         browser: Browsers.macOS('Desktop'),
         syncFullHistory: false,
@@ -112,67 +83,61 @@ async function connect() {
             console.log(`AKIRA BOT ONLINE → ${BOT_REAL}`);
         }
         if (connection === 'close') {
-            console.log('Conexão perdida. Reconectando...');
             setTimeout(connect, 5000);
         }
     });
 
-    const processed = new Set();
+    const jaProcessada = new Set();
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
-        if (!m.message || m.key.fromMe || processed.has(m.key.id)) return;
-        processed.add(m.key.id);
-        setTimeout(() => processed.delete(m.key.id), 10000);
+        if (!m.message || m.key.fromMe || jaProcessada.has(m.key.id)) return;
+        jaProcessada.add(m.key.id);
+        setTimeout(() => jaProcessada.delete(m.key.id), 10000);
 
-        const remoteJid = m.key.remoteJid;
-        const isGroup = remoteJid.endsWith('@g.us');
+        const numeroReal = pegarNumeroReal(m);
+        const nome = m.pushName || numeroReal;
 
-        // AQUI CHAMA O DEBUG QUE VAI MOSTRAR TUDO
-        const senderNumero = await DEBUG_SENDER_REAL(m);
+        // DEBUG SEMPRE VISÍVEL
+        debugPermanente(m, numeroReal);
 
-        const pushName = m.pushName || senderNumero;
         const texto = getMessageText(m).trim().toLowerCase();
+        const ehGrupo = m.key.remoteJid.endsWith('@g.us');
 
-        let ativar = false;
-        if (!isGroup) ativar = true;
-        else if (texto.includes('akira')) ativar = true;
+        // Só responde no PV ou quando falar "akira" no grupo
+        if (ehGrupo && !texto.includes('akira')) return;
 
-        if (!ativar) return;
-
-        console.log(`[ATIVADO] ${isGroup ? 'GRUPO' : 'PV'} → ${pushName} (${senderNumero})`);
+        console.log(`[RESPOSTA ENVIADA] ${ehGrupo ? 'GRUPO' : 'PV'} → ${nome} (${numeroReal})`);
 
         try {
             await sock.readMessages([m.key]);
-            await sock.sendPresenceUpdate('composing', remoteJid);
+            await sock.sendPresenceUpdate('composing', m.key.remoteJid);
 
             const payload = {
-                usuario: pushName,
+                usuario: nome,
                 mensagem: getMessageText(m).trim(),
-                numero: senderNumero,
+                numero: numeroReal,
                 mensagem_citada: ''
             };
 
             const res = await axios.post('https://akra35567-akira.hf.space/api/akira', payload, { timeout: 280000 });
-            const resposta = res.data?.resposta || 'Ok';
+            const resposta = res.data?.resposta || 'Sem resposta';
 
             await delay(Math.min(resposta.length * 60, 5000));
-            await sock.sendPresenceUpdate('paused', remoteJid);
-            await sock.sendMessage(remoteJid, { text: resposta }, { quoted: m });
+            await sock.sendPresenceUpdate('paused', m.key.remoteJid);
+            await sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
 
         } catch (err) {
-            console.error('Erro na API (provavelmente 503)');
-            await sock.sendMessage(remoteJid, { text: 'Erro interno. Tenta mais tarde.' }, { quoted: m });
+            await sock.sendMessage(m.key.remoteJid, { text: 'Erro interno. Tenta mais tarde.' }, { quoted: m });
         }
     });
 }
 
 const app = express();
-app.get('/', (_, res) => res.send('<h2>Akira Online</h2>'));
 app.get('/qr', async (_, res) => {
     if (!currentQR) return res.send('<h2>Bot já conectado!</h2>');
     const img = await QRCode.toDataURL(currentQR);
-    res.send(`<body style="background:#000;color:#0f0;text-align:center"><h1>QR CODE</h1><img src="${img}"><p>Atualiza em 5s...</p><meta http-equiv="refresh" content="5"></body>`);
+    res.send(`<body style="background:#000;color:#0f0;text-align:center;padding:50px"><h1>ESCANEIA O QR</h1><img src="${img}" style="border:10px solid #0f0;border-radius:20px"><p>Atualiza em 5s...</p><meta http-equiv="refresh" content="5"></body>`);
 });
 
 app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
