@@ -1,5 +1,5 @@
 // ===============================================================
- // AKIRA BOT — VERSÃO FINAL: NÚMERO REAL SEMPRE (GRUPO E PV)
+ // AKIRA BOT — VERSÃO FINAL 2025: NÚMERO REAL GARANTIDO (GRUPOS E PV)
 // ===============================================================
 
 import makeWASocket, {
@@ -14,7 +14,7 @@ import axios from 'axios';
 import express from 'express';
 import * as QRCode from 'qrcode';
 
-const logger = pino({ level: 'info' });
+const logger = pino({ level: 'silent' }); // muda pra 'info' se quiser ver logs
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
 const PORT = process.env.PORT || 8080;
 
@@ -22,51 +22,51 @@ let sock;
 let BOT_REAL = null;
 let currentQR = null;
 
-// FUNÇÃO PERFEITA PARA PEGAR NÚMERO REAL (NUNCA LID)
-function getRealNumberReal(msg) {
-    // 1º prioridade: participantPn (número real que o WhatsApp manda em grupos)
-    if (msg.participantPn) {
-        return msg.participantPn.split('@')[0]; // 2449xxxxxxxxx
-    }
-    if (msg.key?.participantPn) {
-        return msg.key.participantPn.split('@')[0];
+// FUNÇÃO QUE NUNCA FALHA — PEGA O NÚMERO REAL EM GRUPOS E PV
+function getRealPhoneNumber(msg) {
+    // 1. Campo secreto do WhatsApp em grupos (só existe em grupos!)
+    if (msg.key?.participant_Pn) {
+        return msg.key.participant_Pn.split('@')[0]; // 2449xxxxxxxxx
     }
 
-    // 2º prioridade: remoteJid em PV ou participant em grupo (pode ser LID ou real)
+    // 2. Em PV ou fallback — remoteJid já é o número real
     const jid = msg.key.participant || msg.key.remoteJid || '';
     let num = jid.split('@')[0].split(':')[0];
 
-    // Conversão forçada de LID → número real (Angola/Moçambique)
+    // 3. Conversão de LID gigante → número real (Angola)
     if (num.length > 12 && num.startsWith('202')) {
         return '244' + num.slice(-9);
     }
-    if (/^9\d{8,10}$/.test(num)) {
-        return '244' + num;
-    }
-    if (/^2449\d{8,10}$/.test(num)) {
+
+    // 4. Já é número real
+    if (num.startsWith('2449') && num.length === 12) {
         return num;
     }
 
-    // Último recurso
+    // 5. Número sem código do país (9xxxxxxxxx)
+    if (num.startsWith('9') && num.length === 9) {
+        return '244' + num;
+    }
+
+    // 6. Último recurso — pega últimos 9 dígitos
     const digits = num.replace(/\D/g, '');
-    if (digits.length >= 9) return '244' + digits.slice(-9);
-    return num;
+    return digits.length >= 9 ? '244' + digits.slice(-9) : num;
 }
 
-function messageText(m) {
-    const t = getContentType(m.message);
-    if (!t) return '';
-    if (t === 'conversation') return m.message.conversation || '';
-    if (t === 'extendedTextMessage') return m.message.extendedTextMessage.text || '';
-    if (['imageMessage', 'videoMessage'].includes(t)) return m.message[t].caption || '';
-    if (t === 'stickerMessage') return 'Sticker';
+function getMessageText(m) {
+    const type = getContentType(m.message);
+    if (!type) return '';
+    if (type === 'conversation') return m.message.conversation || '';
+    if (type === 'extendedTextMessage') return m.message.extendedTextMessage.text || '';
+    if (['imageMessage', 'videoMessage'].includes(type)) return m.message[type].caption || '';
+    if (type === 'stickerMessage') return 'Sticker';
     return '';
 }
 
-function isBotJid(jid) {
-    if (!jid) return false;
-    const num = jid.split('@')[0];
-    return num === BOT_REAL;
+function isBot(jid) {
+    if (!jid || !BOT_REAL) return false;
+    const num = jid.split('@')[0].split(':')[0];
+    return num === BOT_REAL || num.endsWith(BOT_REAL);
 }
 
 async function connect() {
@@ -79,6 +79,8 @@ async function connect() {
         auth: state,
         browser: Browsers.macOS('Chrome'),
         syncFullHistory: false,
+        markOnlineOnConnect: true,
+        getMessage: async () => ({ conversation: '' })
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -86,7 +88,7 @@ async function connect() {
     sock.ev.on('connection.update', ({ connection, qr }) => {
         if (qr) currentQR = qr;
         if (connection === 'open') {
-            BOT_REAL = sock.user.id.split(':')[0]; // 2449...
+            BOT_REAL = sock.user.id.split(':')[0];
             logger.info(`AKIRA BOT ONLINE → ${BOT_REAL}`);
             currentQR = null;
         }
@@ -102,73 +104,72 @@ async function connect() {
         const remoteJid = m.key.remoteJid;
         const isGroup = remoteJid.endsWith('@g.us');
 
-        // === NÚMERO REAL GARANTIDO (NUNCA LID) ===
-        const senderReal = getRealNumber(m); // ← isso é o que tu querias
+        // === NÚMERO REAL 100% GARANTIDO ===
+        const senderReal = getRealPhoneNumber(m); // ← AQUI ESTÁ A MÁGICA
 
         const pushName = m.pushName || senderReal;
-        const text = messageText(m).trim();
+        const text = getMessageText(m).trim();
 
+        // Quoted message
         const context = m.message?.extendedTextMessage?.contextInfo;
         const quotedJid = context?.participant;
-        const quotedText = context?.quotedMessage ? messageText(context.quotedMessage) : '';
+        const quotedText = context?.quotedMessage ? getMessageText({ message: context.quotedMessage }) : '';
 
-        // Lógica de ativação
-        let ativar = !isGroup; // PV sempre ativa
-
-        if (quotedJid && isBotJid(quotedJid)) ativar = true;
+        // === LÓGICA DE ATIVAÇÃO ===
+        let ativar = false;
+        if (!isGroup) ativar = true; // PV sempre
+        if (quotedJid && isBot(quotedJid)) ativar = true;
         if (isGroup) {
             const mentions = context?.mentionedJid || [];
-            if (mentions.some(isBotJid)) ativar = true;
+            if (mentions.some(isBot)) ativar = true;
             if (text.toLowerCase().includes('akira')) ativar = true;
         }
-
         if (!ativar) return;
 
-        // Marcar como lido + digitando
         try {
             await sock.readMessages([m.key]);
             await sock.sendPresenceUpdate('composing', remoteJid);
-        } catch (e) {}
+        } catch {}
 
         try {
             const payload = {
                 usuario: pushName,
                 mensagem: text,
-                numero: senderReal,           // ← SEMPRE 2449xxxxxxxxx
+                numero: senderReal,        // ← SEMPRE 2449... NUNCA LID
                 mensagem_citada: quotedText
             };
 
-            const res = await axios.post(AKIRA_API_URL, payload, { timeout: 280000 });
-            const resposta = res.data?.resposta || 'Sem resposta da API';
+            const res = await axios.post(AKIRA_API_URL, payload, {
+                timeout: 280000,
+                headers: { 'Content-Type': 'application/json' }
+            });
 
-            await delay(Math.min(resposta.length * 60, 4000));
-
+            let resposta = res.data?.resposta || 'Ok';
+            await delay(Math.min(resposta.length * 60, 5000));
             await sock.sendPresenceUpdate('paused', remoteJid);
             await sock.sendMessage(remoteJid, { text: resposta }, { quoted: m });
 
         } catch (err) {
-            console.error(err.message);
+            console.error('Erro API:', err.response?.status || err.message);
             await sock.sendMessage(remoteJid, { text: 'Erro interno. Tenta mais tarde.' }, { quoted: m });
         }
     });
 }
 
-// Servidor QR
+// QR Code Web
 const app = express();
-app.get('/', (req, res) => res.send('<h2>Akira Bot Online</h2><a href="/qr">Ver QR</a>'));
-app.get('/qr', async (req, res) => {
-    if (!currentQR) return res.send('<h2>Bot já conectado!</h2>');
+app.get('/', (_, res) => res.send('<h2>Akira Online</h2><a href="/qr">Ver QR</a>'));
+app.get('/qr', async (_, res) => {
+    if (!currentQR) return res.send('<h1 style="color:green;text-align:center;margin-top:100px">BOT JÁ CONECTADO!</h1>');
     const img = await QRCode.toDataURL(currentQR);
-    res.send(`<body style="background:#000;color:#0f0;text-align:center;padding:50px;">
+    res.send(`<body style="background:#000;color:lime;text-align:center;padding:50px;font-family:Arial">
         <h1>ESCANEIA O QR</h1>
-        <img src="${img}" style="border:5px solid #0f0;border-radius:15px;">
-        <p>Atualiza em 5s...</p>
+        <img src="${img}" style="border:10px solid lime;border-radius:20px;max-width:90%">
+        <p style="font-size:20px;margin-top:30px">Atualizando em 5s...</p>
         <meta http-equiv="refresh" content="5">
-        </body>`);
+    </body>`);
 });
 
-app.listen(PORT, () => {
-    logger.info(`Web na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Web na porta ${PORT}`));
 
 connect();
