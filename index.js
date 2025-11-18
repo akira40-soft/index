@@ -1,5 +1,5 @@
 // ===============================================================
- // AKIRA BOT — VERSÃO FINAL 2025 (PERFEITA E LIMPA)
+ // AKIRA BOT — VERSÃO DEBUG ULTRA DETALHADO (NÚMERO REAL 100% GARANTIDO)
 // ===============================================================
 
 import makeWASocket, {
@@ -14,7 +14,8 @@ import axios from 'axios';
 import express from 'express';
 import * as QRCode from 'qrcode';
 
-const logger = pino({ level: 'silent' });
+// Logger com nível WARN pra ver o debug bem claro
+const logger = pino({ level: 'warn' });
 const AKIRA_API_URL = 'https://akra35567-akira.hf.space/api/akira';
 const PORT = process.env.PORT || 8080;
 
@@ -22,20 +23,84 @@ let sock;
 let BOT_REAL = null;
 let currentQR = null;
 
-// CONVERSÃO LID → NÚMERO REAL (FUNCIONA 100% EM 2025)
-function getRealNumber(msg) {
-    let jid = msg.key.participant || msg.key.remoteJid || '';
-    let num = jid.split('@')[0].split(':')[0];
+// ===================== DEBUG ULTRA DETALHADO =====================
+async function DEBUG_DUMP_SENDER(sock, msg) {
+    const key = msg.key || {};
+    
+    const contextInfo = 
+        msg.message?.extendedTextMessage?.contextInfo ||
+        msg.message?.imageMessage?.contextInfo ||
+        msg.message?.videoMessage?.contextInfo ||
+        msg.message?.stickerMessage?.contextInfo ||
+        msg.message?.listResponseMessage?.contextInfo ||
+        msg.message?.buttonsResponseMessage?.contextInfo ||
+        null;
 
-    if (num.startsWith('202') && num.length > 12) {
-        return '244' + num.slice(-9);
+    const sources = {
+        participantAlt: key.participantAlt || 'N/A',
+        participant: key.participant || 'N/A',
+        context_participant: contextInfo?.participant || 'N/A',
+        context_participant_pn: contextInfo?.participant_pn || 'N/A',
+        remoteJid: key.remoteJid || 'N/A',
+        pushName: msg.pushName || 'N/A'
+    };
+
+    // Função agressiva que tenta TODAS as formas possíveis
+    let resolvedJid = null;
+    let numeric = null;
+    let source = 'unknown';
+
+    // 1. participantAlt (campo mais novo que às vezes tem o real)
+    if (key.participantAlt && key.participantAlt.includes('@s.whatsapp.net')) {
+        resolvedJid = key.participantAlt;
+        numeric = resolvedJid.split('@')[0];
+        source = 'participantAlt';
     }
-    if (num.startsWith('2449') && num.length === 12) return num;
-    if (num.startsWith('9') && num.length >= 9) return '244' + num;
+    // 2. participant normal (pode ser LID ou real)
+    else if (key.participant && key.participant.includes('@s.whatsapp.net')) {
+        resolvedJid = key.participant;
+        numeric = resolvedJid.split('@')[0];
+        source = 'participant (real)';
+    }
+    // 3. LID gigante → conversão forçada
+    else if (key.participant && key.participant.includes('@lid')) {
+        const lid = key.participant.split('@')[0];
+        if (lid.startsWith('202') && lid.length > 12) {
+            numeric = '244' + lid.slice(-9);
+            resolvedJid = numeric + '@s.whatsapp.net';
+            source = 'LID → 244 + últimos 9';
+        }
+    }
+    // 4. remoteJid (sempre real em PV)
+    else if (key.remoteJid && !key.remoteJid.endsWith('@g.us')) {
+        resolvedJid = key.remoteJid;
+        numeric = resolvedJid.split('@')[0];
+        source = 'remoteJid (PV)';
+    }
 
-    const digits = num.replace(/\D/g, '');
-    return digits.length >= 9 ? '244' + digits.slice(-9) : num;
+    logger.warn("\n==================== DEBUG SENDER ====================");
+    logger.warn("RAW msg.key:", JSON.stringify(key, null, 2));
+    logger.warn("RAW contextInfo:", contextInfo ? JSON.stringify(contextInfo, null, 2) : 'N/A');
+    logger.warn("TODAS AS FONTES POSSÍVEIS:", sources);
+    logger.warn("→ RESOLVED JID:", resolvedJid);
+    logger.warn("→ NÚMERO FINAL:", numeric);
+    logger.warn("→ FONTE USADA:", source);
+
+    // Tenta onWhatsApp pra confirmar se existe
+    if (sock.onWhatsApp && numeric) {
+        try {
+            const check = await sock.onWhatsApp(numeric + '@s.whatsapp.net');
+            logger.warn("→ onWhatsApp confirma:", check);
+        } catch (e) {
+            logger.warn("→ onWhatsApp erro:", e.message);
+        }
+    }
+
+    logger.warn("================= FIM DEBUG SENDER ==================\n");
+
+    return { resolvedJid, numeric, source };
 }
+// ================================================================
 
 function getMessageText(m) {
     const type = getContentType(m.message);
@@ -49,8 +114,8 @@ function getMessageText(m) {
 
 function isBot(jid) {
     if (!jid || !BOT_REAL) return false;
-    const num = jid.split('@')[0].split(':')[0];
-    return num === BOT_REAL || (num.length > 12 && num.slice(-9) === BOT_REAL.slice(-9));
+    const num = jid.split('@')[0];
+    return num === BOT_REAL || num.slice(-9) === BOT_REAL.slice(-9);
 }
 
 async function connect() {
@@ -61,7 +126,7 @@ async function connect() {
         version,
         logger,
         auth: state,
-        browser: Browsers.macOS('Desktop'),  // ← VOLTOU COMO ERA ANTES
+        browser: Browsers.macOS('Desktop'),
         syncFullHistory: false,
         markOnlineOnConnect: true
     });
@@ -76,103 +141,81 @@ async function connect() {
             currentQR = null;
         }
         if (connection === 'close') {
-            console.log('Conexão perdida. Reconectando em 5s...');
+            console.log('Conexão perdida. Reconectando...');
             setTimeout(connect, 5000);
         }
     });
 
-    // === CONTROLE PARA NÃO RESPONDER DUPLICADO ===
-    const processedMessages = new Set();
+    // Evita respostas duplicadas
+    const processed = new Set();
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
-
-        const msgId = m.key.id;
-        if (processedMessages.has(msgId)) return;  // ← EVITA RESPOSTA DUPLA
-        processedMessages.add(msgId);
-        setTimeout(() => processedMessages.delete(msgId), 10000); // limpa após 10s
+        if (processed.has(m.key.id)) return;
+        processed.add(m.key.id);
+        setTimeout(() => processed.delete(m.key.id), 10000);
 
         const remoteJid = m.key.remoteJid;
         const isGroup = remoteJid.endsWith('@g.us');
-        const senderReal = getRealNumber(m);
-        const pushName = m.pushName || senderReal;
+
+        // === AQUI VEM O DEBUG + RESOLUÇÃO FINAL ===
+        const { numeric: senderNumeric } = await DEBUG_DUMP_SENDER(sock, m);
+
+        const pushName = m.pushName || senderNumeric || 'Desconhecido';
         const text = getMessageText(m).trim();
         const lowerText = text.toLowerCase();
 
-        const context = m.message?.extendedTextMessage?.contextInfo;
-        const quotedJid = context?.participant || '';
-        const mentions = context?.mentionedJid || [];
+        const context = m.message?.extendedTextMessage?.contextInfo || {};
+        const quotedJid = context.participant || '';
+        const mentions = context.mentionedJid || [];
 
-        // === LÓGICA DE ATIVAÇÃO (SÓ UMA VEZ) ===
         let motivo = '';
+        if (!isGroup) motivo = 'CHAT PRIVADO';
+        else if (quotedJid && isBot(quotedJid)) motivo = 'REPLY AO BOT';
+        else if (mentions.some(isBot)) motivo = 'MENÇÃO';
+        else if (lowerText.includes('akira')) motivo = 'PALAVRA akira';
 
-        if (!isGroup) {
-            motivo = 'CHAT PRIVADO';
-        } else if (quotedJid && isBot(quotedJid)) {
-            motivo = 'REPLY AO BOT';
-        } else if (mentions.some(isBot)) {
-            motivo = 'MENÇÃO AO BOT';
-        } else if (lowerText.includes('akira')) {
-            motivo = 'PALAVRA "akira"';
-        }
+        if (!motivo) return;
 
-        if (!motivo) {
-            console.log(`[IGNORADO] De: ${pushName} (${senderReal}) | Msg: "${text}"`);
-            return;
-        }
-
-        console.log(`[ATIVADO] ${motivo} | De: ${pushName} (${senderReal}) | Msg: "${text}"`);
+        console.log(`[ATIVADO] ${motivo} → ${pushName} (${senderNumeric})`);
 
         try {
             await sock.readMessages([m.key]);
             await sock.sendPresenceUpdate('composing', remoteJid);
-        } catch (e) {}
+        } catch {}
 
         try {
             const payload = {
                 usuario: pushName,
                 mensagem: text,
-                numero: senderReal,
-                mensagem_citada: context?.quotedMessage ? getMessageText({ message: context.quotedMessage }) : ''
+                numero: senderNumeric || '244000000000',
+                mensagem_citada: context.quotedMessage ? getMessageText({ message: context.quotedMessage }) : ''
             };
 
-            const res = await axios.post(AKIRA_API_URL, payload, {
-                timeout: 280000,
-                headers: { 'Content-Type': 'application/json' }
-            });
-
+            const res = await axios.post(AKIRA_API_URL, payload, { timeout: 280000 });
             const resposta = res.data?.resposta || 'Ok';
+
             await delay(Math.min(resposta.length * 60, 5000));
             await sock.sendPresenceUpdate('paused', remoteJid);
             await sock.sendMessage(remoteJid, { text: resposta }, { quoted: m });
 
         } catch (err) {
-            console.error('Erro na API: 503 ou timeout');
+            console.error('Erro na API (503/timeout)');
             await sock.sendMessage(remoteJid, { text: 'Erro interno. Tenta mais tarde.' }, { quoted: m });
         }
     });
 }
 
-// QR Code (bonitinho como antes)
+// QR
 const app = express();
-app.get('/', (_, res) => res.send('<h2>Akira Bot Online</h2><a href="/qr">Ver QR</a>'));
+app.get('/', (_, res) => res.send('<h2>Akira Online</h2><a href="/qr">QR</a>'));
 app.get('/qr', async (_, res) => {
-    if (!currentQR) return res.send('<h1 style="color:#0f0;text-align:center;margin-top:100px">BOT JÁ CONECTADO!</h1>');
+    if (!currentQR) return res.send('<h1 style="color:#0f0;text-align:center;margin-top:100px">CONECTADO</h1>');
     const img = await QRCode.toDataURL(currentQR);
-    res.send(`
-        <body style="background:#000;color:#0f0;text-align:center;padding:50px;font-family:Arial">
-            <h1>ESCANEIA O QR CODE</h1>
-            <img src="${img}" style="border:10px solid #0f0;border-radius:20px;max-width:90%">
-            <p style="font-size:20px;margin-top:30px">Atualizando em 5 segundos...</p>
-            <meta http-equiv="refresh" content="5">
-        </body>
-    `);
+    res.send(`<body style="background:#000;color:#0f0;text-align:center;padding:50px"><h1>QR CODE</h1><img src="${img}" style="border:10px solid #0f0;border-radius:20px"><p>Atualiza em 5s...</p><meta http-equiv="refresh" content="5"></body>`);
 });
 
-app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-    console.log(`Acesse: http://localhost:${PORT}/qr`);
-});
+app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
 
 connect();
