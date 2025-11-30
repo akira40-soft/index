@@ -127,12 +127,12 @@ async function connect() {
             const res = await axios.post('https://akra35567-akira.hf.space/api/akira', payload, { timeout: 280000 });
             const resposta = res.data?.resposta || 'Ok';
 
-            await delay(Math.min(resposta.length * 60, 5000));
+            await delay(Math.min(resposta.length * 60, 1000));
             await sock.sendPresenceUpdate('paused', m.key.remoteJid);
             await sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
 
         } catch (err) {
-            await sock.sendMessage(m.key.remoteJid, { text: 'Erro interno. Tenta mais tarde.' }, { quoted: m });
+            await sock.sendMessage(m.key.remoteJid, { text: 'barra no bardeado' }, { quoted: m });
         }
     });
 }
