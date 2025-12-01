@@ -5,19 +5,22 @@
 // ✅ Debug detalhado completo
 // ✅ Logs de todas mensagens
 // ===============================================================
-import makeWASocket, {
+const baileys = require('@whiskeysockets/baileys');
+const { makeInMemoryStore } = baileys; // Agora deve funcionar após injeção
+const axios = require('axios');
+const express = require('express');
+const QRCode = require('qrcode');
+const pino = require('pino');
+
+const {
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
     Browsers,
     delay,
     getContentType,
-    jidNormalizedUser,
-    makeInMemoryStore
-} from '@whiskeysockets/baileys';
-import axios from 'axios';
-import express from 'express';
-import * as QRCode from 'qrcode';
-import pino from 'pino';
+    jidNormalizedUser
+} = baileys;
+
 const PORT = process.env.PORT || 3000;
 const API_URL = process.env.API_URL || 'https://akra35567-akira.hf.space/api/akira';
 let sock;
@@ -132,13 +135,13 @@ function extrairTextoMensagem(m) {
        
         const mapaTipos = {
             'conversation': () => m.message.conversation || '',
-            'extendedTextMessage': () => m.message.extendedTextMessage?.text || '',
-            'imageMessage': () => m.message.imageMessage?.caption || '[Imagem]',
-            'videoMessage': () => m.message.videoMessage?.caption || '[Vídeo]',
-            'documentMessage': () => m.message.documentMessage?.caption || '[Documento]',
+            'extendedTextMessage': () => m.message.extendedTextMessage ? m.message.extendedTextMessage.text || '' : '',
+            'imageMessage': () => m.message.imageMessage ? m.message.imageMessage.caption || '[Imagem]' : '[Imagem]',
+            'videoMessage': () => m.message.videoMessage ? m.message.videoMessage.caption || '[Vídeo]' : '[Vídeo]',
+            'documentMessage': () => m.message.documentMessage ? m.message.documentMessage.caption || '[Documento]' : '[Documento]',
             'audioMessage': () => '[Áudio]',
             'stickerMessage': () => '[Sticker]',
-            'reactionMessage': () => `[Reação: ${m.message.reactionMessage?.text || ''}]`,
+            'reactionMessage': () => m.message.reactionMessage ? `[Reação: ${m.message.reactionMessage.text || ''}]` : '',
             'pollCreationMessage': () => '[Enquete]',
             'pollUpdateMessage': () => '[Voto em Enquete]'
         };
@@ -155,8 +158,8 @@ function extrairTextoMensagem(m) {
 // ============================================================================
 function extrairMensagemCitada(m) {
     try {
-        const contextInfo = m.message?.extendedTextMessage?.contextInfo;
-        if (!contextInfo?.quotedMessage) return null;
+        const contextInfo = m.message.extendedTextMessage ? m.message.extendedTextMessage.contextInfo : null;
+        if (!contextInfo || !contextInfo.quotedMessage) return null;
        
         const quotedMsg = contextInfo.quotedMessage;
         const quotedType = getContentType(quotedMsg);
@@ -165,9 +168,9 @@ function extrairMensagemCitada(m) {
        
         const mapaTiposQuoted = {
             'conversation': () => quotedMsg.conversation || '',
-            'extendedTextMessage': () => quotedMsg.extendedTextMessage?.text || '',
-            'imageMessage': () => quotedMsg.imageMessage?.caption || '[Imagem]',
-            'videoMessage': () => quotedMsg.videoMessage?.caption || '[Vídeo]',
+            'extendedTextMessage': () => quotedMsg.extendedTextMessage ? quotedMsg.extendedTextMessage.text || '' : '',
+            'imageMessage': () => quotedMsg.imageMessage ? quotedMsg.imageMessage.caption || '[Imagem]' : '[Imagem]',
+            'videoMessage': () => quotedMsg.videoMessage ? quotedMsg.videoMessage.caption || '[Vídeo]' : '[Vídeo]',
             'documentMessage': () => '[Documento]',
             'audioMessage': () => '[Áudio]',
             'stickerMessage': () => '[Sticker]'
@@ -209,7 +212,7 @@ function logMensagemRecebida(m, numeroReal, texto, mensagemCitada) {
 async function conectar() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
-    sock = makeWASocket({
+    sock = baileys.default({
         version,
         auth: state,
         browser: Browsers.macOS('Akira Bot'),
@@ -221,16 +224,17 @@ async function conectar() {
         getMessage: async (key) => {
             if (store) {
                 const msg = await store.loadMessage(key.remoteJid, key.id);
-                return msg?.message || undefined;
+                return msg ? msg.message || undefined : undefined;
             }
             return undefined;
         }
     });
     // Bind do store ao socket
-    store?.bind(sock.ev);
+    if (store) store.bind(sock.ev);
     sock.ev.on('creds.update', saveCreds);
    
-    sock.ev.on('connection.update', ({ connection, qr }) => {
+    sock.ev.on('connection.update', (update) => {
+        const { connection, qr } = update;
         if (qr) {
             currentQR = qr;
             console.log('\n🔗 QR Code disponível em: http://localhost:' + PORT + '/qr\n');
@@ -308,7 +312,7 @@ async function conectar() {
                 headers: { 'Content-Type': 'application/json' }
             });
            
-            const resposta = res.data?.resposta || 'Ok';
+            const resposta = res.data.resposta || 'Ok';
             console.log(`📥 Resposta da API (${resposta.length} caracteres):`, resposta.substring(0, 150) + '...\n');
             // === DELAY BASEADO NO TAMANHO ===
             const delayDigitacao = Math.min(resposta.length * 40, 3000);
