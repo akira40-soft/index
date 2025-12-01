@@ -1,33 +1,51 @@
-# Usa Node 20 (requisito do Baileys)
+# Dockerfile — AKIRA BOT RAILWAY (Dezembro 2025)
 FROM node:20-alpine
 
-# Instala ferramentas básicas (git, python3, make, g++, etc)
-RUN apk add --no-cache git python3 make g++
+# Variáveis de ambiente
+ENV NODE_ENV=production \
+    PORT=3000
 
-# Atualiza o npm (corrige bugs do Alpine)
-RUN npm install -g npm@latest
+# Instala dependências do sistema
+RUN apk add --no-cache \
+    git \
+    python3 \
+    make \
+    g++ \
+    cairo-dev \
+    pango-dev \
+    jpeg-dev \
+    giflib-dev
 
-# Cria usuário não-root (boa prática)
+# Cria usuário não-root
 RUN addgroup -S app && adduser -S app -G app
 
 # Define diretório de trabalho
 WORKDIR /app
 
-# Copia dependências primeiro (cache eficiente)
+# Copia package files
 COPY package*.json ./
 
-# Instala dependências (sem dev)
-RUN npm install --omit=dev
+# Atualiza npm e instala dependências
+RUN npm install -g npm@latest && \
+    npm ci --omit=dev --prefer-offline --no-audit
 
-# Copia o restante do código
-COPY . .
+# Copia código da aplicação
+COPY index.js ./
 
-# Ajusta permissões e muda para usuário não-root
-RUN chown -R app:app /app
+# Ajusta permissões
+RUN chown -R app:app /app && \
+    mkdir -p /app/auth_info_baileys && \
+    chown -R app:app /app/auth_info_baileys
+
+# Muda para usuário não-root
 USER app
 
-# Porta usada pelo Express
+# Expõe porta
 EXPOSE 3000
 
-# Comando padrão
-CMD ["npm", "start"]
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+
+# Comando de inicialização
+CMD ["node", "index.js"]
