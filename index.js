@@ -3,7 +3,7 @@
 // ✅ Extração correta de número (LID → PN)
 // ✅ Reply funcionando 100%
 // ✅ Debug detalhado completo
-// ✅ Logs de todas mensagens
+// ✅ SEM makeInMemoryStore (não disponível na v6.7.8)
 // ===============================================================
 
 import makeWASocket, {
@@ -12,8 +12,7 @@ import makeWASocket, {
     Browsers,
     delay,
     getContentType,
-    jidNormalizedUser,
-    makeInMemoryStore
+    jidNormalizedUser
 } from '@whiskeysockets/baileys';
 import axios from 'axios';
 import express from 'express';
@@ -30,8 +29,8 @@ let currentQR = null;
 // Logger silencioso
 const logger = pino({ level: 'silent' });
 
-// Store para armazenar mensagens (necessário para reply)
-const store = makeInMemoryStore({ logger });
+// Cache simples de mensagens (sem store)
+const mensagensCache = new Map();
 
 // ============================================================================
 // FUNÇÃO CORRIGIDA: EXTRAI NÚMERO REAL (SUPORTE COMPLETO PARA LID)
@@ -125,7 +124,6 @@ function logDebugCompleto(m, numeroExtraido) {
     console.log("-".repeat(70));
     console.log(`👤 USUÁRIO:`);
     console.log(`   pushName     : ${m.pushName || 'N/A'}`);
-    console.log(`   verifiedBizName: ${m.verifiedBizName || 'N/A'}`);
     console.log("-".repeat(70));
     console.log(`📱 NÚMERO EXTRAÍDO: ${numeroExtraido}`);
     console.log("=".repeat(70) + "\n");
@@ -161,7 +159,7 @@ function extrairTextoMensagem(m) {
 }
 
 // ============================================================================
-// EXTRAI MENSAGEM CITADA (REPLY) - VERSÃO MELHORADA
+// EXTRAI MENSAGEM CITADA (REPLY) - VERSÃO SEM STORE
 // ============================================================================
 function extrairMensagemCitada(m) {
     try {
@@ -188,8 +186,7 @@ function extrairMensagemCitada(m) {
         return {
             texto: textoQuoted,
             stanzaId: contextInfo.stanzaId,
-            participant: contextInfo.participant,
-            quotedMessage: quotedMsg
+            participant: contextInfo.participant
         };
         
     } catch (erro) {
@@ -216,6 +213,23 @@ function logMensagemRecebida(m, numeroReal, texto, mensagemCitada) {
 }
 
 // ============================================================================
+// ARMAZENA MENSAGEM NO CACHE (PARA REPLY)
+// ============================================================================
+function armazenarMensagem(m) {
+    try {
+        const chaveMsg = `${m.key.remoteJid}:${m.key.id}`;
+        mensagensCache.set(chaveMsg, m);
+        
+        // Limpa cache após 10 minutos
+        setTimeout(() => {
+            mensagensCache.delete(chaveMsg);
+        }, 600000);
+    } catch (erro) {
+        console.error('[ERRO] armazenarMensagem:', erro.message);
+    }
+}
+
+// ============================================================================
 // CONEXÃO COM WHATSAPP
 // ============================================================================
 async function conectar() {
@@ -229,19 +243,8 @@ async function conectar() {
         syncFullHistory: false,
         markOnlineOnConnect: true,
         printQRInTerminal: false,
-        logger,
-        // IMPORTANTE: Configuração para getMessage (necessário para reply)
-        getMessage: async (key) => {
-            if (store) {
-                const msg = await store.loadMessage(key.remoteJid, key.id);
-                return msg?.message || undefined;
-            }
-            return undefined;
-        }
+        logger
     });
-
-    // Bind do store ao socket
-    store?.bind(sock.ev);
 
     sock.ev.on('creds.update', saveCreds);
     
@@ -268,6 +271,9 @@ async function conectar() {
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         const m = messages[0];
+        
+        // === ARMAZENA NO CACHE ===
+        armazenarMensagem(m);
         
         // === VALIDAÇÕES INICIAIS ===
         if (!m.message) {
@@ -344,7 +350,7 @@ async function conectar() {
             // === PARA DE DIGITAR ===
             await sock.sendPresenceUpdate('paused', m.key.remoteJid);
             
-            // === ENVIA RESPOSTA (COM REPLY SE HOUVER) ===
+            // === ENVIA RESPOSTA (COM REPLY SE HOUVER MENSAGEM CITADA) ===
             const opcoesEnvio = mensagemCitada ? { quoted: m } : {};
             
             await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoesEnvio);
@@ -370,11 +376,6 @@ async function conectar() {
             
             console.log('═'.repeat(70) + '\n');
         }
-    });
-    
-    // === EVENTO DE MAPEAMENTO LID (NOVO NA BAILEYS v7+) ===
-    sock.ev.on('lid-mapping.update', ({ lid, pn }) => {
-        console.log(`\n🔄 [LID MAPPING] ${lid} ↔️ ${pn}\n`);
     });
 }
 
