@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
+    "@naanzitos/baileys-make-in-memory-store": "^1.0.5",
     "axios": "^1.7.7",
     "express": "^4.21.1",
     "pino": "^9.5.0",
