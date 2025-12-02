@@ -3,11 +3,10 @@
   "version": "2.0.0",
   "description": "Bot Akira integrado com Baileys e API IA - Versão Railway Otimizada",
   "main": "index.js",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js",
-    "test": "node --test"
+    "dev": "node --watch index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
@@ -19,26 +18,16 @@
     "@hapi/boom": "^10.0.1"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "npm": ">=10.0.0"
+    "node": ">=20.0.0"
   },
   "keywords": [
     "whatsapp",
     "bot",
     "baileys",
     "akira",
-    "ia",
-    "railway",
-    "angola",
+    "ai",
     "chatbot"
   ],
-  "author": {
-    "name": "Isaac Quarenta",
-    "company": "Softedge"
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/seu-usuario/akira-bot"
-  }
+  "author": "Isaac Quarenta",
+  "license": "MIT"
 }
