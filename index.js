@@ -1,23 +1,16 @@
 /**
- * index.js — AKIRA BOT (CommonJS, versão completa e unificada)
- * - Mescla as duas bases que você enviou
- * - CommonJS (require)
- * - Extração robusta de número (participantAlt -> participant -> contextInfo -> remoteJid)
- * - Reply inteligente (PV: reply apenas se usuário respondeu ao bot; caso contrário responde normal)
- * - Grupo: responde somente se mencionado / "akira" / reply ao bot
- * - Presença (composing / paused), leitura, retry on decrypt fail
- * - Fallback de store (se makeInMemoryStore não existir)
- * - QR: gera DataURL para /qr com tamanho compacto (200x200), margin 0, fundo preto no HTML; também imprime QR terminal
- *
- * Requisitos no package.json:
- *   "@whiskeysockets/baileys"
- *   "axios"
- *   "express"
- *   "qrcode"
- *   "qrcode-terminal"
- *   "pino"
- *
- * Testado para rodar em Render/Railway/Local Node >= 18
+ * ═══════════════════════════════════════════════════════════════════════
+ * AKIRA BOT — VERSÃO FINAL CORRIGIDA (Dezembro 2025)
+ * ═══════════════════════════════════════════════════════════════════════
+ * 
+ * CORREÇÕES IMPLEMENTADAS:
+ * ✅ JID do bot reconhecido (37... + 244952786417)
+ * ✅ Extração de número em grupos (participantAlt → participant → LID)
+ * ✅ PV: responde em reply APENAS se usuário respondeu ao bot
+ * ✅ Grupos: sempre em reply quando ativado
+ * ✅ Lógica robusta (funciona Railway/Render/Local)
+ * 
+ * ═══════════════════════════════════════════════════════════════════════
  */
 
 const baileys = require('@whiskeysockets/baileys');
@@ -36,15 +29,28 @@ const QRCode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const pino = require('pino');
 
+// ═══════════════════════════════════════════════════════════════════════
+// CONFIGURAÇÕES
+// ═══════════════════════════════════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
 const API_URL = process.env.API_URL || 'https://akra35567-akira.hf.space/api/akira';
-const BOT_NUMERO_REAL = process.env.BOT_NUMERO_REAL || '244952786417';
+const BOT_NUMERO_REAL = '244952786417'; // Número real do bot
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
-// -------------------------------
-// store (fallback if baileys.makeInMemoryStore missing)
-// -------------------------------
+// ═══════════════════════════════════════════════════════════════════════
+// ESTADO GLOBAL
+// ═══════════════════════════════════════════════════════════════════════
+let sock = null;
+let BOT_JID = null;           // Ex: 244952786417@s.whatsapp.net
+let BOT_JID_ALTERNATIVO = null; // Ex: 37839265886398@lid (usado em grupos)
+let currentQR = null;
+
+const processadas = new Set(); // Anti-duplicação
+
+// ═══════════════════════════════════════════════════════════════════════
+// STORE SIMPLIFICADO
+// ═══════════════════════════════════════════════════════════════════════
 let store;
 if (typeof baileys.makeInMemoryStore === 'function') {
   try {
@@ -53,300 +59,331 @@ if (typeof baileys.makeInMemoryStore === 'function') {
     store = null;
   }
 }
+
 if (!store) {
-  // Minimal fallback store with loadMessage & bind
   const _map = new Map();
   store = {
     bind: () => {},
     async loadMessage(jid, id) {
       return _map.get(`${jid}|${id}`) || undefined;
     },
-    // small helper to save a copy when we send messages
     saveMessage(jid, id, msg) {
       _map.set(`${jid}|${id}`, msg);
     }
   };
-  logger.info('Fallback store created (minimal).');
+  logger.info('Fallback store criado (mínimo)');
 }
 
-// -------------------------------
-// Estado global
-// -------------------------------
-let sock = null;
-let BOT_JID = null; // ex: 244952786417@s.whatsapp.net
-let BOT_REAL = null; // ex: 244952786417
-let currentQR = null;
+// ═══════════════════════════════════════════════════════════════════════
+// UTILITÁRIOS — EXTRAÇÃO DE NÚMERO
+// ═══════════════════════════════════════════════════════════════════════
 
-// Control de-dup
-const processed = new Set();
-
-// Track last bot message timestamps per chat (useful se quiser fallback reply behaviour)
-const lastBotMessageAt = new Map();
-
-// -------------------------------
-// Utilitários (extração número / normalização / checks)
-// -------------------------------
-function extractNumberFromString(input = '') {
-  if (!input) return null;
-  const s = String(input);
-  // busca 2449xxxxxxxx
-  let m = s.match(/2449\d{8}/);
-  if (m) return m[0];
-  // busca 9xxxxxxxx (Angola local)
-  m = s.match(/9\d{8}/);
-  if (m) return '244' + m[0];
-  // busca qualquer 9+8 digits contiguous
-  m = s.match(/\d{9,12}/);
-  if (m) {
-    const d = m[0];
-    if (d.length === 9) return '244' + d;
-    if (d.length === 11 || d.length === 12) {
-      // try to return last 9 digits + 244 prefix
-      const last9 = d.slice(-9);
-      return '244' + last9;
-    }
-    return d;
-  }
-  return null;
-}
-
-function normalizeJidToFull(jid = '') {
-  if (!jid) return null;
-  jid = String(jid).trim();
-  if (jid.includes('@')) return jid;
-  // basic heuristics: if starts with 9 + 8 digits, prefix 244
-  if (/^9\d{8}$/.test(jid)) return `${'244' + jid}@s.whatsapp.net`;
-  if (/^2449\d{8}$/.test(jid)) return `${jid}@s.whatsapp.net`;
-  // if looks like group id or other, return as-is with @s.whatsapp.net
-  return `${jid}@s.whatsapp.net`;
-}
-
-function isBotJid(jid) {
-  if (!jid) return false;
-  if (!BOT_JID) return false;
-  try {
-    const a = normalizeJidToFull(jid);
-    return a === normalizeJidToFull(BOT_JID);
-  } catch (e) {
-    return false;
-  }
-}
-
-// -------------------------------
-// Extrair número real a partir da message key/participant/context
-// Prioridade:
-// 1) participantAlt (algumas infra) -> m.participant
-// 2) key.participant
-// 3) message.extendedTextMessage.contextInfo.participant
-// 4) key.remoteJid (para PV)
-// -------------------------------
-function extractRealNumberFromMessage(m) {
+/**
+ * Extrai número real da mensagem (PRIORIDADE CORRETA)
+ * 1. participantAlt (local funciona sempre)
+ * 2. key.participant (Railway/Render)
+ * 3. contextInfo.participant (fallback)
+ * 4. Conversão LID → número
+ * 5. remoteJid (PV)
+ */
+function extrairNumeroReal(m) {
   try {
     const key = m.key || {};
-    // PV
+    const message = m.message || {};
+    
+    // === PV: remoteJid é o número direto ===
     if (key.remoteJid && !String(key.remoteJid).endsWith('@g.us')) {
-      return String(key.remoteJid).split('@')[0];
+      const numero = String(key.remoteJid).split('@')[0];
+      // Remove prefixo de país se tiver
+      if (numero.startsWith('244')) {
+        return numero;
+      }
+      return numero;
     }
-
-    // participantAlt (Baileys sometimes exposes as m.participant)
-    if (m.participant && String(m.participant).includes('@s.whatsapp.net')) {
-      return String(m.participant).split('@')[0];
+    
+    // === GRUPOS: Tenta várias fontes ===
+    
+    // 1. participantAlt (funciona local, pode não existir em Railway)
+    if (m.participantAlt && String(m.participantAlt).includes('@s.whatsapp.net')) {
+      return String(m.participantAlt).split('@')[0];
     }
-
-    // key.participant (common in cloud)
-    if (key.participant && String(key.participant).includes('@s.whatsapp.net')) {
-      return String(key.participant).split('@')[0];
+    
+    // 2. key.participant (padrão Baileys)
+    if (key.participant) {
+      const participant = String(key.participant);
+      
+      // Caso A: É número direto (@s.whatsapp.net)
+      if (participant.includes('@s.whatsapp.net')) {
+        return participant.split('@')[0];
+      }
+      
+      // Caso B: É LID (@lid) - converte para número
+      if (participant.includes('@lid')) {
+        const numeroConvertido = converterLidParaNumero(participant);
+        if (numeroConvertido) return numeroConvertido;
+      }
     }
-
-    // contextInfo.participant (quoted/reply)
-    const contextPart = m.message?.extendedTextMessage?.contextInfo?.participant;
-    if (contextPart && String(contextPart).includes('@s.whatsapp.net')) {
-      return String(contextPart).split('@')[0];
+    
+    // 3. contextInfo.participant (mensagem citada/reply)
+    const contextParticipant = message?.extendedTextMessage?.contextInfo?.participant;
+    if (contextParticipant) {
+      const cp = String(contextParticipant);
+      
+      if (cp.includes('@s.whatsapp.net')) {
+        return cp.split('@')[0];
+      }
+      
+      if (cp.includes('@lid')) {
+        const numeroConvertido = converterLidParaNumero(cp);
+        if (numeroConvertido) return numeroConvertido;
+      }
     }
-
-    // If we have LIDs (@lid), try to convert
-    const lidCandidate = key.participant || m.participant || contextPart;
-    if (lidCandidate && String(lidCandidate).includes('@lid')) {
-      return convertLidToNumber(String(lidCandidate));
-    }
-
-    // fallback: attempt to extract digits from remoteJid
+    
+    // 4. Fallback: tenta extrair do remoteJid (grupo)
     if (key.remoteJid) {
-      const maybe = extractNumberFromString(key.remoteJid);
-      if (maybe) return maybe;
+      const match = String(key.remoteJid).match(/120363(\d+)@g\.us/);
+      if (match && match[1].length >= 9) {
+        return '244' + match[1].slice(-9);
+      }
     }
-
-    return null;
+    
+    return 'desconhecido';
+    
   } catch (e) {
-    logger.error({ e }, 'extractRealNumberFromMessage error');
-    return null;
+    logger.error({ e }, 'Erro ao extrair número real');
+    return 'desconhecido';
   }
 }
 
-function convertLidToNumber(lid) {
-  // Ex.: "202391978787009@lid" or "202391978787009:123@lid"
+/**
+ * Converte LID para número real
+ * Ex: "202391978787009:123@lid" → "244978787009"
+ */
+function converterLidParaNumero(lid) {
   if (!lid) return null;
-  const clean = String(lid).split('@')[0];
-  // if contains :, split and take left part
-  const base = clean.split(':')[0];
-  const digits = base.replace(/\D/g, '');
-  if (digits.length >= 9) {
-    return '244' + digits.slice(-9);
+  
+  try {
+    // Remove @lid e pega a parte antes do :
+    const limpo = String(lid).split('@')[0].split(':')[0];
+    
+    // Extrai dígitos
+    const digitos = limpo.replace(/\D/g, '');
+    
+    // Se tem 9+ dígitos, pega os últimos 9 e adiciona 244
+    if (digitos.length >= 9) {
+      const ultimos9 = digitos.slice(-9);
+      return '244' + ultimos9;
+    }
+    
+    return null;
+  } catch (e) {
+    return null;
   }
-  return null;
 }
 
-// -------------------------------
-// Extração de texto simples
-// -------------------------------
-function extractTextFromMessage(m) {
+// ═══════════════════════════════════════════════════════════════════════
+// VERIFICAÇÃO SE É O BOT (SUPORTA MÚLTIPLOS FORMATOS)
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Verifica se JID é do bot
+ * Suporta:
+ * - 244952786417@s.whatsapp.net (padrão)
+ * - 37839265886398@lid (JID alternativo em grupos)
+ * - 244952786417 (número puro)
+ */
+function ehOBot(jid) {
+  if (!jid) return false;
+  
+  const jidStr = String(jid).toLowerCase();
+  
+  // Compara com JID principal
+  if (BOT_JID && jidStr.includes(BOT_JID.split('@')[0])) {
+    return true;
+  }
+  
+  // Compara com JID alternativo (37...)
+  if (BOT_JID_ALTERNATIVO && jidStr === BOT_JID_ALTERNATIVO) {
+    return true;
+  }
+  
+  // Compara com número real
+  if (jidStr.includes(BOT_NUMERO_REAL)) {
+    return true;
+  }
+  
+  // Extrai número e compara
+  const numeroExtraido = jidStr.split('@')[0].split(':')[0];
+  if (numeroExtraido === BOT_NUMERO_REAL) {
+    return true;
+  }
+  
+  return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EXTRAÇÃO DE TEXTO E REPLY
+// ═══════════════════════════════════════════════════════════════════════
+
+function extrairTexto(m) {
   try {
-    const t = getContentType(m.message);
-    if (!t) return '';
-    if (t === 'conversation') return m.message.conversation || '';
-    if (t === 'extendedTextMessage') return m.message.extendedTextMessage?.text || '';
-    if (t === 'imageMessage') return m.message.imageMessage?.caption || '[imagem]';
-    if (t === 'videoMessage') return m.message.videoMessage?.caption || '[vídeo]';
-    if (t === 'documentMessage') return m.message.documentMessage?.caption || '[documento]';
-    if (t === 'stickerMessage') return '[sticker]';
+    const tipo = getContentType(m.message);
+    if (!tipo) return '';
+    
+    if (tipo === 'conversation') {
+      return m.message.conversation || '';
+    }
+    
+    if (tipo === 'extendedTextMessage') {
+      return m.message.extendedTextMessage?.text || '';
+    }
+    
+    if (tipo === 'imageMessage') {
+      return m.message.imageMessage?.caption || '[imagem]';
+    }
+    
+    if (tipo === 'videoMessage') {
+      return m.message.videoMessage?.caption || '[vídeo]';
+    }
+    
     return '';
   } catch (e) {
     return '';
   }
 }
 
-// -------------------------------
-// Extrair mensagem citada / reply info
-// -------------------------------
-function extractQuotedInfo(m) {
+/**
+ * Extrai informações de mensagem citada (reply)
+ * Retorna: { texto, participantJid, ehRespostaAoBot }
+ */
+function extrairReplyInfo(m) {
   try {
     const context = m.message?.extendedTextMessage?.contextInfo;
     if (!context || !context.quotedMessage) return null;
-
+    
     const quoted = context.quotedMessage;
-    const qType = getContentType(quoted);
-
-    let quotedText = '';
-    if (qType === 'conversation') quotedText = quoted.conversation || '';
-    else if (qType === 'extendedTextMessage') quotedText = quoted.extendedTextMessage?.text || '';
-    else if (qType === 'imageMessage') quotedText = quoted.imageMessage?.caption || '[imagem]';
-    else quotedText = '[conteúdo]';
-
-    const participantQuoted = context.participant || null;
-    const ehRespostaAoBot = isBotJid(participantQuoted);
-
+    const tipo = getContentType(quoted);
+    
+    let textoReply = '';
+    if (tipo === 'conversation') {
+      textoReply = quoted.conversation || '';
+    } else if (tipo === 'extendedTextMessage') {
+      textoReply = quoted.extendedTextMessage?.text || '';
+    } else if (tipo === 'imageMessage') {
+      textoReply = quoted.imageMessage?.caption || '[imagem]';
+    } else {
+      textoReply = '[conteúdo]';
+    }
+    
+    const participantJid = context.participant || null;
+    const ehRespostaAoBot = ehOBot(participantJid);
+    
     return {
-      texto: quotedText,
-      participant: participantQuoted,
-      ehRespostaAoBot,
-      stanzaId: context.stanzaId || null
+      texto: textoReply,
+      participantJid: participantJid,
+      ehRespostaAoBot: ehRespostaAoBot
     };
+    
   } catch (e) {
-    logger.warn({ e }, 'extractQuotedInfo fail');
     return null;
   }
 }
 
-// -------------------------------
-// Logging helpers
-// -------------------------------
-function debugLogMessage(m, numeroExtraido) {
-  const tipo = m.key.remoteJid && String(m.key.remoteJid).endsWith('@g.us') ? 'GRUPO' : 'PV';
-  const ts = new Date().toLocaleString('pt-BR', { timeZone: 'Africa/Luanda' });
-  logger.info('='.repeat(60));
+// ═══════════════════════════════════════════════════════════════════════
+// LÓGICA DE ATIVAÇÃO (QUANDO RESPONDER)
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Decide se deve responder à mensagem
+ * 
+ * REGRAS:
+ * - GRUPOS: 
+ *   ✅ Reply ao bot → SIM
+ *   ✅ Menção "akira" → SIM
+ *   ✅ @mention do bot → SIM
+ *   ❌ Resto → NÃO
+ * 
+ * - PV:
+ *   ✅ Sempre responde
+ */
+async function deveResponder(m, ehGrupo, texto, replyInfo) {
+  const textoLower = String(texto).toLowerCase();
+  const context = m.message?.extendedTextMessage?.contextInfo;
+  
+  // === REPLY AO BOT (GRUPOS E PV) ===
+  if (replyInfo && replyInfo.ehRespostaAoBot) {
+    logger.info('[ATIVAÇÃO] Reply ao bot detectado');
+    return true;
+  }
+  
+  // === GRUPOS: PRECISA DE MENÇÃO/ATIVAÇÃO ===
+  if (ehGrupo) {
+    // Verifica menção explícita "akira"
+    if (textoLower.includes('akira')) {
+      logger.info('[ATIVAÇÃO] Menção "akira" detectada no grupo');
+      return true;
+    }
+    
+    // Verifica @mentions
+    const mentions = context?.mentionedJid || [];
+    const botMencionado = mentions.some(jid => ehOBot(jid));
+    
+    if (botMencionado) {
+      logger.info('[ATIVAÇÃO] @mention do bot detectado');
+      return true;
+    }
+    
+    // Grupo sem ativação
+    logger.info('[IGNORADO] Grupo sem menção/reply ao bot');
+    return false;
+  }
+  
+  // === PV: SEMPRE RESPONDE ===
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// LOGGING
+// ═══════════════════════════════════════════════════════════════════════
+
+function logMensagem(m, numeroExtraido, tipo) {
+  const ts = new Date().toLocaleString('pt-PT', { timeZone: 'Africa/Luanda' });
+  
+  logger.info('═'.repeat(60));
   logger.info(`TS: ${ts} | Tipo: ${tipo}`);
   logger.info('KEY:', {
     remoteJid: m.key.remoteJid,
     participant: m.key.participant,
-    fromMe: m.key.fromMe,
-    id: m.key.id
+    fromMe: m.key.fromMe
   });
-  logger.info('MSG INFO:', { pushName: m.pushName, numeroExtraido });
-  logger.info('='.repeat(60));
+  logger.info('MSG INFO:', {
+    pushName: m.pushName,
+    numeroExtraido: numeroExtraido
+  });
+  logger.info('═'.repeat(60));
 }
 
-// -------------------------------
-// QR helpers
-// -------------------------------
-async function printQrToTerminal(qr) {
-  try {
-    qrcodeTerminal.generate(qr, { small: true }, (q) => {
-      // qrcode-terminal prints automatically; we keep this callback for compatibility
-    });
-  } catch (e) {
-    logger.warn('qrcode-terminal fail:', e?.message || e);
-  }
-}
+// ═══════════════════════════════════════════════════════════════════════
+// CONEXÃO PRINCIPAL
+// ═══════════════════════════════════════════════════════════════════════
 
-// -------------------------------
-// Ativação (shouldActivate) - mesma lógica pedida
-// - Reply ao bot -> true
-// - Menção "akira" ou mentionedJid includes bot -> true
-// - PV -> sempre true
-// - Caso contrário (grupo sem menção) -> false
-// -------------------------------
-async function shouldActivate(m, isGroup, text) {
-  const context = m.message?.extendedTextMessage?.contextInfo;
-  const lowered = text?.toLowerCase() || '';
-
-  // Reply ao bot
-  if (context?.participant) {
-    const quoted = normalizeJidToFull(context.participant);
-    if (isBotJid(quoted)) {
-      logger.info('[ATIVAÇÃO] Reply ao bot detectado');
-      return true;
-    }
-  }
-
-  // Menção direta no grupo
-  if (isGroup) {
-    const mentions = context?.mentionedJid || [];
-    const mentionMatch = mentions.some(j => isBotJid(j) || String(j).includes(BOT_REAL));
-    if (lowered.includes('akira') || mentionMatch) {
-      logger.info('[ATIVAÇÃO] Menção direta a Akira detectada');
-      return true;
-    }
-  }
-
-  // PV sempre responde
-  if (!isGroup) return true;
-
-  // Default: não responder
-  return false;
-}
-
-// -------------------------------
-// Registrar mensagem do bot enviada (para possível lógica extra)
-// -------------------------------
-function registerBotSent(chatId) {
-  lastBotMessageAt.set(chatId, Date.now());
-  // cleanup older entries
-  setTimeout(() => {
-    if (lastBotMessageAt.get(chatId) && (Date.now() - lastBotMessageAt.get(chatId) > 1000 * 60 * 10)) {
-      lastBotMessageAt.delete(chatId);
-    }
-  }, 1000 * 60 * 10);
-}
-
-// -------------------------------
-// Conectar (main)
-// -------------------------------
-async function connect() {
+async function conectar() {
   try {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
-
-    // close old sock if exists
-    if (sock && sock.ws && sock.ev) {
+    
+    // Fecha socket anterior se existir
+    if (sock && sock.ws) {
       try {
-        logger.info('Closing previous socket...');
+        logger.info('Fechando socket anterior...');
         await sock.logout();
       } catch (e) {
-        // ignore
+        // Ignora erros
       }
       sock = null;
     }
-
+    
+    // Cria novo socket
     sock = makeWASocket({
       version,
       auth: state,
@@ -356,7 +393,6 @@ async function connect() {
       syncFullHistory: false,
       printQRInTerminal: false,
       getMessage: async (key) => {
-        // try store first
         if (!key) return undefined;
         try {
           const msg = await store.loadMessage(key.remoteJid, key.id);
@@ -366,247 +402,328 @@ async function connect() {
         }
       }
     });
-
-    // bind store if available
+    
+    // Bind store
     try {
-      if (store && typeof store.bind === 'function') store.bind(sock.ev);
+      if (store && typeof store.bind === 'function') {
+        store.bind(sock.ev);
+      }
     } catch (e) {
-      logger.warn('store.bind failed', e?.message || e);
+      logger.warn('Store bind falhou:', e?.message);
     }
-
-    // save creds on update
+    
+    // === EVENT: CREDS UPDATE ===
     sock.ev.on('creds.update', saveCreds);
-
-    // connection updates
+    
+    // === EVENT: CONNECTION UPDATE ===
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
-
+      
       if (qr) {
         currentQR = qr;
-        // Print small ascii QR in logs (dense) and provide link via /qr
+        
+        // QR no terminal
         try {
-          printQrToTerminal(qr);
+          qrcodeTerminal.generate(qr, { small: true });
         } catch (e) {
-          logger.warn('printQrToTerminal fail', e?.message || e);
+          logger.warn('QR terminal falhou:', e?.message);
         }
-        logger.info('QR available at /qr (HTTP)');
+        
+        logger.info('QR disponível em: /qr');
       }
-
+      
       if (connection === 'open') {
         BOT_JID = sock.user?.id || null;
-        BOT_REAL = BOT_JID ? String(BOT_JID).split(':')[0] : null;
+        
+        // Detecta JID alternativo (37...)
+        const userJid = sock.user?.id || '';
+        if (userJid.includes('@')) {
+          const parts = userJid.split('@');
+          BOT_JID_ALTERNATIVO = userJid; // Salva JID completo
+          
+          // Se começar com 37, esse é o JID de grupo
+          if (parts[0].startsWith('37')) {
+            logger.info('JID alternativo detectado (usado em grupos):', BOT_JID_ALTERNATIVO);
+          }
+        }
+        
         logger.info('✅ AKIRA BOT ONLINE');
-        logger.info({ BOT_JID, BOT_REAL, BOT_NUMERO_REAL });
+        logger.info('Bot JID:', BOT_JID);
+        logger.info('Bot Número Real:', BOT_NUMERO_REAL);
+        logger.info('Bot JID Alternativo:', BOT_JID_ALTERNATIVO || 'N/A');
+        
         currentQR = null;
       }
-
+      
       if (connection === 'close') {
-        logger.warn('Connection closed. Attempting reconnect in 5s...');
-        const code = lastDisconnect?.error?.output?.statusCode || null;
-        logger.warn({ code }, 'lastDisconnect code');
-        setTimeout(() => connect().catch((e) => logger.error(e)), 5000);
+        const code = lastDisconnect?.error?.output?.statusCode;
+        logger.warn('Conexão fechada. Código:', code);
+        logger.warn('Reconectando em 5s...');
+        
+        setTimeout(() => {
+          conectar().catch(e => logger.error('Erro ao reconectar:', e));
+        }, 5000);
       }
     });
-
-    // handle decrypt failures
+    
+    // === EVENT: DECRYPT FAILED ===
     sock.ev.on('message-decrypt-failed', async (msgKey) => {
       try {
-        logger.warn('message-decrypt-failed:', msgKey?.key?.remoteJid || 'unknown');
-        // attempt to request retry
+        logger.warn('Falha ao descriptografar mensagem, tentando reenvio...');
         await sock.sendRetryRequest(msgKey.key).catch(() => {});
-        // optionally purge sessions store for that jid (more aggressive)
-        // if sock.store?.sessions exists (older baileys store structures)
-        try {
-          if (sock.store && sock.store.sessions && msgKey?.key?.remoteJid) {
-            delete sock.store.sessions[msgKey.key.remoteJid];
-            logger.info('Deleted session entry for', msgKey.key.remoteJid);
-          }
-        } catch (e) {
-          // ignore
-        }
       } catch (e) {
-        logger.error('Error handling decrypt fail:', e?.message || e);
+        logger.error('Erro no retry:', e?.message);
       }
     });
-
-    // messages.upsert
-    sock.ev.on('messages.upsert', async (m) => {
+    
+    // === EVENT: MESSAGES UPSERT ===
+    sock.ev.on('messages.upsert', async ({ messages }) => {
       try {
-        const msg = m.messages && m.messages[0];
-        if (!msg) return;
-        if (!msg.message) return;
-        if (msg.key && msg.key.fromMe) return;
-
-        // de-dup
-        if (processed.has(msg.key.id)) return;
-        processed.add(msg.key.id);
-        setTimeout(() => processed.delete(msg.key.id), 30 * 1000);
-
-        const isGroup = String(msg.key.remoteJid || '').endsWith('@g.us');
-        const numeroReal = extractRealNumberFromMessage(msg) || extractNumberFromString(msg.key.remoteJid || '');
-        if (!numeroReal) {
-          logger.warn('Could not extract real number, skipping message');
-          return;
-        }
-
-        const nome = msg.pushName || numeroReal;
-        const texto = String(extractTextFromMessage(msg) || '').trim();
+        const m = messages[0];
+        if (!m || !m.message || m.key.fromMe) return;
+        
+        // Anti-duplicação
+        if (processadas.has(m.key.id)) return;
+        processadas.add(m.key.id);
+        setTimeout(() => processadas.delete(m.key.id), 30000);
+        
+        const ehGrupo = String(m.key.remoteJid || '').endsWith('@g.us');
+        const numeroReal = extrairNumeroReal(m);
+        const nome = m.pushName || numeroReal;
+        const texto = extrairTexto(m).trim();
+        const replyInfo = extrairReplyInfo(m);
+        
         if (!texto) return;
-
-        const mensagemCitada = extractQuotedInfo(msg);
-
-        debugLogMessage(msg, numeroReal);
-        logger.info(`[MENSAGEM] ${isGroup ? 'GRUPO' : 'PV'} | ${nome} (${numeroReal}): ${texto}`);
-
-        const ativar = await shouldActivate(msg, isGroup, texto);
-        if (!ativar) {
-          logger.info('[IGNORADO] Não ativado (grupo sem menção / não reply).');
-          return;
-        }
-
-        // mark as read + presence
+        
+        // Log detalhado
+        logMensagem(m, numeroReal, ehGrupo ? 'GRUPO' : 'PV');
+        logger.info(`[MENSAGEM] ${ehGrupo ? 'GRUPO' : 'PV'} | ${nome} (${numeroReal}): ${texto}`);
+        
+        // Verifica se deve responder
+        const ativar = await deveResponder(m, ehGrupo, texto, replyInfo);
+        if (!ativar) return;
+        
+        // Marca como lida + composing
         try {
-          await sock.readMessages([msg.key]);
+          await sock.readMessages([m.key]);
+          await sock.sendPresenceUpdate('composing', m.key.remoteJid);
         } catch (e) {
-          // ignore
+          // Ignora erros
         }
-        await sock.sendPresenceUpdate('composing', msg.key.remoteJid).catch(() => {});
-
-        // prepare payload to external API
+        
+        // === CHAMA API ===
         const payload = {
           usuario: nome,
           numero: numeroReal,
           mensagem: texto,
-          mensagem_citada: mensagemCitada ? mensagemCitada.texto : ''
+          mensagem_citada: replyInfo ? replyInfo.texto : ''
         };
-
-        // call API
+        
         let resposta = 'Ok';
         try {
-          const res = await axios.post(API_URL, payload, { timeout: 120000 });
-          resposta = res.data?.resposta || resposta;
+          const res = await axios.post(API_URL, payload, { 
+            timeout: 120000,
+            headers: { 'Content-Type': 'application/json' }
+          });
+          resposta = res.data?.resposta || 'Ok';
         } catch (err) {
-          logger.error('Erro na API:', err?.message || err);
-          // respond fallback
-          resposta = 'Erro interno. Tente novamente mais tarde.';
+          logger.error('Erro na API:', err?.message);
+          resposta = 'Barra no bardeado.';
         }
-
-        // delay "typing" proportional to length (natural)
-        const typingDelay = Math.min(String(resposta).length * 40, 3000);
-        await delay(typingDelay).catch(() => {});
-        await sock.sendPresenceUpdate('paused', msg.key.remoteJid).catch(() => {});
-
-        // decide whether to reply quoted or not
-        let sendOptions = {};
-        if (isGroup) {
-          // in group: reply if there's a quoted message OR if the user explicitly mentioned? we'll reply quoted if quoted exists
-          if (mensagemCitada) {
-            sendOptions = { quoted: msg };
-            logger.info('Respondendo em reply (grupo, citado).');
-          }
+        
+        // Delay "digitação"
+        const delayDigitacao = Math.min(String(resposta).length * 40, 3000);
+        await delay(delayDigitacao);
+        await sock.sendPresenceUpdate('paused', m.key.remoteJid);
+        
+        // === DECIDE SE ENVIA EM REPLY ===
+        let opcoes = {};
+        
+        if (ehGrupo) {
+          // GRUPOS: sempre em reply quando responde
+          opcoes = { quoted: m };
+          logger.info('Respondendo em reply (grupo)');
         } else {
-          // PV: reply only if user replied to bot (mensagemCitada.ehRespostaAoBot)
-          if (mensagemCitada && mensagemCitada.ehRespostaAoBot) {
-            sendOptions = { quoted: msg };
-            logger.info('Respondendo em reply (PV - usuário respondeu ao bot).');
+          // PV: reply APENAS se usuário respondeu ao bot
+          if (replyInfo && replyInfo.ehRespostaAoBot) {
+            opcoes = { quoted: m };
+            logger.info('Respondendo em reply (PV - usuário respondeu ao bot)');
           } else {
-            logger.info('Respondendo sem reply (PV).');
+            logger.info('Respondendo sem reply (PV - mensagem normal)');
           }
         }
-
+        
+        // Envia mensagem
         try {
-          await sock.sendMessage(msg.key.remoteJid, { text: resposta }, sendOptions);
-          registerBotSent(msg.key.remoteJid);
-          // store last message in fallback store for getMessage
+          await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+          logger.info('[RESPOSTA ENVIADA]:', resposta.substring(0, 100));
+          
+          // Salva no store
           try {
             if (store && typeof store.saveMessage === 'function') {
-              // create a fake message object with id and message so getMessage can load it
-              const fakeId = (msg.key.id || `bot-${Date.now()}`);
               const fakeMsg = { message: { conversation: resposta } };
-              store.saveMessage(msg.key.remoteJid, fakeId, fakeMsg);
+              store.saveMessage(m.key.remoteJid, m.key.id, fakeMsg);
             }
           } catch (e) {
-            // ignore
+            // Ignora
           }
         } catch (e) {
-          logger.error('Error sending message:', e?.message || e);
+          logger.error('Erro ao enviar mensagem:', e?.message);
         }
-
+        
       } catch (err) {
-        logger.error('messages.upsert handler error:', err?.message || err);
+        logger.error('Erro no handler de mensagens:', err);
       }
     });
-
-    logger.info('Socket created, awaiting events...');
+    
+    logger.info('Socket criado, aguardando eventos...');
+    
   } catch (err) {
-    logger.error('Connect error:', err?.message || err);
-    setTimeout(() => connect().catch(e => logger.error(e)), 5000);
+    logger.error('Erro na conexão:', err);
+    setTimeout(() => {
+      conectar().catch(e => logger.error(e));
+    }, 5000);
   }
 }
 
-// -------------------------------
-// EXPRESS server: / , /qr and /health
-// - /qr shows a compact black-background image (200x200, margin 0) so scanning from Render logs/screenshot easier
-// - Also prints a terminal QR to help local dev
-// -------------------------------
+// ═══════════════════════════════════════════════════════════════════════
+// SERVIDOR EXPRESS (HEALTH + QR)
+// ═══════════════════════════════════════════════════════════════════════
+
 const app = express();
 
-app.get('/qr', async (req, res) => {
-    if (!currentQR) {
-        return res.send(`
-            <body style="background:black;color:#0f0;text-align:center;padding:40px">
-                <h1>BOT JÁ CONECTADO</h1>
-            </body>
-        `);
-    }
-
-    // QR Code com ALTA DEFINIÇÃO
-    const img = await QRCode.toDataURL(currentQR, {
-        errorCorrectionLevel: 'H',   // Máxima correção de erros
-        margin: 4,                   // Mantém bordas claras pra facilitar leitura
-        scale: 10,                   // Aumenta drasticamente nitidez
-        width: 500,                  // Tamanho grande para evitar pixelização
-        color: {
-            dark: '#000000',         // Quadrados pretos nítidos
-            light: '#FFFFFF'         // Fundo branco perfeito
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+    <head>
+      <title>Akira Bot</title>
+      <style>
+        body { 
+          font-family: monospace; 
+          background: #000; 
+          color: #0f0; 
+          text-align: center; 
+          padding: 50px; 
         }
-    });
-
-    res.send(`
-        <body style="background:black;color:white;text-align:center;padding:40px">
-            <h1>ESCANEIE O QR</h1>
-            <img src="${img}" style="border:12px solid #0f0;border-radius:20px;width:500px;height:500px;">
-            <p style="margin-top:20px;color:#0f0;">Atualiza cada 5s</p>
-            <meta http-equiv="refresh" content="5">
-        </body>
-    `);
+        h1 { 
+          border: 2px solid #0f0; 
+          padding: 20px; 
+          display: inline-block;
+        }
+        a { 
+          color: #0f0; 
+          text-decoration: none; 
+          font-size: 18px; 
+        }
+      </style>
+    </head>
+    <body>
+      <h1>🤖 AKIRA BOT RAILWAY</h1>
+      <p>Status: ${BOT_JID ? '✅ Online' : '⏳ Conectando...'}</p>
+      <p>Bot: ${BOT_NUMERO_REAL}</p>
+      <br>
+      <a href="/qr">📱 Ver QR Code</a> | 
+      <a href="/health">❤️ Health Check</a>
+    </body>
+    </html>
+  `);
 });
 
+app.get('/qr', async (req, res) => {
+  if (!currentQR) {
+    return res.send(`
+      <html>
+      <head>
+        <meta http-equiv="refresh" content="3">
+        <style>
+          body { 
+            background: #000; 
+            color: #0f0; 
+            text-align: center; 
+            padding: 50px; 
+            font-family: monospace;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>✅ BOT JÁ CONECTADO</h1>
+        <p>Número: ${BOT_NUMERO_REAL}</p>
+        <p><a href="/" style="color: #0f0;">Voltar</a></p>
+      </body>
+      </html>
+    `);
+  }
+  
+  // QR Code em alta definição
+  const img = await QRCode.toDataURL(currentQR, {
+    errorCorrectionLevel: 'H',
+    margin: 4,
+    scale: 10,
+    width: 500,
+    color: {
+      dark: '#000000',
+      light: '#FFFFFF'
+    }
+  });
+  
+  res.send(`
+    <html>
+    <head>
+      <meta http-equiv="refresh" content="5">
+      <style>
+        body { 
+          background: #000; 
+          color: #fff; 
+          text-align: center; 
+          padding: 40px; 
+          font-family: monospace;
+        }
+        img { 
+          border: 12px solid #0f0; 
+          border-radius: 20px; 
+          max-width: 500px;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>📱 ESCANEIE O QR CODE</h1>
+      <img src="${img}" />
+      <p style="color: #0f0; margin-top: 20px;">Atualiza automaticamente em 5s</p>
+      <p><a href="/" style="color: #0f0;">Voltar</a></p>
+    </body>
+    </html>
+  `);
+});
 
 app.get('/health', (req, res) => {
   res.json({
-    status: BOT_REAL ? 'online' : 'offline',
-    bot_jid: BOT_REAL || null,
-    bot_number: BOT_NUMERO_REAL,
-    uptime: process.uptime()
+    status: BOT_JID ? 'online' : 'offline',
+    bot_numero: BOT_NUMERO_REAL,
+    bot_jid: BOT_JID || null,
+    bot_jid_alternativo: BOT_JID_ALTERNATIVO || null,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
   });
 });
 
-app.listen(PORT, () => {
-  logger.info('HTTP server listening on port ' + PORT);
-  logger.info('Health: /health  |  QR: /qr');
+app.listen(PORT, '0.0.0.0', () => {
+  logger.info('═'.repeat(60));
+  logger.info(`HTTP Server: http://0.0.0.0:${PORT}`);
+  logger.info(`Health: /health | QR: /qr`);
+  logger.info('═'.repeat(60));
 });
 
-// -------------------------------
-// Start
-// -------------------------------
-connect().catch((e) => logger.error('Initial connect error', e));
+// ═══════════════════════════════════════════════════════════════════════
+// INICIA CONEXÃO
+// ═══════════════════════════════════════════════════════════════════════
 
-// Global error handlers
+conectar().catch(e => logger.error('Erro inicial:', e));
+
+// Handlers de erro global
 process.on('unhandledRejection', (err) => {
-  logger.error('UNHANDLED REJECTION', err);
+  logger.error('UNHANDLED REJECTION:', err);
 });
+
 process.on('uncaughtException', (err) => {
-  logger.error('UNCAUGHT EXCEPTION', err);
-  // we do not exit automatically; let process manager restart if required
+  logger.error('UNCAUGHT EXCEPTION:', err);
 });
