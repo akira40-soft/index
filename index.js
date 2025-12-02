@@ -43,7 +43,7 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 // ═══════════════════════════════════════════════════════════════════════
 let sock = null;
 let BOT_JID = null;           // Ex: 244952786417@s.whatsapp.net
-let BOT_JID_ALTERNATIVO = null; // Ex: 37839265886398@lid (usado em grupos)
+let BOT_JID_ALTERNATIVO =  37839265886398; // Ex: 37839265886398@lid (usado em grupos)
 let currentQR = null;
 
 const processadas = new Set(); // Anti-duplicação
