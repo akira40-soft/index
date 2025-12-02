@@ -163,7 +163,7 @@ function extrairTextoMensagem(m) {
         const mapaTipos = {
             'conversation': () => m.message.conversation || '',
             'extendedTextMessage': () => m.message.extendedTextMessage?.text || '',
-            'imageMessage': () => m.message.imageMessage?.caption || '[Imagem]'],
+            'imageMessage': () => m.message.imageMessage?.caption || '[Imagem]',
             'videoMessage': () => m.message.videoMessage?.caption || '[Vídeo]',
             'documentMessage': () => m.message.documentMessage?.caption || '[Documento]',
             'audioMessage': () => '[Áudio]',
