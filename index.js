@@ -551,84 +551,37 @@ async function connect() {
 // -------------------------------
 const app = express();
 
-app.get('/', (req, res) => {
-  const statusHtml = BOT_REAL ? '<span style="color:#0f0;">ONLINE</span>' : '<span style="color:#f90;">AGUARDANDO QR</span>';
-  res.send(`
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8"/>
-        <meta name="viewport" content="width=device-width,initial-scale=1"/>
-        <title>Akira Bot</title>
-        <style>
-          body{background:#000;color:#0f0;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-          .card{border:2px solid #0f0;padding:24px;border-radius:8px;max-width:600px;text-align:center}
-          a{color:#000;background:#0f0;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:bold}
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>🤖 AKIRA BOT</h1>
-          <p>Status: ${statusHtml}</p>
-          <p>Número configurado: <strong>${BOT_NUMERO_REAL}</strong></p>
-          <p>JID atual: <strong>${BOT_REAL || 'N/A'}</strong></p>
-          <p><a href="/qr">📱 VER QR (200x200)</a></p>
-        </div>
-      </body>
-    </html>
-  `);
-});
-
 app.get('/qr', async (req, res) => {
-  if (!currentQR) {
-    // if already connected
-    return res.send(`
-      <div style="background:#000;color:#0f0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace">
-        <div style="text-align:center">
-          <h1>✅ BOT CONECTADO</h1>
-          <p>JID: ${BOT_REAL || 'N/A'}</p>
-          <p><a href="/" style="color:#0f0">Voltar</a></p>
-        </div>
-      </div>
-    `);
-  }
+    if (!currentQR) {
+        return res.send(`
+            <body style="background:black;color:#0f0;text-align:center;padding:40px">
+                <h1>BOT JÁ CONECTADO</h1>
+            </body>
+        `);
+    }
 
-  try {
-    // compact QR image: margin 0, width 200 -> module blocks will be tight
-    const dataUrl = await QRCode.toDataURL(currentQR, { margin: 0, width: 200 });
-    // also print a dense ASCII QR to logs (for dev)
-    try { printQrToTerminal(currentQR); } catch (e){}
+    // QR Code com ALTA DEFINIÇÃO
+    const img = await QRCode.toDataURL(currentQR, {
+        errorCorrectionLevel: 'H',   // Máxima correção de erros
+        margin: 4,                   // Mantém bordas claras pra facilitar leitura
+        scale: 10,                   // Aumenta drasticamente nitidez
+        width: 500,                  // Tamanho grande para evitar pixelização
+        color: {
+            dark: '#000000',         // Quadrados pretos nítidos
+            light: '#FFFFFF'         // Fundo branco perfeito
+        }
+    });
 
-    // return black background page with the image centered
     res.send(`
-      <html>
-        <head>
-          <meta charset="utf-8"/>
-          <meta name="viewport" content="width=device-width,initial-scale=1"/>
-          <title>QR - Akira</title>
-          <meta http-equiv="refresh" content="5">
-          <style>
-            body{background:#000;margin:0;display:flex;align-items:center;justify-content:center;height:100vh}
-            .box{padding:16px;background:#000;border-radius:10px;text-align:center}
-            img{width:200px;height:200px;background:#000;display:block;margin:0 auto;image-rendering:pixelated}
-            p{color:#0f0;font-family:monospace}
-            a{color:#0f0;text-decoration:none}
-          </style>
-        </head>
-        <body>
-          <div class="box">
-            <img src="${dataUrl}" alt="QR Code"/>
-            <p>Escaneie com WhatsApp Web / App — atualiza a cada 5s</p>
-            <p><a href="/">Voltar</a></p>
-          </div>
+        <body style="background:black;color:white;text-align:center;padding:40px">
+            <h1>ESCANEIE O QR</h1>
+            <img src="${img}" style="border:12px solid #0f0;border-radius:20px;width:500px;height:500px;">
+            <p style="margin-top:20px;color:#0f0;">Atualiza cada 5s</p>
+            <meta http-equiv="refresh" content="5">
         </body>
-      </html>
     `);
-  } catch (e) {
-    logger.error('QR render error:', e?.message || e);
-    res.status(500).send('Erro ao gerar QR');
-  }
 });
+
 
 app.get('/health', (req, res) => {
   res.json({
