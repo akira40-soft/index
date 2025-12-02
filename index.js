@@ -1,14 +1,13 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * AKIRA BOT — VERSÃO DEFINITIVA ULTRA CORRIGIDA (Dezembro 2025)
+ * AKIRA BOT — VERSÃO FINAL ULTRA CORRIGIDA (Dezembro 2025)
  * ═══════════════════════════════════════════════════════════════════════
  * 
  * CORREÇÕES FINAIS:
- * ✅ Extração de número PERFEITA (local + Railway)
- * ✅ participantAlt não existe no Railway → usa key.participant
- * ✅ JID do bot detectado (37... + 244...)
- * ✅ Reply correto (PV: só se usuário respondeu ao bot | Grupos: sempre)
- * ✅ Logs detalhados para debug
+ * ✅ Composing visível (delay ANTES de paused)
+ * ✅ @mention do bot funciona (37... + 244...)
+ * ✅ Extração de número perfeita
+ * ✅ Reply correto (PV/Grupos)
  * 
  * ═══════════════════════════════════════════════════════════════════════
  */
@@ -32,7 +31,7 @@ const qrcodeTerminal = require('qrcode-terminal');
 // ═══════════════════════════════════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
 const API_URL = process.env.API_URL || 'https://akra35567-akira.hf.space/api/akira';
-const BOT_NUMERO_REAL = '244952786417'; // Número real do bot
+const BOT_NUMERO_REAL = '37839265886398';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -40,8 +39,8 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 // ESTADO GLOBAL
 // ═══════════════════════════════════════════════════════════════════════
 let sock = null;
-let BOT_JID = null;           // Ex: 244952786417@s.whatsapp.net
-let BOT_JID_ALTERNATIVO = null; // Ex: 37839265886398@lid (grupos)
+let BOT_JID = null;
+let BOT_JID_ALTERNATIVO = null;
 let currentQR = null;
 let lastProcessedTime = 0;
 
@@ -76,111 +75,83 @@ if (!store) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// EXTRAÇÃO DE NÚMERO REAL (VERSÃO ULTRA CORRIGIDA)
+// EXTRAÇÃO DE NÚMERO REAL
 // ═══════════════════════════════════════════════════════════════════════
 
-/**
- * Extrai número real da mensagem
- * DIFERENÇA CRÍTICA: participantAlt só existe LOCAL, não no Railway
- */
 function extrairNumeroReal(m) {
   try {
     const key = m.key || {};
     const message = m.message || {};
     
-    // === PV: remoteJid é o número direto ===
+    // === PV: remoteJid direto ===
     if (key.remoteJid && !String(key.remoteJid).endsWith('@g.us')) {
       return String(key.remoteJid).split('@')[0];
     }
     
-    // === GRUPOS: Extração em ordem de prioridade ===
+    // === GRUPOS ===
     
-    // PRIORIDADE 1: participantAlt (SÓ EXISTE NO LOCAL!)
-    // No Railway, isso será undefined, então pula para próxima
+    // 1. participantAlt (local)
     if (m.participantAlt) {
       const pAlt = String(m.participantAlt);
       if (pAlt.includes('@s.whatsapp.net')) {
-        const numero = pAlt.split('@')[0];
-        logger.debug(`[EXTRAÇÃO] participantAlt: ${numero}`);
-        return numero;
+        return pAlt.split('@')[0];
       }
     }
     
-    // PRIORIDADE 2: key.participant (FUNCIONA EM TODOS)
+    // 2. key.participant (Railway/Local)
     if (key.participant) {
       const participant = String(key.participant);
       
-      // Caso A: É número direto (@s.whatsapp.net)
+      // Número direto
       if (participant.includes('@s.whatsapp.net')) {
-        const numero = participant.split('@')[0];
-        logger.debug(`[EXTRAÇÃO] key.participant (direto): ${numero}`);
-        return numero;
+        return participant.split('@')[0];
       }
       
-      // Caso B: É LID (@lid) - converte
+      // LID
       if (participant.includes('@lid')) {
         const numero = converterLidParaNumero(participant);
-        if (numero) {
-          logger.debug(`[EXTRAÇÃO] key.participant (LID): ${numero}`);
-          return numero;
-        }
+        if (numero) return numero;
       }
     }
     
-    // PRIORIDADE 3: contextInfo.participant (reply/citação)
+    // 3. contextInfo.participant
     const contextParticipant = message?.extendedTextMessage?.contextInfo?.participant;
     if (contextParticipant) {
       const cp = String(contextParticipant);
       
       if (cp.includes('@s.whatsapp.net')) {
-        const numero = cp.split('@')[0];
-        logger.debug(`[EXTRAÇÃO] contextInfo.participant: ${numero}`);
-        return numero;
+        return cp.split('@')[0];
       }
       
       if (cp.includes('@lid')) {
         const numero = converterLidParaNumero(cp);
-        if (numero) {
-          logger.debug(`[EXTRAÇÃO] contextInfo.participant (LID): ${numero}`);
-          return numero;
-        }
+        if (numero) return numero;
       }
     }
     
-    // PRIORIDADE 4: Fallback do remoteJid (grupo)
+    // 4. Fallback do remoteJid
     if (key.remoteJid) {
       const match = String(key.remoteJid).match(/120363(\d+)@g\.us/);
       if (match && match[1].length >= 9) {
-        const numero = '244' + match[1].slice(-9);
-        logger.debug(`[EXTRAÇÃO] remoteJid fallback: ${numero}`);
-        return numero;
+        return '244' + match[1].slice(-9);
       }
     }
     
-    logger.warn('[EXTRAÇÃO] Falhou, retornando desconhecido');
     return 'desconhecido';
     
   } catch (e) {
-    logger.error({ e }, 'Erro ao extrair número real');
+    logger.error({ e }, 'Erro ao extrair número');
     return 'desconhecido';
   }
 }
 
-/**
- * Converte LID para número real
- * Ex: "202391978787009:123@lid" → "244978787009"
- */
 function converterLidParaNumero(lid) {
   if (!lid) return null;
   
   try {
-    // Remove @lid e pega parte antes do :
     const limpo = String(lid).split('@')[0].split(':')[0];
-    
-    // Extrai dígitos
     const digitos = limpo.replace(/\D/g, '');
     
-    // Pega últimos 9 dígitos + prefixo 244
     if (digitos.length >= 9) {
       return '244' + digitos.slice(-9);
     }
@@ -192,7 +163,7 @@ function converterLidParaNumero(lid) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// VERIFICAÇÃO SE É O BOT
+// VERIFICAÇÃO SE É O BOT (SUPORTA MÚLTIPLOS FORMATOS)
 // ═══════════════════════════════════════════════════════════════════════
 
 function ehOBot(jid) {
@@ -200,21 +171,27 @@ function ehOBot(jid) {
   
   const jidStr = String(jid).toLowerCase();
   
+  // Remove @s.whatsapp.net, @lid, etc para comparar apenas número
+  const jidNumero = jidStr.split('@')[0].split(':')[0];
+  
   // Compara com BOT_JID principal
-  if (BOT_JID && jidStr.includes(BOT_JID.split('@')[0].toLowerCase())) {
-    return true;
+  if (BOT_JID) {
+    const botNumero = String(BOT_JID).toLowerCase().split('@')[0].split(':')[0];
+    if (jidNumero === botNumero || jidStr.includes(botNumero)) {
+      return true;
+    }
   }
   
   // Compara com JID alternativo (37...)
   if (BOT_JID_ALTERNATIVO) {
-    const altStr = String(BOT_JID_ALTERNATIVO).toLowerCase();
-    if (jidStr.includes(altStr.split('@')[0])) {
+    const altNumero = String(BOT_JID_ALTERNATIVO).toLowerCase().split('@')[0].split(':')[0];
+    if (jidNumero === altNumero || jidStr.includes(altNumero)) {
       return true;
     }
   }
   
   // Compara com número real
-  if (jidStr.includes(BOT_NUMERO_REAL)) {
+  if (jidNumero === BOT_NUMERO_REAL || jidStr.includes(BOT_NUMERO_REAL)) {
     return true;
   }
   
@@ -290,7 +267,7 @@ function extrairReplyInfo(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// LÓGICA DE ATIVAÇÃO
+// LÓGICA DE ATIVAÇÃO (CORRIGIDA: @MENTION FUNCIONA)
 // ═══════════════════════════════════════════════════════════════════════
 
 async function deveResponder(m, ehGrupo, texto, replyInfo) {
@@ -299,28 +276,45 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
   
   // === REPLY AO BOT ===
   if (replyInfo && replyInfo.ehRespostaAoBot) {
-    logger.info('[ATIVAÇÃO] Reply ao bot detectado');
+    console.log('[ATIVAÇÃO] Reply ao bot detectado');
     return true;
   }
   
   // === GRUPOS: PRECISA DE ATIVAÇÃO ===
   if (ehGrupo) {
-    // Menção "akira"
+    // 1. Menção "akira"
     if (textoLower.includes('akira')) {
-      logger.info('[ATIVAÇÃO] Menção "akira" detectada no grupo');
+      console.log('[ATIVAÇÃO] Menção "akira" detectada no grupo');
       return true;
     }
     
-    // @mention do bot
+    // 2. @mention do bot (CORRIGIDO)
     const mentions = context?.mentionedJid || [];
-    const botMencionado = mentions.some(jid => ehOBot(jid));
+    
+    // Verifica se algum @mention é do bot
+    const botMencionado = mentions.some(jid => {
+      const mencionado = ehOBot(jid);
+      if (mencionado) {
+        console.log(`[ATIVAÇÃO] @mention do bot detectado: ${jid}`);
+      }
+      return mencionado;
+    });
     
     if (botMencionado) {
-      logger.info('[ATIVAÇÃO] @mention do bot detectado');
       return true;
     }
     
-    logger.info('[IGNORADO] Grupo sem menção/reply ao bot');
+    // 3. Verifica se mencionou o JID alternativo DIRETAMENTE no texto
+    // Ex: @37839265886398
+    if (BOT_JID_ALTERNATIVO) {
+      const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
+      if (texto.includes(jidAltNumero) || texto.includes(`@${jidAltNumero}`)) {
+        console.log('[ATIVAÇÃO] Menção ao JID alternativo detectada no texto');
+        return true;
+      }
+    }
+    
+    console.log('[IGNORADO] Grupo sem menção/reply ao bot');
     return false;
   }
   
@@ -396,7 +390,7 @@ async function conectar() {
         store.bind(sock.ev);
       }
     } catch (e) {
-      logger.warn('Store bind falhou:', e?.message);
+      logger.warn('Store bind falhou');
     }
     
     // === EVENT: CREDS UPDATE ===
@@ -412,7 +406,7 @@ async function conectar() {
         try {
           qrcodeTerminal.generate(qr, { small: true });
         } catch (e) {
-          logger.warn('QR terminal falhou');
+          // Ignora
         }
         
         console.log('\n📱 ESCANEIE O QR PARA CONECTAR\n');
@@ -426,7 +420,8 @@ async function conectar() {
         const userJid = sock.user?.id || '';
         if (userJid.includes('@')) {
           BOT_JID_ALTERNATIVO = userJid;
-          console.log('JID alternativo detectado:', BOT_JID_ALTERNATIVO);
+          const jidAlt = userJid.split('@')[0].split(':')[0];
+          console.log('JID alternativo detectado:', jidAlt);
         }
         
         console.log('✅ AKIRA BOT ONLINE!');
@@ -441,7 +436,7 @@ async function conectar() {
         console.log(`⚠️ Conexão perdida (código: ${code}). Reconectando em 5s...`);
         
         setTimeout(() => {
-          conectar().catch(e => logger.error('Erro ao reconectar:', e));
+          conectar().catch(e => console.error('Erro ao reconectar:', e));
         }, 5000);
       }
     });
@@ -488,7 +483,7 @@ async function conectar() {
         const ativar = await deveResponder(m, ehGrupo, texto, replyInfo);
         if (!ativar) return;
         
-        // Composing
+        // === COMPOSING (VISÍVEL NO CELULAR) ===
         try {
           await sock.readMessages([m.key]);
           await sock.sendPresenceUpdate('composing', m.key.remoteJid);
@@ -518,9 +513,17 @@ async function conectar() {
         
         console.log(`[RESPOSTA] ${resposta}`);
         
-        // Delay
-        await delay(Math.min(String(resposta).length * 50, 4000));
-        await sock.sendPresenceUpdate('paused', m.key.remoteJid);
+        // === DELAY "DIGITAÇÃO" (CORRIGIDO) ===
+        // Delay ANTES de parar composing (para ser visível)
+        const delayMs = Math.min(String(resposta).length * 50, 4000);
+        await delay(delayMs);
+        
+        // AGORA para de digitar
+        try {
+          await sock.sendPresenceUpdate('paused', m.key.remoteJid);
+        } catch (e) {
+          // Ignora
+        }
         
         // === DECIDE REPLY ===
         let opcoes = {};
@@ -537,7 +540,7 @@ async function conectar() {
           }
         }
         
-        // Envia
+        // === ENVIA MENSAGEM ===
         try {
           await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
           console.log('[RESPOSTA ENVIADA]:', resposta.substring(0, 100));
