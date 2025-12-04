@@ -1,13 +1,14 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * AKIRA BOT — VERSÃO FINAL ULTRA CORRIGIDA (Dezembro 2025)
+ * AKIRA BOT — VERSÃO V20 FINAL (Dezembro 2025)
  * ═══════════════════════════════════════════════════════════════════════
  * 
- * CORREÇÕES FINAIS:
- * ✅ Composing visível (delay ANTES de paused)
- * ✅ @mention do bot funciona (37... + 244...)
- * ✅ Extração de número perfeita
- * ✅ Reply correto (PV/Grupos)
+ * MELHORIAS V20:
+ * ✅ Reply context perfeito (detecta se é à Akira ou outro usuário)
+ * ✅ @mention funciona (37... + 244...)
+ * ✅ Composing visível (delay antes de paused)
+ * ✅ Isolamento PV/Grupo (nunca vaza contexto)
+ * ✅ Logging detalhado
  * 
  * ═══════════════════════════════════════════════════════════════════════
  */
@@ -71,11 +72,11 @@ if (!store) {
       _map.set(`${jid}|${id}`, msg);
     }
   };
-  logger.info('Fallback store criado (mínimo)');
+  logger.info('✅ Fallback store criado');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// EXTRAÇÃO DE NÚMERO REAL
+// EXTRAÇÃO DE NÚMERO REAL (MANTIDA)
 // ═══════════════════════════════════════════════════════════════════════
 
 function extrairNumeroReal(m) {
@@ -98,16 +99,14 @@ function extrairNumeroReal(m) {
       }
     }
     
-    // 2. key.participant (Railway/Local)
+    // 2. key.participant
     if (key.participant) {
       const participant = String(key.participant);
       
-      // Número direto
       if (participant.includes('@s.whatsapp.net')) {
         return participant.split('@')[0];
       }
       
-      // LID
       if (participant.includes('@lid')) {
         const numero = converterLidParaNumero(participant);
         if (numero) return numero;
@@ -163,15 +162,13 @@ function converterLidParaNumero(lid) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// VERIFICAÇÃO SE É O BOT (SUPORTA MÚLTIPLOS FORMATOS)
+// VERIFICAÇÃO SE É O BOT
 // ═══════════════════════════════════════════════════════════════════════
 
 function ehOBot(jid) {
   if (!jid) return false;
   
   const jidStr = String(jid).toLowerCase();
-  
-  // Remove @s.whatsapp.net, @lid, etc para comparar apenas número
   const jidNumero = jidStr.split('@')[0].split(':')[0];
   
   // Compara com BOT_JID principal
@@ -182,7 +179,7 @@ function ehOBot(jid) {
     }
   }
   
-  // Compara com JID alternativo (37...)
+  // Compara com JID alternativo
   if (BOT_JID_ALTERNATIVO) {
     const altNumero = String(BOT_JID_ALTERNATIVO).toLowerCase().split('@')[0].split(':')[0];
     if (jidNumero === altNumero || jidStr.includes(altNumero)) {
@@ -230,7 +227,7 @@ function extrairTexto(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// EXTRAÇÃO DE REPLY INFO
+// EXTRAÇÃO DE REPLY INFO (MELHORADA)
 // ═══════════════════════════════════════════════════════════════════════
 
 function extrairReplyInfo(m) {
@@ -267,7 +264,7 @@ function extrairReplyInfo(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// LÓGICA DE ATIVAÇÃO (CORRIGIDA: @MENTION FUNCIONA)
+// LÓGICA DE ATIVAÇÃO
 // ═══════════════════════════════════════════════════════════════════════
 
 async function deveResponder(m, ehGrupo, texto, replyInfo) {
@@ -276,7 +273,7 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
   
   // === REPLY AO BOT ===
   if (replyInfo && replyInfo.ehRespostaAoBot) {
-    console.log('[ATIVAÇÃO] Reply ao bot detectado');
+    console.log('✅ [ATIVAÇÃO] Reply ao bot detectado');
     return true;
   }
   
@@ -284,18 +281,17 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
   if (ehGrupo) {
     // 1. Menção "akira"
     if (textoLower.includes('akira')) {
-      console.log('[ATIVAÇÃO] Menção "akira" detectada no grupo');
+      console.log('✅ [ATIVAÇÃO] Menção "akira" detectada');
       return true;
     }
     
-    // 2. @mention do bot (CORRIGIDO)
+    // 2. @mention do bot
     const mentions = context?.mentionedJid || [];
     
-    // Verifica se algum @mention é do bot
     const botMencionado = mentions.some(jid => {
       const mencionado = ehOBot(jid);
       if (mencionado) {
-        console.log(`[ATIVAÇÃO] @mention do bot detectado: ${jid}`);
+        console.log(`✅ [ATIVAÇÃO] @mention do bot: ${jid}`);
       }
       return mencionado;
     });
@@ -304,17 +300,16 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
       return true;
     }
     
-    // 3. Verifica se mencionou o JID alternativo DIRETAMENTE no texto
-    // Ex: @37839265886398
+    // 3. Menção ao JID alternativo no texto
     if (BOT_JID_ALTERNATIVO) {
       const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
       if (texto.includes(jidAltNumero) || texto.includes(`@${jidAltNumero}`)) {
-        console.log('[ATIVAÇÃO] Menção ao JID alternativo detectada no texto');
+        console.log('✅ [ATIVAÇÃO] Menção ao JID alternativo');
         return true;
       }
     }
     
-    console.log('[IGNORADO] Grupo sem menção/reply ao bot');
+    console.log('❌ [IGNORADO] Grupo sem menção/reply ao bot');
     return false;
   }
   
@@ -323,24 +318,33 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// LOGGING
+// LOGGING DETALHADO
 // ═══════════════════════════════════════════════════════════════════════
 
-function logMensagem(m, numeroExtraido, tipo) {
+function logMensagem(m, numeroExtraido, tipo, replyInfo) {
   const ts = new Date().toLocaleString('pt-PT', { timeZone: 'Africa/Luanda' });
   
-  console.log('═'.repeat(60));
-  console.log(`TS: ${ts} | Tipo: ${tipo}`);
-  console.log('KEY:', {
+  console.log('\n' + '═'.repeat(70));
+  console.log(`⏰ ${ts} | 📱 Tipo: ${tipo}`);
+  console.log('─'.repeat(70));
+  console.log('🔑 KEY:', {
     remoteJid: m.key.remoteJid,
-    participant: m.key.participant,
+    participant: m.key.participant || 'N/A',
     fromMe: m.key.fromMe
   });
-  console.log('MSG INFO:', {
-    pushName: m.pushName,
+  console.log('👤 INFO:', {
+    pushName: m.pushName || 'Anônimo',
     numeroExtraido: numeroExtraido
   });
-  console.log('═'.repeat(60));
+  
+  if (replyInfo) {
+    console.log('📎 REPLY:', {
+      texto: replyInfo.texto.substring(0, 50) + '...',
+      ehRespostaAoBot: replyInfo.ehRespostaAoBot ? '✅ SIM' : '❌ NÃO'
+    });
+  }
+  
+  console.log('═'.repeat(70) + '\n');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -421,33 +425,27 @@ async function conectar() {
         if (userJid.includes('@')) {
           BOT_JID_ALTERNATIVO = userJid;
           const jidAlt = userJid.split('@')[0].split(':')[0];
-          console.log('JID alternativo detectado:', jidAlt);
+          console.log('🔗 JID alternativo detectado:', jidAlt);
         }
         
-        console.log('✅ AKIRA BOT ONLINE!');
-        console.log('Bot JID:', BOT_JID);
-        console.log('Bot Número Real:', BOT_NUMERO_REAL);
+        console.log('\n' + '═'.repeat(70));
+        console.log('✅ AKIRA BOT V20 ONLINE!');
+        console.log('═'.repeat(70));
+        console.log('🤖 Bot JID:', BOT_JID);
+        console.log('📱 Número Real:', BOT_NUMERO_REAL);
+        console.log('🔗 API:', API_URL);
+        console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
       }
       
       if (connection === 'close') {
         const code = lastDisconnect?.error?.output?.statusCode;
-        console.log(`⚠️ Conexão perdida (código: ${code}). Reconectando em 5s...`);
+        console.log(`\n⚠️ Conexão perdida (código: ${code}). Reconectando em 5s...\n`);
         
         setTimeout(() => {
           conectar().catch(e => console.error('Erro ao reconectar:', e));
         }, 5000);
-      }
-    });
-    
-    // === EVENT: DECRYPT FAILED ===
-    sock.ev.on('message-decrypt-failed', async (msgKey) => {
-      try {
-        console.log('⚠️ Tentando regenerar sessão perdida...');
-        await sock.sendRetryRequest(msgKey.key).catch(() => {});
-      } catch (e) {
-        console.log('❌ Falha ao regenerar sessão:', e.message);
       }
     });
     
@@ -475,15 +473,16 @@ async function conectar() {
         
         if (!texto) return;
         
-        // Log
-        logMensagem(m, numeroReal, ehGrupo ? 'GRUPO' : 'PV');
-        console.log(`[MENSAGEM] ${ehGrupo ? 'GRUPO' : 'PV'} | ${nome} (${numeroReal}): ${texto}`);
+        // Log detalhado
+        logMensagem(m, numeroReal, ehGrupo ? 'GRUPO' : 'PV', replyInfo);
         
         // Verifica ativação
         const ativar = await deveResponder(m, ehGrupo, texto, replyInfo);
         if (!ativar) return;
         
-        // === COMPOSING (VISÍVEL NO CELULAR) ===
+        console.log(`🔥 [PROCESSANDO] ${nome}: ${texto.substring(0, 60)}...`);
+        
+        // === COMPOSING (VISÍVEL) ===
         try {
           await sock.readMessages([m.key]);
           await sock.sendPresenceUpdate('composing', m.key.remoteJid);
@@ -491,17 +490,30 @@ async function conectar() {
           // Ignora
         }
         
-        // === CHAMA API ===
+        // === PAYLOAD PARA API ===
+        let mensagem_citada = '';
+        
+        if (replyInfo) {
+          if (replyInfo.ehRespostaAoBot) {
+            mensagem_citada = `[Respondendo à Akira: "${replyInfo.texto.substring(0, 100)}..."]`;
+          } else {
+            mensagem_citada = replyInfo.texto;
+          }
+        }
+        
         const payload = {
           usuario: nome,
           numero: numeroReal,
           mensagem: texto,
-          mensagem_citada: replyInfo ? replyInfo.texto : ''
+          mensagem_citada: mensagem_citada
         };
         
+        console.log('📤 Enviando para API...');
+        
+        // === CHAMA API ===
         let resposta = '...';
         try {
-          const res = await axios.post(API_URL, payload, { 
+          const res = await axios.post(API_URL, payload, {
             timeout: 120000,
             headers: { 'Content-Type': 'application/json' }
           });
@@ -511,14 +523,13 @@ async function conectar() {
           resposta = 'Erro interno. 😴';
         }
         
-        console.log(`[RESPOSTA] ${resposta}`);
+        console.log(`📥 [RESPOSTA] ${resposta.substring(0, 100)}...`);
         
-        // === DELAY "DIGITAÇÃO" (CORRIGIDO) ===
-        // Delay ANTES de parar composing (para ser visível)
-        const delayMs = Math.min(String(resposta).length * 50, 4000);
+        // === DELAY "DIGITAÇÃO" ===
+        const delayMs = Math.min(String(resposta).length * 40, 3500);
         await delay(delayMs);
         
-        // AGORA para de digitar
+        // Para de digitar
         try {
           await sock.sendPresenceUpdate('paused', m.key.remoteJid);
         } catch (e) {
@@ -530,20 +541,20 @@ async function conectar() {
         
         if (ehGrupo) {
           opcoes = { quoted: m };
-          console.log('Respondendo em reply (grupo)');
+          console.log('📎 Respondendo em reply (grupo)');
         } else {
           if (replyInfo && replyInfo.ehRespostaAoBot) {
             opcoes = { quoted: m };
-            console.log('Respondendo em reply (PV - usuário respondeu ao bot)');
+            console.log('📎 Respondendo em reply (PV - usuário respondeu ao bot)');
           } else {
-            console.log('Respondendo sem reply (PV)');
+            console.log('📩 Respondendo sem reply (PV)');
           }
         }
         
         // === ENVIA MENSAGEM ===
         try {
           await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-          console.log('[RESPOSTA ENVIADA]:', resposta.substring(0, 100));
+          console.log('✅ [ENVIADO COM SUCESSO]\n');
           
           // Salva no store
           try {
@@ -555,18 +566,18 @@ async function conectar() {
             // Ignora
           }
         } catch (e) {
-          console.error('Erro ao enviar:', e.message);
+          console.error('❌ Erro ao enviar:', e.message);
         }
         
       } catch (err) {
-        console.error('Erro no handler:', err);
+        console.error('❌ Erro no handler:', err);
       }
     });
     
-    console.log('Socket criado, aguardando eventos...');
+    console.log('✅ Socket criado, aguardando eventos...');
     
   } catch (err) {
-    console.error('Erro na conexão:', err);
+    console.error('❌ Erro na conexão:', err);
     setTimeout(() => {
       conectar().catch(e => console.error(e));
     }, 5000);
@@ -579,14 +590,23 @@ async function conectar() {
 
 const app = express();
 
-app.get('/', (req, res) => res.send('AKIRA BOT ONLINE ✅'));
+app.get('/', (req, res) => res.send(`
+  <html><body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding:50px">
+    <h1>🤖 AKIRA BOT V20 ONLINE ✅</h1>
+    <p>Status: ${BOT_JID ? 'Conectado' : 'Desconectado'}</p>
+    <p>Bot: ${BOT_NUMERO_REAL}</p>
+    <p><a href="/qr" style="color:#0f0">Ver QR Code</a></p>
+    <p><a href="/health" style="color:#0f0">Health Check</a></p>
+  </body></html>
+`));
 
 app.get('/qr', async (req, res) => {
   if (!currentQR) {
     return res.send(`
-      <html><body style="background:#000;color:#0f0;text-align:center;padding:50px">
-        <h1>✅ BOT CONECTADO</h1>
-        <p>${BOT_NUMERO_REAL}</p>
+      <html><body style="background:#000;color:#0f0;text-align:center;padding:50px;font-family:monospace">
+        <h1>✅ BOT JÁ CONECTADO!</h1>
+        <p>Número: ${BOT_NUMERO_REAL}</p>
+        <p><a href="/" style="color:#0f0">Voltar</a></p>
       </body></html>
     `);
   }
@@ -602,10 +622,11 @@ app.get('/qr', async (req, res) => {
   res.send(`
     <html>
     <head><meta http-equiv="refresh" content="5"></head>
-    <body style="background:#000;color:#fff;text-align:center;padding:40px">
-      <h1>📱 ESCANEIE O QR</h1>
+    <body style="background:#000;color:#fff;text-align:center;padding:40px;font-family:monospace">
+      <h1>📱 ESCANEIE O QR CODE</h1>
       <img src="${img}" style="border:12px solid #0f0;border-radius:20px;max-width:500px">
       <p style="color:#0f0;margin-top:20px">Atualiza em 5s</p>
+      <p><a href="/" style="color:#0f0">Voltar</a></p>
     </body>
     </html>
   `);
@@ -617,12 +638,13 @@ app.get('/health', (req, res) => {
     bot_numero: BOT_NUMERO_REAL,
     bot_jid: BOT_JID || null,
     bot_jid_alternativo: BOT_JID_ALTERNATIVO || null,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    version: 'v20_final'
   });
 });
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Health check na porta ${server.address().port}`);
+  console.log(`\n🌐 Health check disponível na porta ${server.address().port}\n`);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -632,9 +654,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 conectar();
 
 process.on('unhandledRejection', (err) => {
-  console.error('UNHANDLED REJECTION:', err);
+  console.error('❌ UNHANDLED REJECTION:', err);
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION:', err);
+  console.error('❌ UNCAUGHT EXCEPTION:', err);
 });
