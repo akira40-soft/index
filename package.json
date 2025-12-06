@@ -1,12 +1,14 @@
 {
   "name": "akira-baileys-bot",
-  "version": "2.0.0",
-  "description": "Bot Akira integrado com Baileys e API IA - Versão Railway Otimizada",
+  "version": "3.0.0",
+  "description": "Bot Akira V21 completo - IA + Comandos + Stickers + YouTube MP3 + TTS",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "clean": "rm -rf temp auth_info_baileys node_modules package-lock.json",
+    "reinstall": "npm run clean && npm install"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
@@ -15,7 +17,20 @@
     "pino": "^9.5.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
-    "@hapi/boom": "^10.0.1"
+    "@hapi/boom": "^10.0.1",
+    
+    
+    "ytdl-core": "^4.11.5",
+    "fluent-ffmpeg": "^2.1.2",
+    "ffmpeg-static": "^5.2.0",
+    "google-tts-api": "^2.0.2",
+    
+    
+    "moment-timezone": "^0.5.45",
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -26,8 +41,14 @@
     "baileys",
     "akira",
     "ai",
-    "chatbot"
+    "chatbot",
+    "sticker",
+    "youtube",
+    "tts",
+    "commands"
   ],
   "author": "Isaac Quarenta",
-  "license": "MIT"
-}
+  "license": "MIT",
+ 
+  }
+  
