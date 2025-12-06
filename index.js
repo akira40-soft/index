@@ -4,6 +4,8 @@
  * ═══════════════════════════════════════════════════════════════════════
  * ✅ PV: Sempre marca como lido (✓✓ azul)
  * ✅ GRUPO: Só marca como lido se mencionada/reply
+ * ✅ STATUS ENTREGUE: ✓✓ cinza automaticamente para todos
+ * ✅ STATUS VISTO: ✓✓ azul só quando ativada
  * ✅ Status: Sempre online → composing → paused
  * ✅ Tempo de digitação proporcional ao tamanho
  * ═══════════════════════════════════════════════════════════════════════
@@ -265,32 +267,40 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// DINÂMICA DE LEITURA (✓✓ AZUL) - CORRIGIDA
+// DINÂMICA DE STATUS NOS METADADOS DO WHATSAPP
 // ═══════════════════════════════════════════════════════════════════════
-async function marcarComoLido(sock, m, ehGrupo, foiAtivada) {
+async function processarStatusMensagem(sock, m, ehGrupo, foiAtivada) {
   try {
-    // === REGRA 1: PV → SEMPRE MARCA COMO LIDO ===
+    // O WhatsApp AUTOMATICAMENTE mostra "✓✓ cinza - Entregue" quando a mensagem chega
+    // (Não precisamos fazer nada para isso, acontece automaticamente)
+    
+    // NOSSA LÓGICA: Só marcar como "✓✓ azul - Visto" quando:
+    // 1. É PV (sempre)
+    // 2. É GRUPO e a Akira foi ativada (mencionada/reply)
+    
     if (!ehGrupo) {
-      await sock.readMessages([m.key]);
-      console.log('✓✓ [LIDO] PV - Marcado como lido (azul)');
-      return;
-    }
-    
-    // === REGRA 2: GRUPO → SÓ MARCA SE FOI MENCIONADA/REPLY ===
-    if (ehGrupo && foiAtivada) {
-      await sock.readMessages([m.key]);
-      console.log('✓✓ [LIDO] Grupo - Marcado como lido (Akira foi mencionada)');
-      return;
-    }
-    
-    // === REGRA 3: GRUPO SEM MENÇÃO → NÃO MARCA (fica em ✓✓ cinza) ===
-    if (ehGrupo && !foiAtivada) {
-      console.log('✓✓ [ENTREGUE] Grupo - NÃO marcado como lido (sem menção)');
-      return;
+      // PV → SEMPRE ✓✓ AZUL (VISTO)
+      // Usamos sendReceipt com 'read' para marcar como visto nos metadados
+      await sock.sendReceipt(m.key.remoteJid, m.key.participant ? [m.key.participant] : undefined, [m.key.id], 'read');
+      console.log('✓✓ [VISTO] PV - Marcado como visto (azul) nos metadados');
+    } else if (ehGrupo && foiAtivada) {
+      // GRUPO com menção → ✓✓ AZUL (VISTO)
+      await sock.sendReceipt(m.key.remoteJid, m.key.participant ? [m.key.participant] : undefined, [m.key.id], 'read');
+      console.log('✓✓ [VISTO] Grupo - Marcado como visto (Akira mencionada)');
+    } else {
+      // GRUPO sem menção → SÓ ✓✓ CINZA (ENTREGUE) - não fazemos nada
+      // O WhatsApp já mostra automaticamente "✓✓ cinza - Entregue a José Lopes"
+      console.log('✓✓ [ENTREGUE] Grupo - Só entregue (cinza), não marcado como visto');
     }
     
   } catch (e) {
-    console.error('Erro ao marcar lido:', e.message);
+    console.error('Erro ao processar status:', e.message);
+    // Fallback para compatibilidade
+    try {
+      if (!ehGrupo || (ehGrupo && foiAtivada)) {
+        await sock.readMessages([m.key]);
+      }
+    } catch (err2) {}
   }
 }
 
@@ -426,8 +436,10 @@ async function conectar() {
         
         const ativar = await deveResponder(m, ehGrupo, texto, replyInfo);
         
-        // === DINÂMICA DE LEITURA (✓✓ AZUL) ===
-        await marcarComoLido(sock, m, ehGrupo, ativar);
+        // === DINÂMICA DE STATUS NOS METADADOS DO WHATSAPP ===
+        // ✓✓ cinza (entregue) → automático do WhatsApp
+        // ✓✓ azul (visto) → só quando ativada
+        await processarStatusMensagem(sock, m, ehGrupo, ativar);
         
         if (!ativar) return;
         
