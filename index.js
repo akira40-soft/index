@@ -1,10 +1,11 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * AKIRA BOT V21 — DIGITAÇÃO REALISTA + IRONIA MÁXIMA
+ * AKIRA BOT V21 — DIGITAÇÃO REALISTA + DINÂMICAS WHATSAPP COMPLETAS
  * ═══════════════════════════════════════════════════════════════════════
- * ✅ Simulação VERDADEIRA: delivered → read → composing (visível)
- * ✅ Tempo de digitação proporcional ao tamanho da resposta
- * ✅ Presença atualizada em tempo real
+ * ✅ PV: Sempre marca como lido (✓✓ azul)
+ * ✅ GRUPO: Só marca como lido se mencionada/reply
+ * ✅ Status: Sempre online → composing → paused
+ * ✅ Tempo de digitação proporcional ao tamanho
  * ═══════════════════════════════════════════════════════════════════════
  */
 const {
@@ -264,6 +265,36 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// DINÂMICA DE LEITURA (✓✓ AZUL) - CORRIGIDA
+// ═══════════════════════════════════════════════════════════════════════
+async function marcarComoLido(sock, m, ehGrupo, foiAtivada) {
+  try {
+    // === REGRA 1: PV → SEMPRE MARCA COMO LIDO ===
+    if (!ehGrupo) {
+      await sock.readMessages([m.key]);
+      console.log('✓✓ [LIDO] PV - Marcado como lido (azul)');
+      return;
+    }
+    
+    // === REGRA 2: GRUPO → SÓ MARCA SE FOI MENCIONADA/REPLY ===
+    if (ehGrupo && foiAtivada) {
+      await sock.readMessages([m.key]);
+      console.log('✓✓ [LIDO] Grupo - Marcado como lido (Akira foi mencionada)');
+      return;
+    }
+    
+    // === REGRA 3: GRUPO SEM MENÇÃO → NÃO MARCA (fica em ✓✓ cinza) ===
+    if (ehGrupo && !foiAtivada) {
+      console.log('✓✓ [ENTREGUE] Grupo - NÃO marcado como lido (sem menção)');
+      return;
+    }
+    
+  } catch (e) {
+    console.error('Erro ao marcar lido:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // SIMULAÇÃO REALISTA DE DIGITAÇÃO (CORRIGIDA)
 // ═══════════════════════════════════════════════════════════════════════
 async function simularDigitacao(sock, jid, tempoMs) {
@@ -272,18 +303,14 @@ async function simularDigitacao(sock, jid, tempoMs) {
     await sock.sendPresenceUpdate('available', jid);
     await delay(500);
     
-    // 2. Marca mensagem como "lida" (✓✓ azul)
-    await sock.readMessages([{ remoteJid: jid, id: Date.now().toString(), participant: undefined }]);
-    await delay(800);
-    
-    // 3. MOSTRA "digitando..." (VISÍVEL NO WHATSAPP)
+    // 2. MOSTRA "digitando..." (VISÍVEL NO WHATSAPP)
     await sock.sendPresenceUpdate('composing', jid);
     console.log(`⌨️ [DIGITANDO] Akira está digitando por ${(tempoMs/1000).toFixed(1)}s...`);
     
-    // 4. AGUARDA o tempo de digitação
+    // 3. AGUARDA o tempo de digitação
     await delay(tempoMs);
     
-    // 5. Para de digitar (muda para "pausado")
+    // 4. Para de digitar (muda para "pausado")
     await sock.sendPresenceUpdate('paused', jid);
     await delay(300);
     
@@ -398,6 +425,10 @@ async function conectar() {
         if (!texto) return;
         
         const ativar = await deveResponder(m, ehGrupo, texto, replyInfo);
+        
+        // === DINÂMICA DE LEITURA (✓✓ AZUL) ===
+        await marcarComoLido(sock, m, ehGrupo, ativar);
+        
         if (!ativar) return;
         
         console.log(`\n🔥 [PROCESSANDO] ${nome}: ${texto.substring(0, 60)}...`);
