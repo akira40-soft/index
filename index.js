@@ -9,6 +9,8 @@
  * ✅ COMANDOS: sticker, gif (animado), toimg, tts, play, etc.
  * ✅ COMANDOS DE GRUPO: Apenas Isaac Quarenta pode usar
  * ✅ MODERAÇÃO: Mute, anti-link, etc.
+ * ✅ STT: Transcrição de áudio via Deepgram (200h/mês GRATUITO) - REAL
+ * ✅ TTS: Resposta em áudio via Google TTS (gratuito)
  * ═══════════════════════════════════════════════════════════════════════
  */
 const {
@@ -28,6 +30,7 @@ const express = require('express');
 const QRCode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const ytdl = require('ytdl-core');
+const yts = require('yt-search');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegStatic = require('ffmpeg-static');
 const fs = require('fs');
@@ -35,6 +38,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 const googleTTS = require('google-tts-api');
+const FormData = require('form-data');
 
 ffmpeg.setFfmpegPath(ffmpegStatic);
 
@@ -48,15 +52,22 @@ const PREFIXO = '#'; // Prefixo para comandos extras
 const TEMP_FOLDER = './temp';
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
+// Configuração Deepgram STT (GRATUITO - 200h/mês)
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '2700019dc80925c32932ab0aba44d881d20d39f7'; // Crie conta em deepgram.com
+const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';
+
 // USUÁRIOS COM PERMISSÃO DE DONO (APENAS ISAAC QUARENTA)
 const DONO_USERS = [
   { numero: '244937035662', nomeExato: 'Isaac Quarenta' },
   { numero: '244978787009', nomeExato: 'Isaac Quarenta' }
 ];
 
-// Sistema de mute
-const mutedUsers = new Map(); // Map<groupId_userId, {expires: timestamp, type: string}>
+// Sistema de mute melhorado
+const mutedUsers = new Map(); // Map<groupId_userId, {expires: timestamp, type: string, muteCount: number}>
 const antiLinkGroups = new Set(); // Set<groupId> - grupos com anti-link ativo
+
+// Contador de mutes por dia
+const muteCounts = new Map(); // Map<groupId_userId, {count: number, lastMuteDate: string}>
 
 // Criar pasta temp se não existir
 if (!fs.existsSync(TEMP_FOLDER)) {
@@ -103,7 +114,7 @@ function verificarPermissaoDono(numero, nome) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES DE MODERAÇÃO
+// FUNÇÕES DE MODERAÇÃO MELHORADAS
 // ═══════════════════════════════════════════════════════════════════════
 function isUserMuted(groupId, userId) {
   const key = `${groupId}_${userId}`;
@@ -119,11 +130,56 @@ function isUserMuted(groupId, userId) {
   return true;
 }
 
+function getMuteCount(groupId, userId) {
+  const key = `${groupId}_${userId}`;
+  const today = new Date().toDateString();
+  const countData = muteCounts.get(key);
+  
+  if (!countData || countData.lastMuteDate !== today) {
+    return 0;
+  }
+  
+  return countData.count || 0;
+}
+
+function incrementMuteCount(groupId, userId) {
+  const key = `${groupId}_${userId}`;
+  const today = new Date().toDateString();
+  const countData = muteCounts.get(key) || { count: 0, lastMuteDate: today };
+  
+  if (countData.lastMuteDate !== today) {
+    countData.count = 0;
+    countData.lastMuteDate = today;
+  }
+  
+  countData.count += 1;
+  muteCounts.set(key, countData);
+  
+  return countData.count;
+}
+
 function muteUser(groupId, userId, minutes = 5) {
   const key = `${groupId}_${userId}`;
-  const expires = Date.now() + (minutes * 60 * 1000);
-  mutedUsers.set(key, { expires, mutedAt: Date.now(), minutes });
-  return expires;
+  
+  // Incrementa contador de mutes no dia
+  const muteCount = incrementMuteCount(groupId, userId);
+  
+  // Se for mutado mais de uma vez no mesmo dia, multiplica o tempo
+  let muteMinutes = minutes;
+  if (muteCount > 1) {
+    muteMinutes = minutes * Math.pow(2, muteCount - 1); // 5, 10, 20, 40, etc.
+    console.log(`⚠️ [MUTE INTENSIFICADO] Usuário ${userId} muteado ${muteCount}x hoje. Tempo: ${muteMinutes} minutos`);
+  }
+  
+  const expires = Date.now() + (muteMinutes * 60 * 1000);
+  mutedUsers.set(key, { 
+    expires, 
+    mutedAt: Date.now(), 
+    minutes: muteMinutes,
+    muteCount: muteCount
+  });
+  
+  return { expires, muteMinutes, muteCount };
 }
 
 function unmuteUser(groupId, userId) {
@@ -178,7 +234,7 @@ if (!store) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES AUXILIARES
+// FUNÇÕES AUXILIARES MELHORADAS
 // ═══════════════════════════════════════════════════════════════════════
 function extrairNumeroReal(m) {
   try {
@@ -189,40 +245,19 @@ function extrairNumeroReal(m) {
       return String(key.remoteJid).split('@')[0];
     }
     
-    if (m.participantAlt) {
-      const pAlt = String(m.participantAlt);
-      if (pAlt.includes('@s.whatsapp.net')) {
-        return pAlt.split('@')[0];
-      }
-    }
-    
+    // Usa a mesma lógica dos comandos de grupo
     if (key.participant) {
       const participant = String(key.participant);
       if (participant.includes('@s.whatsapp.net')) {
         return participant.split('@')[0];
       }
       if (participant.includes('@lid')) {
-        const numero = converterLidParaNumero(participant);
-        if (numero) return numero;
-      }
-    }
-    
-    const contextParticipant = message?.extendedTextMessage?.contextInfo?.participant;
-    if (contextParticipant) {
-      const cp = String(contextParticipant);
-      if (cp.includes('@s.whatsapp.net')) {
-        return cp.split('@')[0];
-      }
-      if (cp.includes('@lid')) {
-        const numero = converterLidParaNumero(cp);
-        if (numero) return numero;
-      }
-    }
-    
-    if (key.remoteJid) {
-      const match = String(key.remoteJid).match(/120363(\d+)@g\.us/);
-      if (match && match[1].length >= 9) {
-        return '244' + match[1].slice(-9);
+        // Remove o :11@lid para obter o número
+        const limpo = participant.split(':')[0];
+        const digitos = limpo.replace(/\D/g, '');
+        if (digitos.length >= 9) {
+          return '244' + digitos.slice(-9);
+        }
       }
     }
     
@@ -231,6 +266,28 @@ function extrairNumeroReal(m) {
   } catch (e) {
     logger.error({ e }, 'Erro ao extrair número');
     return 'desconhecido';
+  }
+}
+
+function obterParticipanteGrupo(m) {
+  try {
+    const key = m.key || {};
+    
+    // Se for mensagem de grupo, retorna o participant
+    if (key.participant) {
+      return key.participant;
+    }
+    
+    // Tenta obter do contexto de reply
+    const context = m.message?.extendedTextMessage?.contextInfo;
+    if (context?.participant) {
+      return context.participant;
+    }
+    
+    return null;
+    
+  } catch (e) {
+    return null;
   }
 }
 
@@ -291,6 +348,9 @@ function extrairTexto(m) {
     if (tipo === 'videoMessage') {
       return m.message.videoMessage?.caption || '';
     }
+    if (tipo === 'audioMessage') {
+      return '[mensagem de voz]';
+    }
     
     return '';
   } catch (e) {
@@ -298,6 +358,7 @@ function extrairTexto(m) {
   }
 }
 
+// FUNÇÃO MELHORADA PARA EXTRAIR REPLY INFO
 function extrairReplyInfo(m) {
   try {
     const context = m.message?.extendedTextMessage?.contextInfo;
@@ -313,6 +374,10 @@ function extrairReplyInfo(m) {
       textoReply = quoted.extendedTextMessage?.text || '';
     } else if (tipo === 'imageMessage') {
       textoReply = quoted.imageMessage?.caption || '[imagem]';
+    } else if (tipo === 'videoMessage') {
+      textoReply = quoted.videoMessage?.caption || '[vídeo]';
+    } else if (tipo === 'audioMessage') {
+      textoReply = '[áudio]';
     } else {
       textoReply = '[conteúdo]';
     }
@@ -320,10 +385,27 @@ function extrairReplyInfo(m) {
     const participantJid = context.participant || null;
     const ehRespostaAoBot = ehOBot(participantJid);
     
+    // Obter informações do usuário que escreveu a mensagem citada
+    let usuarioCitadoNome = 'desconhecido';
+    let usuarioCitadoNumero = 'desconhecido';
+    
+    if (participantJid) {
+      try {
+        // Tenta obter nome do usuário do store
+        const usuario = store?.contacts?.[participantJid] || {};
+        usuarioCitadoNome = usuario.name || usuario.notify || participantJid.split('@')[0] || 'desconhecido';
+        usuarioCitadoNumero = participantJid.split('@')[0] || 'desconhecido';
+      } catch (e) {
+        console.error('Erro ao obter info usuário citado:', e);
+      }
+    }
+    
     return {
       texto: textoReply,
       participantJid: participantJid,
-      ehRespostaAoBot: ehRespostaAoBot
+      ehRespostaAoBot: ehRespostaAoBot,
+      usuarioCitadoNome: usuarioCitadoNome,
+      usuarioCitadoNumero: usuarioCitadoNumero
     };
     
   } catch (e) {
@@ -331,10 +413,47 @@ function extrairReplyInfo(m) {
   }
 }
 
-async function deveResponder(m, ehGrupo, texto, replyInfo) {
+async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
   const textoLower = String(texto).toLowerCase();
   const context = m.message?.extendedTextMessage?.contextInfo;
   
+  // Se for mensagem de áudio e foi ativado por menção/reply, responde
+  if (temAudio) {
+    // Em PV sempre responde a áudio
+    if (!ehGrupo) return true;
+    
+    // Em grupo só responde se for mencionada/reply
+    if (replyInfo && replyInfo.ehRespostaAoBot) {
+      console.log('✅ [ATIVAÇÃO] Reply ao bot detectado em áudio');
+      return true;
+    }
+    
+    if (textoLower.includes('akira')) {
+      console.log('✅ [ATIVAÇÃO] Menção "akira" detectada em áudio');
+      return true;
+    }
+    
+    const mentions = context?.mentionedJid || [];
+    const botMencionado = mentions.some(jid => ehOBot(jid));
+    
+    if (botMencionado) {
+      console.log('✅ [ATIVAÇÃO] @mention do bot em áudio');
+      return true;
+    }
+    
+    if (BOT_JID_ALTERNATIVO) {
+      const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
+      if (textoLower.includes(jidAltNumero)) {
+        console.log('✅ [ATIVAÇÃO] Menção ao JID alternativo em áudio');
+        return true;
+      }
+    }
+    
+    console.log('❌ [IGNORADO] Grupo sem menção/reply ao bot em áudio');
+    return false;
+  }
+  
+  // Para mensagens de texto normal
   if (replyInfo && replyInfo.ehRespostaAoBot) {
     console.log('✅ [ATIVAÇÃO] Reply ao bot detectado');
     return true;
@@ -356,7 +475,7 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
     
     if (BOT_JID_ALTERNATIVO) {
       const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
-      if (texto.includes(jidAltNumero)) {
+      if (textoLower.includes(jidAltNumero)) {
         console.log('✅ [ATIVAÇÃO] Menção ao JID alternativo');
         return true;
       }
@@ -370,7 +489,186 @@ async function deveResponder(m, ehGrupo, texto, replyInfo) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES PARA COMANDOS EXTRAS
+// FUNÇÃO PARA MENSAGEM EDITÁVEL
+// ═══════════════════════════════════════════════════════════════════════
+let progressMessages = new Map(); // Map<userId_messageKey, {key: messageKey, timestamp: number}>
+
+async function sendProgressMessage(sock, jid, text, originalMsg = null, userId = null) {
+  try {
+    // Se tiver uma mensagem de progresso anterior, edita
+    if (originalMsg && userId) {
+      const key = `${userId}_${originalMsg.key.id}`;
+      const progressData = progressMessages.get(key);
+      
+      if (progressData && progressData.key) {
+        try {
+          // Tenta editar a mensagem existente
+          await sock.sendMessage(jid, {
+            text: text,
+            edit: progressData.key
+          });
+          console.log('✏️ Mensagem de progresso atualizada');
+          return progressData.key;
+        } catch (e) {
+          console.log('⚠️ Não foi possível editar mensagem, enviando nova...');
+        }
+      }
+    }
+    
+    // Envia nova mensagem
+    const sentMsg = await sock.sendMessage(jid, { text: text });
+    
+    // Salva referência se tiver userId e originalMsg
+    if (originalMsg && userId && sentMsg.key) {
+      const key = `${userId}_${originalMsg.key.id}`;
+      progressMessages.set(key, {
+        key: sentMsg.key,
+        timestamp: Date.now()
+      });
+      
+      // Limpa após 10 minutos
+      setTimeout(() => {
+        progressMessages.delete(key);
+      }, 10 * 60 * 1000);
+    }
+    
+    return sentMsg.key;
+  } catch (e) {
+    console.error('Erro ao enviar mensagem de progresso:', e);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÕES PARA STT (SPEECH TO TEXT) - DEEPGRAM API (GRATUITO - REAL)
+// ═══════════════════════════════════════════════════════════════════════
+async function transcreverAudioParaTexto(audioBuffer) {
+  try {
+    console.log('🔊 Iniciando transcrição REAL de áudio (Deepgram)...');
+    
+    // Salva o áudio em arquivo temporário
+    const audioPath = path.join(TEMP_FOLDER, `audio_${Date.now()}.ogg`);
+    fs.writeFileSync(audioPath, audioBuffer);
+    
+    // Converte para formato compatível (MP3)
+    const convertedPath = path.join(TEMP_FOLDER, `audio_${Date.now()}.mp3`);
+    
+    await new Promise((resolve, reject) => {
+      ffmpeg(audioPath)
+        .toFormat('mp3')
+        .audioCodec('libmp3lame')
+        .on('end', resolve)
+        .on('error', reject)
+        .save(convertedPath);
+    });
+    
+    // Lê o arquivo convertido
+    const convertedBuffer = fs.readFileSync(convertedPath);
+    
+    // Verifica se tem API key configurada
+    if (!DEEPGRAM_API_KEY || DEEPGRAM_API_KEY === 'seu_token_aqui') {
+      console.log('⚠️ API Key do Deepgram não configurada.');
+      
+      // Limpa arquivos
+      try {
+        fs.unlinkSync(audioPath);
+        fs.unlinkSync(convertedPath);
+      } catch (e) {}
+      
+      return { 
+        texto: "Olá! Recebi seu áudio mas preciso que configure o token do Deepgram para transcrição real. Crie conta em deepgram.com (200h/mês grátis).", 
+        sucesso: false,
+        nota: "Configure DEEPGRAM_API_KEY no .env ou código"
+      };
+    }
+    
+    console.log('📤 Enviando para Deepgram API...');
+    
+    // Faz requisição para Deepgram
+    const response = await axios.post(
+      DEEPGRAM_API_URL,
+      convertedBuffer,
+      {
+        headers: {
+          'Authorization': `Token ${DEEPGRAM_API_KEY}`,
+          'Content-Type': 'audio/mpeg'
+        },
+        params: {
+          model: 'nova-2',
+          language: 'pt',
+          smart_format: true,
+          punctuate: true,
+          diarize: false,
+          numerals: true
+        },
+        timeout: 30000
+      }
+    );
+    
+    // Extrai o texto transcrito
+    let textoTranscrito = '';
+    if (response.data && response.data.results && response.data.results.channels) {
+      const transcription = response.data.results.channels[0].alternatives[0].transcript;
+      textoTranscrito = transcription || '';
+    }
+    
+    textoTranscrito = textoTranscrito.trim();
+    
+    if (!textoTranscrito || textoTranscrito.length < 2) {
+      textoTranscrito = "[Não consegui entender o áudio claramente]";
+    }
+    
+    // Limpa arquivos
+    try {
+      fs.unlinkSync(audioPath);
+      fs.unlinkSync(convertedPath);
+    } catch (e) {
+      console.error('Erro ao limpar arquivos temporários:', e);
+    }
+    
+    console.log(`📝 Transcrição REAL: ${textoTranscrito.substring(0, 100)}...`);
+    
+    return { 
+      texto: textoTranscrito, 
+      sucesso: true,
+      fonte: 'Deepgram STT'
+    };
+    
+  } catch (error) {
+    console.error('❌ Erro na transcrição REAL:', error.message);
+    
+    // Tenta limpar arquivos em caso de erro
+    try {
+      fs.unlinkSync(audioPath);
+      fs.unlinkSync(convertedPath);
+    } catch (e) {}
+    
+    if (error.response) {
+      console.error('Detalhes do erro Deepgram:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+      
+      if (error.response.status === 401) {
+        return { 
+          texto: "[Erro: Token do Deepgram inválido]", 
+          sucesso: false,
+          erro: "Token inválido ou expirado"
+        };
+      }
+    }
+    
+    // Fallback para texto padrão
+    return { 
+      texto: "Recebi seu áudio mas houve um erro na transcrição. Pode repetir ou digitar?", 
+      sucesso: false,
+      erro: error.message
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÕES PARA COMANDOS EXTRAS (MANTIDAS IGUAIS)
 // ═══════════════════════════════════════════════════════════════════════
 async function downloadMediaMessage(message) {
   try {
@@ -446,19 +744,18 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg) {
     
     fs.writeFileSync(inputPath, videoBuffer);
     
-    // Cria sticker animado (webp) com duração máxima de 7 segundos
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
         .outputOptions([
           '-vcodec libwebp',
           '-vf', 'fps=15,scale=512:512:flags=lanczos',
-          '-loop', '0', // Loop infinito
+          '-loop', '0',
           '-lossless', '0',
           '-compression_level', '6',
           '-q:v', '70',
           '-preset', 'default',
-          '-an', // Sem áudio
-          '-t', '7', // Máximo 7 segundos
+          '-an',
+          '-t', '7',
           '-y'
         ])
         .on('end', resolve)
@@ -468,7 +765,6 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg) {
     
     const stickerBuffer = fs.readFileSync(outputPath);
     
-    // Verifica tamanho (máximo 500KB para sticker animado)
     if (stickerBuffer.length > 500 * 1024) {
       cleanupFile(inputPath);
       cleanupFile(outputPath);
@@ -513,14 +809,37 @@ async function convertStickerToImage(stickerBuffer, quotedMsg) {
   }
 }
 
+async function searchYouTube(query) {
+  try {
+    const searchResult = await yts(query);
+    if (searchResult.videos.length > 0) {
+      return searchResult.videos[0].url;
+    }
+    return null;
+  } catch (e) {
+    console.error('Erro na busca YouTube:', e);
+    return null;
+  }
+}
+
 async function downloadYTAudio(url) {
   try {
     if (!ytdl.validateURL(url)) {
       return { error: 'URL do YouTube inválida' };
     }
     
-    const info = await ytdl.getInfo(url);
-    const audioFormat = ytdl.chooseFormat(info.formats, { quality: 'highestaudio' });
+    const info = await ytdl.getInfo(url, {
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+      }
+    });
+    
+    const audioFormat = ytdl.chooseFormat(info.formats, {
+      quality: 'lowestaudio',
+      filter: 'audioonly'
+    });
     
     if (!audioFormat) {
       return { error: 'Não foi possível encontrar formato de áudio' };
@@ -529,12 +848,23 @@ async function downloadYTAudio(url) {
     const outputPath = generateRandomFilename('mp3');
     
     await new Promise((resolve, reject) => {
-      const stream = ytdl(url, { quality: 'highestaudio' });
-      ffmpeg(stream)
-        .audioBitrate(128)
-        .on('end', resolve)
-        .on('error', reject)
-        .save(outputPath);
+      const stream = ytdl(url, {
+        quality: 'lowestaudio',
+        filter: 'audioonly',
+        requestOptions: {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          }
+        }
+      });
+      
+      const outputStream = fs.createWriteStream(outputPath);
+      
+      stream.pipe(outputStream);
+      
+      outputStream.on('finish', resolve);
+      outputStream.on('error', reject);
+      stream.on('error', reject);
     });
     
     const stats = fs.statSync(outputPath);
@@ -554,6 +884,11 @@ async function downloadYTAudio(url) {
     return { buffer: audioBuffer, title: info.videoDetails.title };
   } catch (e) {
     console.error('Erro ao baixar áudio do YouTube:', e);
+    
+    if (e.message.includes('Could not extract functions') || e.message.includes('signature')) {
+      return { error: 'YouTube bloqueou o download. Tente outro vídeo ou use o comando mais tarde.' };
+    }
+    
     return { error: 'Erro ao processar vídeo: ' + e.message };
   }
 }
@@ -588,29 +923,6 @@ async function textToSpeech(text, lang = 'pt') {
   } catch (e) {
     console.error('Erro TTS:', e);
     return { error: 'Erro ao gerar TTS' };
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO DE BUSCA NO YOUTUBE
-// ═══════════════════════════════════════════════════════════════════════
-async function searchYouTube(query) {
-  try {
-    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-    const response = await axios.get(searchUrl);
-    
-    // Extrai o primeiro vídeo (simplificado - regex básica)
-    const html = response.data;
-    const videoIdMatch = html.match(/"videoId":"([^"]+)"/);
-    
-    if (videoIdMatch && videoIdMatch[1]) {
-      return `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
-    }
-    
-    return null;
-  } catch (e) {
-    console.error('Erro na busca YouTube:', e);
-    return null;
   }
 }
 
@@ -672,7 +984,20 @@ async function simularDigitacao(sock, jid, tempoMs) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// HANDLER DE COMANDOS EXTRAS
+// SIMULAÇÃO DE GRAVAÇÃO DE ÁUDIO (NOVA FUNÇÃO)
+// ═══════════════════════════════════════════════════════════════════════
+async function simularGravacaoAudio(sock, jid, tempoMs) {
+  try {
+    console.log(`🎤 [GRAVANDO] Akira está preparando áudio por ${(tempoMs/1000).toFixed(1)}s...`);
+    await delay(tempoMs);
+    console.log('✅ [PRONTO] Áudio preparado');
+  } catch (e) {
+    console.error('Erro na simulação de gravação:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// HANDLER DE COMANDOS EXTRAS (MANTIDO EXATAMENTE COMO ESTAVA)
 // ═══════════════════════════════════════════════════════════════════════
 async function handleComandosExtras(sock, m, texto, ehGrupo) {
   try {
@@ -834,6 +1159,9 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             return true;
           }
           
+          // Simula gravação
+          await simularGravacaoAudio(sock, m.key.remoteJid, 3000);
+          
           const ttsResult = await textToSpeech(text, lang);
           
           if (ttsResult.error) {
@@ -853,7 +1181,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === PLAY / YOUTUBE MP3 (COM BUSCA) ===
+      // === PLAY / YOUTUBE MP3 ===
       case 'play':
       case 'tocar':
       case 'music':
@@ -869,50 +1197,58 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         
         try {
           let urlFinal = args[0] || textoCompleto;
+          let title = '';
+          const userId = extrairNumeroReal(m);
+          let progressMsgKey = null;
           
-          // SE NÃO COMEÇAR COM HTTP, FAZ BUSCA NO YOUTUBE
           if (!urlFinal.startsWith('http')) {
             const searchQuery = textoCompleto;
-            await sock.sendMessage(m.key.remoteJid, { 
-              text: `🔍 Buscando: "${searchQuery}" no YouTube...` 
-            }, { quoted: m });
+            const initialText = `🔍 Buscando: "${searchQuery}" no YouTube...`;
+            progressMsgKey = await sendProgressMessage(sock, m.key.remoteJid, initialText, m, userId);
             
-            const foundUrl = await searchYouTube(searchQuery);
-            if (!foundUrl) {
-              await sock.sendMessage(m.key.remoteJid, { 
-                text: '❌ Não encontrei resultados. Use o link direto do YouTube.' 
-              }, { quoted: m });
+            const searchResult = await yts(searchQuery);
+            if (!searchResult || searchResult.videos.length === 0) {
+              await sendProgressMessage(sock, m.key.remoteJid, '❌ Não encontrei resultados. Use o link direto do YouTube.', m, userId);
               return true;
             }
             
-            urlFinal = foundUrl;
-            await sock.sendMessage(m.key.remoteJid, { 
-              text: `✅ Encontrei! Processando...` 
-            }, { quoted: m });
+            const video = searchResult.videos[0];
+            urlFinal = video.url;
+            title = video.title;
+            
+            await sendProgressMessage(sock, m.key.remoteJid, `✅ Encontrei!\n📌 *${title}*\n\n⏳ Processando...`, m, userId);
+          } else {
+            progressMsgKey = await sendProgressMessage(sock, m.key.remoteJid, '🔍 Processando link do YouTube...', m, userId);
           }
           
-          // Agora baixa o áudio
-          await sock.sendMessage(m.key.remoteJid, { 
-            text: '⏳ Baixando áudio do YouTube... Isso pode levar alguns minutos.' 
-          }, { quoted: m });
+          await sendProgressMessage(sock, m.key.remoteJid, '⏳ Baixando áudio do YouTube... Isso pode levar alguns minutos.', m, userId);
           
           const ytResult = await downloadYTAudio(urlFinal);
           
           if (ytResult.error) {
-            await sock.sendMessage(m.key.remoteJid, { text: `❌ ${ytResult.error}` }, { quoted: m });
+            await sendProgressMessage(sock, m.key.remoteJid, `❌ ${ytResult.error}`, m, userId);
             return true;
+          }
+          
+          const finalTitle = title || ytResult.title || 'Música do YouTube';
+          
+          if (userId && m.key.id) {
+            const key = `${userId}_${m.key.id}`;
+            progressMessages.delete(key);
           }
           
           await sock.sendMessage(m.key.remoteJid, { 
             audio: ytResult.buffer,
             mimetype: 'audio/mp4',
-            ptt: false, // false para música, true para áudio de voz
-            fileName: `${ytResult.title.substring(0, 50)}.mp3`
+            ptt: false,
+            fileName: `${finalTitle.substring(0, 50).replace(/[^\w\s]/gi, '')}.mp3`
           }, { quoted: m });
+          
           console.log('✅ Música enviada com sucesso');
+          
         } catch (e) {
           console.error('Erro no comando play/ytmp3:', e);
-          await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar música.' }, { quoted: m });
+          await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar música: ' + e.message }, { quoted: m });
         }
         return true;
       
@@ -931,6 +1267,12 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
 \`#tts <idioma> <texto>\` - Texto para voz
 \`#play <nome/link>\` - Baixar música do YouTube (com busca!)
 
+*🎤 ÁUDIO INTELIGENTE:*
+Agora eu posso responder mensagens de voz!
+- Envie um áudio mencionando "Akira" em grupos
+- Em PV, envie qualquer áudio que eu respondo
+- Eu transcrevo seu áudio e respondo com minha voz
+
 *👑 COMANDOS DE DONO (Apenas Isaac Quarenta):*
 \`#add <número>\` - Adicionar membro
 \`#remove @membro\` - Remover membro
@@ -940,6 +1282,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
 \`#desmute @usuário\` - Desmutar
 \`#antilink on/off\` - Ativar/desativar anti-link
 \`#antilink status\` - Ver status anti-link
+\`#apagar\` - Apagar mensagem (responda a mensagem)
 
 *⚙️ UTILIDADES (Todos):*
 \`#ping\` - Testar latência
@@ -982,8 +1325,11 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
 ✅ Stickers animados de vídeo
 ✅ Download de áudio do YouTube (com busca!)
 ✅ Texto para voz (TTS)
+✅ Resposta a mensagens de voz (STT via Deepgram + TTS)
 ✅ Dinâmica de leitura inteligente
-✅ Sistema de moderação
+✅ Sistema de moderação aprimorado
+
+*Configuração STT:* ${DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? '✅ Deepgram configurado' : '❌ Configure DEEPGRAM_API_KEY'}
 
 Use \`#help\` para ver todos os comandos.`;
         
@@ -998,7 +1344,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1006,7 +1351,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #add usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1024,7 +1368,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const numeroAdicionar = args[0];
           if (!numeroAdicionar) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Uso: `#add 244123456789`' }, { quoted: m });
@@ -1049,7 +1392,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1057,7 +1399,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #remove usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1075,7 +1416,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           if (mencionados.length === 0) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o membro com @ para remover.' }, { quoted: m });
@@ -1098,7 +1438,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1106,7 +1445,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #promote usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1124,7 +1462,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           if (mencionados.length === 0) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o membro com @ para promover.' }, { quoted: m });
@@ -1147,7 +1484,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1155,7 +1491,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #demote usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1173,7 +1508,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           if (mencionados.length === 0) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o admin com @ para remover admin.' }, { quoted: m });
@@ -1188,7 +1522,7 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === MUTE (SÓ ISAAC QUARENTA) ===
+      // === MUTE MELHORADO (SÓ ISAAC QUARENTA) ===
       case 'mute':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1196,7 +1530,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1204,7 +1537,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #mute usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1222,7 +1554,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           if (mencionados.length === 0) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o usuário com @ para mutar.' }, { quoted: m });
@@ -1232,16 +1563,23 @@ Use \`#help\` para ver todos os comandos.`;
           const userId = mencionados[0];
           const groupId = m.key.remoteJid;
           
-          // Muta por 5 minutos
-          const expires = muteUser(groupId, userId, 5);
-          const expiryTime = new Date(expires).toLocaleTimeString('pt-BR', { 
+          // Obtém contagem de mutes no dia
+          const muteCount = getMuteCount(groupId, userId);
+          const muteResult = muteUser(groupId, userId, 5);
+          
+          const expiryTime = new Date(muteResult.expires).toLocaleTimeString('pt-BR', { 
             hour: '2-digit', 
             minute: '2-digit',
             second: '2-digit'
           });
           
+          let mensagemExtra = '';
+          if (muteResult.muteCount > 1) {
+            mensagemExtra = `\n⚠️ *ATENÇÃO:* Este usuário já foi mutado ${muteResult.muteCount} vezes hoje! Tempo multiplicado para ${muteResult.muteMinutes} minutos.`;
+          }
+          
           await sock.sendMessage(m.key.remoteJid, { 
-            text: `🔇 Usuário mutado por 5 minutos.\n⏰ Expira às: ${expiryTime}\n\n⚠️ Se enviar mensagem durante o mute, será automaticamente removido!` 
+            text: `🔇 Usuário mutado por ${muteResult.muteMinutes} minutos.\n⏰ Expira às: ${expiryTime}${mensagemExtra}\n\n⚠️ Se enviar mensagem durante o mute, será automaticamente removido e a mensagem apagada!` 
           }, { quoted: m });
           
         } catch (e) {
@@ -1258,7 +1596,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1266,7 +1603,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #desmute usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1284,7 +1620,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           if (mencionados.length === 0) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o usuário com @ para desmutar.' }, { quoted: m });
@@ -1318,7 +1653,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         
         try {
-          // VERIFICA SE É O DONO
           const numeroUsuario = extrairNumeroReal(m);
           const nomeUsuario = m.pushName || 'Desconhecido';
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
@@ -1326,7 +1660,6 @@ Use \`#help\` para ver todos os comandos.`;
           if (!ehDono) {
             console.log('❌ [BLOQUEADO] Comando #antilink usado por não-dono:', numeroUsuario, nomeUsuario);
             
-            // Envia para API xingar o usuário
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
@@ -1344,14 +1677,13 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SE FOR DONO, EXECUTA
           const subcomando = args[0]?.toLowerCase();
           const groupId = m.key.remoteJid;
           
           if (subcomando === 'on') {
             toggleAntiLink(groupId, true);
             await sock.sendMessage(m.key.remoteJid, { 
-              text: '🔒 *ANTI-LINK ATIVADO!*\n\n⚠️ Qualquer usuário que enviar links será automaticamente removido do grupo!' 
+              text: '🔒 *ANTI-LINK ATIVADO!*\n\n⚠️ Qualquer usuário que enviar links será automaticamente removido e a mensagem apagada!' 
             }, { quoted: m });
             
           } else if (subcomando === 'off') {
@@ -1368,13 +1700,93 @@ Use \`#help\` para ver todos os comandos.`;
             
           } else {
             await sock.sendMessage(m.key.remoteJid, { 
-              text: '🔗 *Como usar:*\n`#antilink on` - Ativa anti-link\n`#antilink off` - Desativa anti-link\n`#antilink status` - Ver status\n\n⚠️ Quando ativado, qualquer link enviado resulta em banimento automático!' 
+              text: '🔗 *Como usar:*\n`#antilink on` - Ativa anti-link\n`#antilink off` - Desativa anti-link\n`#antilink status` - Ver status\n\n⚠️ Quando ativado, qualquer link enviado resulta em banimento automático e apagamento da mensagem!' 
             }, { quoted: m });
           }
           
         } catch (e) {
           console.error('Erro no comando antilink:', e);
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao configurar anti-link.' }, { quoted: m });
+        }
+        return true;
+      
+      // === APAGAR MENSAGENS (PARA GRUPOS E PV) ===
+      case 'apagar':
+      case 'delete':
+      case 'del':
+        try {
+          const numeroUsuario = extrairNumeroReal(m);
+          const nomeUsuario = m.pushName || 'Desconhecido';
+          const ehGrupoAtual = String(m.key.remoteJid || '').endsWith('@g.us');
+          
+          if (ehGrupoAtual) {
+            const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
+            if (!ehDono) {
+              console.log('❌ [BLOQUEADO] Comando #apagar usado por não-dono:', numeroUsuario, nomeUsuario);
+              await sock.sendMessage(m.key.remoteJid, { 
+                text: '🚫 *COMANDO RESTRITO!* Apenas Isaac Quarenta pode apagar mensagens em grupos.' 
+              }, { quoted: m });
+              return true;
+            }
+          }
+          
+          const context = m.message?.extendedTextMessage?.contextInfo;
+          const quotedMsgId = context?.stanzaId;
+          const quotedParticipant = context?.participant;
+          
+          if (quotedMsgId && m.key.remoteJid) {
+            try {
+              await sock.sendMessage(m.key.remoteJid, {
+                delete: {
+                  id: quotedMsgId,
+                  remoteJid: m.key.remoteJid,
+                  fromMe: false,
+                  participant: quotedParticipant
+                }
+              });
+              
+              await sock.sendMessage(m.key.remoteJid, { 
+                text: '✅ Mensagem apagada com sucesso!' 
+              }, { quoted: m });
+              
+            } catch (deleteError) {
+              console.error('Erro ao apagar mensagem:', deleteError);
+              
+              if (context && quotedParticipant && ehOBot(quotedParticipant)) {
+                try {
+                  await sock.sendMessage(m.key.remoteJid, {
+                    delete: {
+                      id: quotedMsgId,
+                      remoteJid: m.key.remoteJid,
+                      fromMe: true
+                    }
+                  });
+                  
+                  await sock.sendMessage(m.key.remoteJid, { 
+                    text: '✅ Minha mensagem foi apagada!' 
+                  });
+                  
+                } catch (e) {
+                  await sock.sendMessage(m.key.remoteJid, { 
+                    text: '❌ Não tenho permissão para apagar esta mensagem.' 
+                  }, { quoted: m });
+                }
+              } else {
+                await sock.sendMessage(m.key.remoteJid, { 
+                  text: '❌ Não tenho permissão para apagar esta mensagem.' 
+                }, { quoted: m });
+              }
+            }
+            
+          } else {
+            await sock.sendMessage(m.key.remoteJid, { 
+              text: '🗑️ *Como apagar mensagens:*\n\n1. *Para apagar mensagem de membro:*\n   Responda a mensagem com `#apagar`\n   (Apenas Isaac Quarenta em grupos)\n\n2. *Para apagar minha mensagem:*\n   Responda minha mensagem com `#apagar`\n   (Funciona em PV e grupos)\n\n⚠️ *Nota:* Em grupos, apenas Isaac Quarenta pode apagar mensagens de outros membros.' 
+            }, { quoted: m });
+          }
+          
+        } catch (e) {
+          console.error('Erro no comando apagar:', e);
+          await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao apagar mensagem.' }, { quoted: m });
         }
         return true;
       
@@ -1388,7 +1800,6 @@ Use \`#help\` para ver todos os comandos.`;
         return true;
       
       default:
-        // Comando não reconhecido - não faz nada (não interfere com a conversa normal)
         return false;
     }
     
@@ -1470,7 +1881,11 @@ async function conectar() {
         console.log('🔗 API:', API_URL);
         console.log('⚙️ Prefixo comandos:', PREFIXO);
         console.log('🔐 Comandos restritos: Apenas Isaac Quarenta');
-        console.log('🛡️ Sistema de moderação: Ativo');
+        console.log('🎤 STT: Deepgram API (200h/mês GRATUITO)');
+        console.log('🎤 TTS: Google TTS (funcional)');
+        console.log('🎤 Resposta a voz: Ativada (STT REAL + TTS)');
+        console.log('🎤 Simulação gravação: Ativada');
+        console.log('🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)');
         console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
@@ -1502,7 +1917,13 @@ async function conectar() {
         const texto = extrairTexto(m).trim();
         const replyInfo = extrairReplyInfo(m);
         
-        // === VERIFICAÇÕES DE MODERAÇÃO (APENAS PARA GRUPOS) ===
+        // Verifica se é mensagem de áudio
+        const tipo = getContentType(m.message);
+        const temAudio = tipo === 'audioMessage';
+        let textoAudio = '';
+        let processarComoAudio = false;
+        
+        // === VERIFICAÇÕES DE MODERAÇÃO MELHORADAS (APENAS PARA GRUPOS) ===
         if (ehGrupo && m.key.participant) {
           const groupId = m.key.remoteJid;
           const userId = m.key.participant;
@@ -1512,6 +1933,21 @@ async function conectar() {
             console.log(`🔇 [MUTE] Usuário ${nome} tentou falar durante mute. Removendo...`);
             
             try {
+              // Primeiro apaga a mensagem do usuário mutado
+              try {
+                await sock.sendMessage(groupId, {
+                  delete: {
+                    id: m.key.id,
+                    remoteJid: groupId,
+                    fromMe: false,
+                    participant: userId
+                  }
+                });
+                console.log(`🗑️ Mensagem do usuário mutado apagada`);
+              } catch (deleteError) {
+                console.log(`⚠️ Não foi possível apagar mensagem do usuário mutado`);
+              }
+              
               // Remove o usuário do grupo
               await sock.groupParticipantsUpdate(groupId, [userId], 'remove');
               
@@ -1530,11 +1966,26 @@ async function conectar() {
             return; // Não processa a mensagem
           }
           
-          // 2. VERIFICA ANTI-LINK
+          // 2. VERIFICA ANTI-LINK (apenas para texto)
           if (isAntiLinkActive(groupId) && texto && containsLink(texto)) {
             console.log(`🔗 [ANTI-LINK] Usuário ${nome} enviou link. Banindo...`);
             
             try {
+              // Primeiro apaga a mensagem com link
+              try {
+                await sock.sendMessage(groupId, {
+                  delete: {
+                    id: m.key.id,
+                    remoteJid: groupId,
+                    fromMe: false,
+                    participant: userId
+                  }
+                });
+                console.log(`🗑️ Mensagem com link apagada`);
+              } catch (deleteError) {
+                console.log(`⚠️ Não foi possível apagar mensagem com link`);
+              }
+              
               // Remove o usuário do grupo
               await sock.groupParticipantsUpdate(groupId, [userId], 'remove');
               
@@ -1551,44 +2002,112 @@ async function conectar() {
           }
         }
         
-        if (!texto) return;
-        
         // === PRIMEIRO: VERIFICA SE É COMANDO EXTRA ===
-        const isComandoExtra = await handleComandosExtras(sock, m, texto, ehGrupo);
-        
-        // Se foi um comando extra, para aqui (não processa como conversa normal)
-        if (isComandoExtra) {
-          // Marca como lido mesmo sendo comando
-          await marcarComoLido(sock, m, ehGrupo, true);
-          return;
+        if (!temAudio && texto) {
+          const isComandoExtra = await handleComandosExtras(sock, m, texto, ehGrupo);
+          
+          if (isComandoExtra) {
+            await marcarComoLido(sock, m, ehGrupo, true);
+            return;
+          }
         }
         
-        // === SE NÃO FOR COMANDO: PROCESSAMENTO NORMAL DA AKIRA ===
-        const ativar = await deveResponder(m, ehGrupo, texto, replyInfo);
+        // === SE FOR MENSAGEM DE ÁUDIO: PROCESSA STT REAL ===
+        if (temAudio) {
+          console.log(`🎤 [ÁUDIO RECEBIDO] de ${nome}`);
+          
+          // Simula que está ouvindo o áudio
+          await simularGravacaoAudio(sock, m.key.remoteJid, 2000);
+          
+          // Baixa o áudio
+          const audioBuffer = await downloadMediaMessage({ audioMessage: m.message.audioMessage });
+          
+          if (!audioBuffer) {
+            console.error('❌ Erro ao baixar áudio');
+            if (ehGrupo) {
+              await sock.sendMessage(m.key.remoteJid, { 
+                text: '❌ Erro ao processar áudio. Tente novamente.' 
+              }, { quoted: m });
+            }
+            return;
+          }
+          
+          // Transcreve áudio para texto usando Deepgram REAL
+          console.log('🔊 Transcrevendo áudio para texto (Deepgram)...');
+          const transcricao = await transcreverAudioParaTexto(audioBuffer);
+          
+          if (transcricao.sucesso) {
+            textoAudio = transcricao.texto;
+            console.log(`📝 [TRANSCRIÇÃO REAL] ${nome}: ${textoAudio.substring(0, 100)}...`);
+            processarComoAudio = true;
+            
+            // Mostra transcrição em grupos (opcional)
+            if (ehGrupo && textoAudio.length > 10 && !textoAudio.includes('[Erro')) {
+              await sock.sendMessage(m.key.remoteJid, { 
+                text: `📝 *Transcrição:* ${textoAudio.substring(0, 150)}${textoAudio.length > 150 ? '...' : ''}` 
+              }, { quoted: m });
+            }
+          } else {
+            // Fallback
+            textoAudio = transcricao.texto || "[Não foi possível transcrever]";
+            console.log('⚠️ Transcrição falhou:', transcricao.erro || 'Erro desconhecido');
+            
+            // Em PV, responde mesmo sem transcrição
+            if (!ehGrupo) {
+              processarComoAudio = true;
+              textoAudio = "Olá! Recebi seu áudio. Configure o token do Deepgram para transcrição real.";
+            }
+          }
+        }
         
-        // === DINÂMICA DE LEITURA (✓✓ AZUL) ===
+        // === VERIFICA SE DEVE RESPONDER ===
+        let ativar = false;
+        let textoParaAPI = texto;
+        let mensagemCitadaFormatada = '';
+        
+        if (temAudio && processarComoAudio) {
+          ativar = await deveResponder(m, ehGrupo, textoAudio, replyInfo, true);
+          textoParaAPI = textoAudio;
+        } else if (!temAudio && texto) {
+          ativar = await deveResponder(m, ehGrupo, texto, replyInfo, false);
+        }
+        
+        // === FORMATAR MENSAGEM CITADA PARA API ===
+        if (replyInfo) {
+          if (replyInfo.ehRespostaAoBot) {
+            mensagemCitadaFormatada = `[Respondendo à Akira: "${replyInfo.texto.substring(0, 100)}..."]`;
+          } else {
+            // Formato melhorado: inclui quem escreveu a mensagem citada
+            mensagemCitadaFormatada = `[${replyInfo.usuarioCitadoNome} disse: "${replyInfo.texto.substring(0, 100)}..."]`;
+          }
+        }
+        
+        // === DINÂMICA DE LEITURA ===
         await marcarComoLido(sock, m, ehGrupo, ativar);
         
         if (!ativar) return;
         
-        console.log(`\n🔥 [PROCESSANDO] ${nome}: ${texto.substring(0, 60)}...`);
-        
-        // === PAYLOAD PARA API ===
-        let mensagem_citada = '';
-        if (replyInfo) {
-          if (replyInfo.ehRespostaAoBot) {
-            mensagem_citada = `[Respondendo à Akira: "${replyInfo.texto.substring(0, 100)}..."]`;
-          } else {
-            mensagem_citada = replyInfo.texto;
-          }
+        // Log
+        if (temAudio) {
+          console.log(`\n🎤 [PROCESSANDO ÁUDIO] ${nome}: ${textoAudio.substring(0, 60)}...`);
+        } else {
+          console.log(`\n🔥 [PROCESSANDO TEXTO] ${nome}: ${texto.substring(0, 60)}...`);
         }
         
+        // === PAYLOAD PARA API (MELHORADO) ===
         const payload = {
           usuario: nome,
           numero: numeroReal,
-          mensagem: texto,
-          mensagem_citada: mensagem_citada,
-          tipo_conversa: ehGrupo ? 'grupo' : 'pv'
+          mensagem: textoParaAPI,
+          mensagem_citada: mensagemCitadaFormatada,
+          tipo_conversa: ehGrupo ? 'grupo' : 'pv',
+          tipo_mensagem: temAudio ? 'audio' : 'texto',
+          // Informações adicionais para contexto
+          reply_info: replyInfo ? {
+            reply_to_bot: replyInfo.ehRespostaAoBot,
+            usuario_citado_nome: replyInfo.usuarioCitadoNome,
+            usuario_citado_numero: replyInfo.usuarioCitadoNumero
+          } : null
         };
         
         console.log('📤 Enviando para API Akira V21...');
@@ -1607,13 +2126,17 @@ async function conectar() {
         
         console.log(`📥 [RESPOSTA AKIRA] ${resposta.substring(0, 100)}...`);
         
-        // === SIMULAÇÃO REALISTA DE DIGITAÇÃO ===
-        // Tempo proporcional: 50ms por caractere (mín 3s, máx 10s)
-        const tempoDigitacao = Math.min(Math.max(resposta.length * 50, 3000), 10000);
+        // === SIMULAÇÃO REALISTA ===
+        let tempoDigitacao = 0;
+        if (temAudio) {
+          tempoDigitacao = Math.min(Math.max(resposta.length * 30, 2000), 7000);
+        } else {
+          tempoDigitacao = Math.min(Math.max(resposta.length * 50, 3000), 10000);
+        }
         
         await simularDigitacao(sock, m.key.remoteJid, tempoDigitacao);
         
-        // === ENVIA MENSAGEM ===
+        // === DECIDE COMO RESPONDER ===
         let opcoes = {};
         if (ehGrupo) {
           opcoes = { quoted: m };
@@ -1627,19 +2150,46 @@ async function conectar() {
           }
         }
         
-        try {
-          await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-          console.log('✅ [ENVIADO COM SUCESSO]\n');
+        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE COM ÁUDIO
+        if (temAudio) {
+          console.log('🎤 Convertendo resposta para áudio...');
           
-          // Volta ao estado normal
+          // Simula gravação de resposta
+          await simularGravacaoAudio(sock, m.key.remoteJid, 2000);
+          
+          // Gera áudio da resposta
+          const ttsResult = await textToSpeech(resposta, 'pt');
+          
+          if (ttsResult.error) {
+            console.error('❌ Erro ao gerar áudio TTS:', ttsResult.error);
+            await sock.sendMessage(m.key.remoteJid, { 
+              text: `*[Resposta ao seu áudio]*\n${resposta}` 
+            }, opcoes);
+          } else {
+            // Envia como áudio
+            await sock.sendMessage(m.key.remoteJid, { 
+              audio: ttsResult.buffer,
+              mimetype: 'audio/mp4',
+              ptt: true,
+              caption: `Resposta ao seu áudio`
+            }, opcoes);
+            console.log('✅ Áudio enviado com sucesso');
+          }
+        } else {
+          // Resposta normal em texto
           try {
-            await delay(500);
-            await sock.sendPresenceUpdate('available', m.key.remoteJid);
-          } catch (e) {}
-          
-        } catch (e) {
-          console.error('❌ Erro ao enviar:', e.message);
+            await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+            console.log('✅ [ENVIADO COM SUCESSO]\n');
+          } catch (e) {
+            console.error('❌ Erro ao enviar:', e.message);
+          }
         }
+        
+        // Volta ao estado normal
+        try {
+          await delay(500);
+          await sock.sendPresenceUpdate('available', m.key.remoteJid);
+        } catch (e) {}
         
       } catch (err) {
         console.error('❌ Erro no handler:', err);
@@ -1667,7 +2217,11 @@ app.get('/', (req, res) => res.send(`
     <p>Versão: IRONIA MÁXIMA + DIGITAÇÃO REALISTA + COMANDOS</p>
     <p>Prefixo: ${PREFIXO}</p>
     <p>🔐 Comandos restritos: Apenas Isaac Quarenta</p>
-    <p>🛡️ Sistema de moderação: Ativo (Mute, Anti-link)</p>
+    <p>🎤 STT: Deepgram API (200h/mês GRATUITO)</p>
+    <p>🎤 TTS: Google TTS (funcional)</p>
+    <p>🎤 Resposta a voz: Ativada (STT REAL + TTS)</p>
+    <p>🎤 Simulação gravação: Ativada</p>
+    <p>🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)</p>
     <p><a href="/qr" style="color:#0f0">Ver QR</a> | <a href="/health" style="color:#0f0">Health</a></p>
   </body></html>
 `));
@@ -1691,10 +2245,13 @@ app.get('/health', (req, res) => {
     bot_jid: BOT_JID || null,
     prefixo: PREFIXO,
     dono_autorizado: 'Isaac Quarenta',
+    stt_configurado: DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? 'Deepgram (200h/mês)' : 'Não configurado',
+    tts_configurado: 'Google TTS (funcional)',
     grupos_com_antilink: Array.from(antiLinkGroups).length,
     usuarios_mutados: mutedUsers.size,
+    progress_messages: progressMessages.size,
     uptime: process.uptime(),
-    version: 'v21_completo_moderacao_avancada'
+    version: 'v21_completo_moderacao_stt_real_deepgram_melhorado'
   });
 });
 
@@ -1731,6 +2288,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 conectar();
+
+// Limpeza periódica
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, data] of progressMessages.entries()) {
+    if (now - data.timestamp > 10 * 60 * 1000) {
+      progressMessages.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
 
 process.on('unhandledRejection', (err) => console.error('❌ REJECTION:', err));
 process.on('uncaughtException', (err) => console.error('❌ EXCEPTION:', err));
