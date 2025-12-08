@@ -413,23 +413,29 @@ function extrairReplyInfo(m) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÃO PARA VERIFICAR SE DEVE RESPONDER (ÁUDIO OU TEXTO)
+// ═══════════════════════════════════════════════════════════════════════
 async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
   const textoLower = String(texto).toLowerCase();
   const context = m.message?.extendedTextMessage?.contextInfo;
   
-  // Se for mensagem de áudio e foi ativado por menção/reply, responde
+  // === REGRAS PARA ÁUDIO ===
   if (temAudio) {
     // Em PV sempre responde a áudio
-    if (!ehGrupo) return true;
+    if (!ehGrupo) {
+      console.log('✅ [ATIVAÇÃO ÁUDIO] PV - Sempre responde');
+      return true;
+    }
     
     // Em grupo só responde se for mencionada/reply
     if (replyInfo && replyInfo.ehRespostaAoBot) {
-      console.log('✅ [ATIVAÇÃO] Reply ao bot detectado em áudio');
+      console.log('✅ [ATIVAÇÃO ÁUDIO] Reply ao bot detectado');
       return true;
     }
     
     if (textoLower.includes('akira')) {
-      console.log('✅ [ATIVAÇÃO] Menção "akira" detectada em áudio');
+      console.log('✅ [ATIVAÇÃO ÁUDIO] Menção "akira" detectada');
       return true;
     }
     
@@ -437,14 +443,14 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
     const botMencionado = mentions.some(jid => ehOBot(jid));
     
     if (botMencionado) {
-      console.log('✅ [ATIVAÇÃO] @mention do bot em áudio');
+      console.log('✅ [ATIVAÇÃO ÁUDIO] @mention do bot');
       return true;
     }
     
     if (BOT_JID_ALTERNATIVO) {
       const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
       if (textoLower.includes(jidAltNumero)) {
-        console.log('✅ [ATIVAÇÃO] Menção ao JID alternativo em áudio');
+        console.log('✅ [ATIVAÇÃO ÁUDIO] Menção ao JID alternativo');
         return true;
       }
     }
@@ -453,15 +459,15 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
     return false;
   }
   
-  // Para mensagens de texto normal
+  // === REGRAS PARA TEXTO ===
   if (replyInfo && replyInfo.ehRespostaAoBot) {
-    console.log('✅ [ATIVAÇÃO] Reply ao bot detectado');
+    console.log('✅ [ATIVAÇÃO TEXTO] Reply ao bot detectado');
     return true;
   }
   
   if (ehGrupo) {
     if (textoLower.includes('akira')) {
-      console.log('✅ [ATIVAÇÃO] Menção "akira" detectada');
+      console.log('✅ [ATIVAÇÃO TEXTO] Menção "akira" detectada');
       return true;
     }
     
@@ -469,14 +475,14 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
     const botMencionado = mentions.some(jid => ehOBot(jid));
     
     if (botMencionado) {
-      console.log('✅ [ATIVAÇÃO] @mention do bot');
+      console.log('✅ [ATIVAÇÃO TEXTO] @mention do bot');
       return true;
     }
     
     if (BOT_JID_ALTERNATIVO) {
       const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
       if (textoLower.includes(jidAltNumero)) {
-        console.log('✅ [ATIVAÇÃO] Menção ao JID alternativo');
+        console.log('✅ [ATIVAÇÃO TEXTO] Menção ao JID alternativo');
         return true;
       }
     }
@@ -485,6 +491,7 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
     return false;
   }
   
+  // Em PV sempre responde texto
   return true;
 }
 
@@ -927,10 +934,22 @@ async function textToSpeech(text, lang = 'pt') {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// DINÂMICA DE LEITURA (✓✓ AZUL) - CORRIGIDA
+// DINÂMICA DE LEITURA MELHORADA (✓✓ AZUL/VISTO/REPRODUZIDO)
 // ═══════════════════════════════════════════════════════════════════════
-async function marcarComoLido(sock, m, ehGrupo, foiAtivada) {
+async function marcarMensagem(sock, m, ehGrupo, foiAtivada, temAudio = false) {
   try {
+    // Para áudio: marca como "reproduzido" se foi ativado
+    if (temAudio && foiAtivada) {
+      try {
+        // Marca como lido/reproduzido
+        await sock.readMessages([m.key]);
+        console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido');
+      } catch (e) {
+        console.error('Erro ao marcar áudio como reproduzido:', e.message);
+      }
+      return;
+    }
+    
     // === REGRA 1: PV → SEMPRE MARCA COMO LIDO ===
     if (!ehGrupo) {
       await sock.readMessages([m.key]);
@@ -952,7 +971,7 @@ async function marcarComoLido(sock, m, ehGrupo, foiAtivada) {
     }
     
   } catch (e) {
-    console.error('Erro ao marcar lido:', e.message);
+    console.error('Erro ao marcar mensagem:', e.message);
   }
 }
 
@@ -989,7 +1008,14 @@ async function simularDigitacao(sock, jid, tempoMs) {
 async function simularGravacaoAudio(sock, jid, tempoMs) {
   try {
     console.log(`🎤 [GRAVANDO] Akira está preparando áudio por ${(tempoMs/1000).toFixed(1)}s...`);
+    
+    // Mostra que está gravando (status de gravação)
+    await sock.sendPresenceUpdate('recording', jid);
     await delay(tempoMs);
+    
+    // Volta ao estado normal
+    await sock.sendPresenceUpdate('paused', jid);
+    
     console.log('✅ [PRONTO] Áudio preparado');
   } catch (e) {
     console.error('Erro na simulação de gravação:', e.message);
@@ -2007,7 +2033,8 @@ async function conectar() {
           const isComandoExtra = await handleComandosExtras(sock, m, texto, ehGrupo);
           
           if (isComandoExtra) {
-            await marcarComoLido(sock, m, ehGrupo, true);
+            // Marca como lido (para comandos sempre marca como lido)
+            await marcarMensagem(sock, m, ehGrupo, true, false);
             return;
           }
         }
@@ -2017,7 +2044,7 @@ async function conectar() {
           console.log(`🎤 [ÁUDIO RECEBIDO] de ${nome}`);
           
           // Simula que está ouvindo o áudio
-          await simularGravacaoAudio(sock, m.key.remoteJid, 2000);
+          await simularGravacaoAudio(sock, m.key.remoteJid, 1500);
           
           // Baixa o áudio
           const audioBuffer = await downloadMediaMessage({ audioMessage: m.message.audioMessage });
@@ -2038,15 +2065,11 @@ async function conectar() {
           
           if (transcricao.sucesso) {
             textoAudio = transcricao.texto;
-            console.log(`📝 [TRANSCRIÇÃO REAL] ${nome}: ${textoAudio.substring(0, 100)}...`);
+            console.log(`📝 [TRANSCRIÇÃO INTERNA] ${nome}: ${textoAudio.substring(0, 100)}...`);
             processarComoAudio = true;
             
-            // Mostra transcrição em grupos (opcional)
-            if (ehGrupo && textoAudio.length > 10 && !textoAudio.includes('[Erro')) {
-              await sock.sendMessage(m.key.remoteJid, { 
-                text: `📝 *Transcrição:* ${textoAudio.substring(0, 150)}${textoAudio.length > 150 ? '...' : ''}` 
-              }, { quoted: m });
-            }
+            // **NÃO MOSTRA TRANSCRIÇÃO NO WHATSAPP** - apenas usa internamente
+            
           } else {
             // Fallback
             textoAudio = transcricao.texto || "[Não foi possível transcrever]";
@@ -2082,8 +2105,8 @@ async function conectar() {
           }
         }
         
-        // === DINÂMICA DE LEITURA ===
-        await marcarComoLido(sock, m, ehGrupo, ativar);
+        // === DINÂMICA DE LEITURA/REPRODUÇÃO ===
+        await marcarMensagem(sock, m, ehGrupo, ativar, temAudio);
         
         if (!ativar) return;
         
@@ -2126,16 +2149,6 @@ async function conectar() {
         
         console.log(`📥 [RESPOSTA AKIRA] ${resposta.substring(0, 100)}...`);
         
-        // === SIMULAÇÃO REALISTA ===
-        let tempoDigitacao = 0;
-        if (temAudio) {
-          tempoDigitacao = Math.min(Math.max(resposta.length * 30, 2000), 7000);
-        } else {
-          tempoDigitacao = Math.min(Math.max(resposta.length * 50, 3000), 10000);
-        }
-        
-        await simularDigitacao(sock, m.key.remoteJid, tempoDigitacao);
-        
         // === DECIDE COMO RESPONDER ===
         let opcoes = {};
         if (ehGrupo) {
@@ -2150,32 +2163,36 @@ async function conectar() {
           }
         }
         
-        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE COM ÁUDIO
+        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE APENAS COM ÁUDIO
         if (temAudio) {
           console.log('🎤 Convertendo resposta para áudio...');
           
-          // Simula gravação de resposta
-          await simularGravacaoAudio(sock, m.key.remoteJid, 2000);
+          // Simula gravação de resposta (MAIS LONGA para áudio)
+          await simularGravacaoAudio(sock, m.key.remoteJid, 2500);
           
           // Gera áudio da resposta
           const ttsResult = await textToSpeech(resposta, 'pt');
           
           if (ttsResult.error) {
             console.error('❌ Erro ao gerar áudio TTS:', ttsResult.error);
+            // Fallback: responde com texto se falhar TTS
             await sock.sendMessage(m.key.remoteJid, { 
               text: `*[Resposta ao seu áudio]*\n${resposta}` 
             }, opcoes);
           } else {
-            // Envia como áudio
+            // **RESPONDE APENAS COM ÁUDIO** (sem texto extra)
             await sock.sendMessage(m.key.remoteJid, { 
               audio: ttsResult.buffer,
               mimetype: 'audio/mp4',
-              ptt: true,
-              caption: `Resposta ao seu áudio`
+              ptt: true
             }, opcoes);
-            console.log('✅ Áudio enviado com sucesso');
+            console.log('✅ Áudio enviado com sucesso (sem transcrição)');
           }
         } else {
+          // === SIMULAÇÃO DE DIGITAÇÃO PARA TEXTO ===
+          let tempoDigitacao = Math.min(Math.max(resposta.length * 50, 3000), 10000);
+          await simularDigitacao(sock, m.key.remoteJid, tempoDigitacao);
+          
           // Resposta normal em texto
           try {
             await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
