@@ -1,14 +1,17 @@
 {
-  "name": "akira-baileys-bot",
-  "version": "3.0.0",
-  "description": "Bot Akira V21 completo - IA + Comandos + Stickers + YouTube MP3 + TTS",
+  "name": "akira-bot-v21",
+  "version": "21.0.0",
+  "description": "🤖 AKIRA BOT V21 — DIGITAÇÃO REALISTA + DINÂMICAS WHATSAPP COMPLETAS + STT DEEPGRAM + TTS + COMANDOS COMPLETOS",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
     "clean": "rm -rf temp auth_info_baileys node_modules package-lock.json",
-    "reinstall": "npm run clean && npm install"
+    "reinstall": "npm run clean && npm install",
+    "install-ffmpeg": "npm install ffmpeg-static --save",
+    "fix-deps": "npm audit fix --force",
+    "test": "echo \"✅ Bot configurado com sucesso!\" && node -v && npm -v"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
@@ -17,32 +20,54 @@
     "pino": "^9.5.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
-    "@hapi/boom": "^10.0.1",
     
     "ytdl-core": "^4.11.5",
+    "yt-search": "^2.10.3",
     "fluent-ffmpeg": "^2.1.2",
     "ffmpeg-static": "^5.2.0",
-    "google-tts-api": "^2.0.2",
     
+    "google-tts-api": "^2.0.2",
+    "form-data": "^4.0.0",
+    
+    "moment": "^2.30.1",
     "moment-timezone": "^0.5.45",
     "chalk": "^4.1.2"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   },
   "keywords": [
-    "whatsapp",
-    "bot",
+    "whatsapp-bot",
+    "akira-bot",
     "baileys",
-    "akira",
-    "ai",
+    "whatsapp-api",
     "chatbot",
-    "sticker",
-    "youtube",
+    "sticker-maker",
+    "youtube-downloader",
+    "text-to-speech",
+    "speech-to-text",
+    "deepgram",
     "tts",
-    "commands"
+    "stt",
+    "moderation-bot",
+    "group-manager"
   ],
   "author": "Isaac Quarenta",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isaacquarenta/akira-bot-v21.git"
+  },
+  "bugs": {
+    "url": "https://github.com/isaacquarenta/akira-bot-v21/issues"
+  },
+  "homepage": "https://github.com/isaacquarenta/akira-bot-v21#readme",
+  "funding": {
+    "type": "individual",
+    "url": "https://ko-fi.com/isaacquarenta"
+  }
 }
