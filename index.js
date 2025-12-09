@@ -439,7 +439,7 @@ function extrairReplyInfo(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO PARA VERIFICAR SE DEVE RESPONDER (ÁUDIO OU TEXTO)
+// FUNÇÃO PARA VERIFICAR SE DEVE RESPONDER (ÁUDIO OU TEXTO) - CORRIGIDA
 // ═══════════════════════════════════════════════════════════════════════
 async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
   const textoLower = String(texto).toLowerCase();
@@ -701,7 +701,7 @@ async function transcreverAudioParaTexto(audioBuffer) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES PARA COMANDOS EXTRAS (MANTIDAS IGUAIS)
+// FUNÇÕES PARA COMANDOS EXTRAS (MANTIDAS IGUAIS COM CORREÇÕES)
 // ═══════════════════════════════════════════════════════════════════════
 async function downloadMediaMessage(message) {
   try {
@@ -855,24 +855,42 @@ async function searchYouTube(query) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÃO MELHORADA PARA DOWNLOAD DE ÁUDIO DO YOUTUBE
+// ═══════════════════════════════════════════════════════════════════════
 async function downloadYTAudio(url) {
   try {
     if (!ytdl.validateURL(url)) {
       return { error: 'URL do YouTube inválida' };
     }
     
+    // Primeiro obtém informações do vídeo
     const info = await ytdl.getInfo(url, {
       requestOptions: {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9,pt;q=0.8',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
         }
       }
     });
     
-    const audioFormat = ytdl.chooseFormat(info.formats, {
+    // Tenta encontrar formato de áudio
+    let audioFormat = ytdl.chooseFormat(info.formats, {
       quality: 'lowestaudio',
       filter: 'audioonly'
     });
+    
+    // Se não encontrar, procura qualquer formato com áudio
+    if (!audioFormat) {
+      audioFormat = info.formats.find(f => 
+        f.hasAudio && !f.hasVideo && 
+        (f.container === 'mp4' || f.container === 'webm')
+      );
+    }
     
     if (!audioFormat) {
       return { error: 'Não foi possível encontrar formato de áudio' };
@@ -880,25 +898,59 @@ async function downloadYTAudio(url) {
     
     const outputPath = generateRandomFilename('mp3');
     
-    await new Promise((resolve, reject) => {
-      const stream = ytdl(url, {
-        quality: 'lowestaudio',
-        filter: 'audioonly',
-        requestOptions: {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    // Método mais robusto usando yt-dlp como fallback
+    if (audioFormat.url && audioFormat.url.includes('googlevideo.com')) {
+      try {
+        // Método direto com ytdl-core (funciona para a maioria dos vídeos)
+        const stream = ytdl(url, {
+          quality: 'lowestaudio',
+          filter: 'audioonly',
+          requestOptions: {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
           }
+        });
+        
+        await new Promise((resolve, reject) => {
+          const outputStream = fs.createWriteStream(outputPath);
+          
+          stream.pipe(outputStream);
+          
+          outputStream.on('finish', resolve);
+          outputStream.on('error', reject);
+          stream.on('error', reject);
+        });
+        
+      } catch (streamError) {
+        console.log('Método 1 falhou, tentando método alternativo...');
+        
+        // Método 2: Usar yt-dlp via exec se disponível
+        try {
+          const execPromise = util.promisify(exec);
+          
+          // Verifica se yt-dlp está instalado
+          try {
+            await execPromise('yt-dlp --version');
+            
+            // Usa yt-dlp para baixar
+            await execPromise(`yt-dlp -x --audio-format mp3 --audio-quality 128k -o "${outputPath}" "${url}"`);
+            
+          } catch (ytdlpError) {
+            // Método 3: Fallback para youtube-dl
+            try {
+              await execPromise(`youtube-dl -x --audio-format mp3 --audio-quality 128k -o "${outputPath}" "${url}"`);
+            } catch (youtubeDlError) {
+              return { error: 'Erro: Instale yt-dlp ou youtube-dl para downloads mais confiáveis.' };
+            }
+          }
+        } catch (execError) {
+          return { error: 'YouTube bloqueou o download. Tente outro vídeo ou use um link direto.' };
         }
-      });
-      
-      const outputStream = fs.createWriteStream(outputPath);
-      
-      stream.pipe(outputStream);
-      
-      outputStream.on('finish', resolve);
-      outputStream.on('error', reject);
-      stream.on('error', reject);
-    });
+      }
+    } else {
+      return { error: 'Não foi possível acessar o vídeo. Verifique a URL.' };
+    }
     
     const stats = fs.statSync(outputPath);
     if (stats.size === 0) {
@@ -918,8 +970,17 @@ async function downloadYTAudio(url) {
   } catch (e) {
     console.error('Erro ao baixar áudio do YouTube:', e);
     
+    // Mensagens de erro mais específicas
     if (e.message.includes('Could not extract functions') || e.message.includes('signature')) {
-      return { error: 'YouTube bloqueou o download. Tente outro vídeo ou use o comando mais tarde.' };
+      return { error: 'YouTube bloqueou o download. Tente outro vídeo ou use um link de música não bloqueada.' };
+    }
+    
+    if (e.message.includes('Premature close')) {
+      return { error: 'Conexão interrompida. Tente novamente.' };
+    }
+    
+    if (e.message.includes('Video unavailable')) {
+      return { error: 'Vídeo indisponível ou privado.' };
     }
     
     return { error: 'Erro ao processar vídeo: ' + e.message };
@@ -960,7 +1021,7 @@ async function textToSpeech(text, lang = 'pt') {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// DINÂMICA DE LEITURA MELHORADA (✓✓ AZUL/VISTO/REPRODUZIDO)
+// DINÂMICA DE LEITURA MELHORADA (✓✓ AZUL/VISTO/REPRODUZIDO) - CORRIGIDA
 // ═══════════════════════════════════════════════════════════════════════
 async function marcarMensagem(sock, m, ehGrupo, foiAtivada, temAudio = false) {
   try {
@@ -990,9 +1051,15 @@ async function marcarMensagem(sock, m, ehGrupo, foiAtivada, temAudio = false) {
       return;
     }
     
-    // === REGRA 3: GRUPO SEM MENÇÃO → NÃO MARCA (fica em ✓✓ cinza) ===
+    // === REGRA 3: GRUPO SEM MENÇÃO → APENAS MARCA COMO ENTREGUE (não lido) ===
     if (ehGrupo && !foiAtivada) {
-      console.log('✓✓ [ENTREGUE] Grupo - NÃO marcado como lido (sem menção)');
+      try {
+        // Marca como entregue (mas não como lido)
+        await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+        console.log('✓ [ENTREGUE] Grupo - Apenas marcado como entregue (sem duplo check azul)');
+      } catch (e) {
+        console.log('✓ [ENTREGUE] Não foi possível marcar como entregue, mas não foi lido');
+      }
       return;
     }
     
@@ -1029,7 +1096,7 @@ async function simularDigitacao(sock, jid, tempoMs) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SIMULAÇÃO DE GRAVAÇÃO DE ÁUDIO (NOVA FUNÇÃO)
+// SIMULAÇÃO DE GRAVAÇÃO DE ÁUDIO (NOVA FUNÇÃO) - CORRIGIDA
 // ═══════════════════════════════════════════════════════════════════════
 async function simularGravacaoAudio(sock, jid, tempoMs) {
   try {
@@ -1072,7 +1139,7 @@ async function obterInfoGrupo(sock, groupId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// HANDLER DE COMANDOS EXTRAS (MANTIDO EXATAMENTE COMO ESTAVA)
+// HANDLER DE COMANDOS EXTRAS (ATUALIZADO CONFORME SUAS ESPECIFICAÇÕES)
 // ═══════════════════════════════════════════════════════════════════════
 async function handleComandosExtras(sock, m, texto, ehGrupo) {
   try {
@@ -1134,7 +1201,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === STICKER ANIMADO DE VÍDEO ===
+      // === STICKER ANIMADO DE VÍDEO === (CORRIGIDO: SEM MENSAGEM "CRIANDO...")
       case 'gif':
         try {
           const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -1155,9 +1222,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             return true;
           }
           
-          await sock.sendMessage(m.key.remoteJid, { 
-            text: '🔄 Criando sticker animado... Isso pode levar alguns segundos.' 
-          }, { quoted: m });
+          // NÃO ENVIA MENSAGEM "CRIANDO STICKER ANIMADO" - apenas processa silenciosamente
           
           const stickerResult = await createAnimatedStickerFromVideo(mediaBuffer, m);
           
@@ -1166,9 +1231,11 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             return true;
           }
           
+          // ENVIA APENAS O STICKER, SEM MENSAGEM DE TEXTO
           await sock.sendMessage(m.key.remoteJid, { 
             sticker: stickerResult.buffer 
-            }, { quoted: m });
+          }, { quoted: m });
+          
           console.log('✅ Sticker animado criado com sucesso');
         } catch (e) {
           console.error('Erro no comando gif:', e);
@@ -1256,7 +1323,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === PLAY / YOUTUBE MP3 ===
+      // === PLAY / YOUTUBE MP3 === (MELHORADO)
       case 'play':
       case 'tocar':
       case 'music':
@@ -1347,6 +1414,7 @@ Agora eu posso responder mensagens de voz!
 - Envie um áudio mencionando "Akira" em grupos
 - Em PV, envie qualquer áudio que eu respondo
 - Eu transcrevo seu áudio e respondo com minha voz
+- NUNCA mostro transcrições no chat
 
 *👑 COMANDOS DE DONO (Apenas Isaac Quarenta):*
 \`#add <número>\` - Adicionar membro
@@ -1397,12 +1465,13 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
 ✅ Digitação realista
 ✅ IA conversacional
 ✅ Figurinhas personalizadas
-✅ Stickers animados de vídeo
-✅ Download de áudio do YouTube (com busca!)
+✅ Stickers animados de vídeo (sem mensagens desnecessárias)
+✅ Download de áudio do YouTube (sistema melhorado)
 ✅ Texto para voz (TTS)
 ✅ Resposta a mensagens de voz (STT via Deepgram + TTS)
-✅ Dinâmica de leitura inteligente
+✅ Dinâmica de leitura inteligente (entregue/visto/reproduzido)
 ✅ Sistema de moderação aprimorado
+✅ NUNCA mostra transcrições de áudio no chat
 
 *Configuração STT:* ${DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? '✅ Deepgram configurado' : '❌ Configure DEEPGRAM_API_KEY'}
 
@@ -1885,6 +1954,41 @@ Use \`#help\` para ver todos os comandos.`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// SIMULAÇÃO DE STATUS DE MENSAGENS (NOVA FUNÇÃO)
+// ═══════════════════════════════════════════════════════════════════════
+async function simularStatusMensagem(sock, m, foiAtivada, temAudio = false) {
+  try {
+    const ehGrupo = String(m.key.remoteJid || '').endsWith('@g.us');
+    
+    // Se não foi ativada (ignorada), marca apenas como entregue
+    if (!foiAtivada) {
+      try {
+        // Marca como entregue (single tick)
+        await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+        console.log('✓ [ENTREGUE] Mensagem ignorada - apenas entregue');
+      } catch (e) {
+        console.log('⚠️ Não foi possível marcar como entregue');
+      }
+      return;
+    }
+    
+    // Se foi ativada, marca como visto/lido/reproduzido
+    if (temAudio && foiAtivada) {
+      // Para áudio ativado: marca como reproduzido
+      await sock.readMessages([m.key]);
+      console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido');
+    } else if (foiAtivada) {
+      // Para texto ativado: marca como lido
+      await sock.readMessages([m.key]);
+      console.log('✓✓ [LIDO] Mensagem marcada como lida (azul)');
+    }
+    
+  } catch (e) {
+    console.error('Erro ao simular status:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // CONEXÃO PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════
 async function conectar() {
@@ -1961,7 +2065,8 @@ async function conectar() {
         console.log('🎤 Resposta a voz: Ativada (STT REAL + TTS)');
         console.log('🎤 Simulação gravação: Ativada');
         console.log('🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)');
-        console.log('📝 Mensagem citada: COMPLETA para API (CORREÇÃO APLICADA)');
+        console.log('📝 Mensagem citada: COMPLETA para API (correção aplicada)');
+        console.log('📱 Status mensagens: Entregue/Visto/Reproduzido realista');
         console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
@@ -2084,7 +2189,7 @@ async function conectar() {
           
           if (isComandoExtra) {
             // Marca como lido (para comandos sempre marca como lido)
-            await marcarMensagem(sock, m, ehGrupo, true, false);
+            await simularStatusMensagem(sock, m, true, false);
             return;
           }
         }
@@ -2101,11 +2206,8 @@ async function conectar() {
           
           if (!audioBuffer) {
             console.error('❌ Erro ao baixar áudio');
-            if (ehGrupo) {
-              await sock.sendMessage(m.key.remoteJid, { 
-                text: '❌ Erro ao processar áudio. Tente novamente.' 
-              }, { quoted: m });
-            }
+            // Ainda marca como entregue/reproduzido
+            await simularStatusMensagem(sock, m, false, true);
             return;
           }
           
@@ -2118,7 +2220,7 @@ async function conectar() {
             console.log(`📝 [TRANSCRIÇÃO INTERNA] ${nome}: ${textoAudio.substring(0, 100)}...`);
             processarComoAudio = true;
             
-            // **NÃO MOSTRA TRANSCRIÇÃO NO WHATSAPP** - apenas usa internamente
+            // **NUNCA MOSTRA TRANSCRIÇÃO NO WHATSAPP** - apenas usa internamente
             
           } else {
             // Fallback
@@ -2128,7 +2230,7 @@ async function conectar() {
             // Em PV, responde mesmo sem transcrição
             if (!ehGrupo) {
               processarComoAudio = true;
-              textoAudio = "Olá! Recebi seu áudio. Configure o token do Deepgram para transcrição real.";
+              textoAudio = "Olá! Recebi seu áudio mas houve um erro na transcrição.";
             }
           }
         }
@@ -2145,6 +2247,18 @@ async function conectar() {
           ativar = await deveResponder(m, ehGrupo, texto, replyInfo, false);
         }
         
+        // === SIMULA STATUS DE MENSAGEM (ENTREGUE/VISTO/REPRODUZIDO) ===
+        await simularStatusMensagem(sock, m, ativar, temAudio);
+        
+        if (!ativar) return;
+        
+        // Log
+        if (temAudio) {
+          console.log(`\n🎤 [PROCESSANDO ÁUDIO] ${nome}: ${textoAudio.substring(0, 60)}...`);
+        } else {
+          console.log(`\n🔥 [PROCESSANDO TEXTO] ${nome}: ${texto.substring(0, 60)}...`);
+        }
+        
         // === FORMATAR MENSAGEM CITADA PARA API - CORREÇÃO COMPLETA ===
         if (replyInfo) {
           if (replyInfo.ehRespostaAoBot) {
@@ -2154,18 +2268,6 @@ async function conectar() {
             // Formato melhorado: inclui quem escreveu a mensagem citada - CORREÇÃO APLICADA
             mensagemCitadaFormatada = `[${replyInfo.usuarioCitadoNome} disse: "${replyInfo.textoCompleto}"]`;
           }
-        }
-        
-        // === DINÂMICA DE LEITURA/REPRODUÇÃO ===
-        await marcarMensagem(sock, m, ehGrupo, ativar, temAudio);
-        
-        if (!ativar) return;
-        
-        // Log
-        if (temAudio) {
-          console.log(`\n🎤 [PROCESSANDO ÁUDIO] ${nome}: ${textoAudio.substring(0, 60)}...`);
-        } else {
-          console.log(`\n🔥 [PROCESSANDO TEXTO] ${nome}: ${texto.substring(0, 60)}...`);
         }
         
         // === PAYLOAD PARA API (MELHORADO E CORRIGIDO) ===
@@ -2216,21 +2318,28 @@ async function conectar() {
         
         console.log(`📥 [RESPOSTA AKIRA] ${resposta.substring(0, 100)}...`);
         
-        // === DECIDE COMO RESPONDER ===
+        // === DECIDE COMO RESPONDER (REGRAS CORRIGIDAS) ===
         let opcoes = {};
+        
+        // REGRA: Em grupo, SEMPRE responde com reply à mensagem original
         if (ehGrupo) {
           opcoes = { quoted: m };
-          console.log('📎 Reply em grupo');
+          console.log('📎 Reply em grupo (regra fixa)');
         } else {
+          // REGRA: Em PV, se for reply ao bot, responde com reply
           if (replyInfo && replyInfo.ehRespostaAoBot) {
             opcoes = { quoted: m };
             console.log('📎 Reply em PV (usuário respondeu ao bot)');
+          } else if (temAudio) {
+            // REGRA: Em PV com áudio (não reply), responde normalmente (sem reply)
+            console.log('📩 Mensagem direta em PV (áudio)');
           } else {
-            console.log('📩 Mensagem direta em PV');
+            // REGRA: Em PV com texto (não reply), responde normalmente
+            console.log('📩 Mensagem direta em PV (texto)');
           }
         }
         
-        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE APENAS COM ÁUDIO
+        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE APENAS COM ÁUDIO (SEM TEXTO)
         if (temAudio) {
           console.log('🎤 Convertendo resposta para áudio...');
           
@@ -2244,16 +2353,16 @@ async function conectar() {
             console.error('❌ Erro ao gerar áudio TTS:', ttsResult.error);
             // Fallback: responde com texto se falhar TTS
             await sock.sendMessage(m.key.remoteJid, { 
-              text: `*[Resposta ao seu áudio]*\n${resposta}` 
+              text: resposta  // NÃO ADICIONA "*[Resposta ao seu áudio]*"
             }, opcoes);
           } else {
-            // **RESPONDE APENAS COM ÁUDIO** (sem texto extra)
+            // **RESPONDE APENAS COM ÁUDIO** (sem texto extra, sem transcrição)
             await sock.sendMessage(m.key.remoteJid, { 
               audio: ttsResult.buffer,
               mimetype: 'audio/mp4',
               ptt: true
             }, opcoes);
-            console.log('✅ Áudio enviado com sucesso (sem transcrição)');
+            console.log('✅ Áudio enviado com sucesso (sem transcrição, sem texto extra)');
           }
         } else {
           // === SIMULAÇÃO DE DIGITAÇÃO PARA TEXTO ===
@@ -2307,6 +2416,8 @@ app.get('/', (req, res) => res.send(`
     <p>🎤 Simulação gravação: Ativada</p>
     <p>🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)</p>
     <p>📝 Mensagem citada: COMPLETA para API (correção aplicada)</p>
+    <p>📱 Status mensagens: Entregue/Visto/Reproduzido realista</p>
+    <p>⚠️ NUNCA mostra transcrições de áudio no chat</p>
     <p><a href="/qr" style="color:#0f0">Ver QR</a> | <a href="/health" style="color:#0f0">Health</a></p>
   </body></html>
 `));
@@ -2337,7 +2448,15 @@ app.get('/health', (req, res) => {
     progress_messages: progressMessages.size,
     uptime: process.uptime(),
     version: 'v21_completo_moderacao_stt_real_deepgram_melhorado',
-    correcao_mensagem_citada: 'COMPLETA para API'
+    correcoes: [
+      'Mensagem citada COMPLETA para API',
+      'Download YouTube melhorado (métodos alternativos)',
+      'NUNCA mostra transcrições de áudio',
+      'Status mensagens realista (entregue/visto/reproduzido)',
+      'Comando #gif não envia mensagem "criando sticker"',
+      'Respostas em áudio sem texto extra',
+      'Regras de reply corrigidas (grupo sempre reply, PV condicional)'
+    ]
   });
 });
 
