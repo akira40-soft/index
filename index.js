@@ -11,6 +11,7 @@
  * ✅ MODERAÇÃO: Mute, anti-link, etc.
  * ✅ STT: Transcrição de áudio via Deepgram (200h/mês GRATUITO) - REAL
  * ✅ TTS: Resposta em áudio via Google TTS (gratuito)
+ * ✅ CORREÇÃO: Mensagem citada completa enviada para API
  * ═══════════════════════════════════════════════════════════════════════
  */
 const {
@@ -351,6 +352,9 @@ function extrairTexto(m) {
     if (tipo === 'audioMessage') {
       return '[mensagem de voz]';
     }
+    if (tipo === 'stickerMessage') {
+      return '[figurinha]';
+    }
     
     return '';
   } catch (e) {
@@ -358,7 +362,7 @@ function extrairTexto(m) {
   }
 }
 
-// FUNÇÃO MELHORADA PARA EXTRAIR REPLY INFO
+// FUNÇÃO MELHORADA PARA EXTRAIR REPLY INFO - COMPLETO
 function extrairReplyInfo(m) {
   try {
     const context = m.message?.extendedTextMessage?.contextInfo;
@@ -368,18 +372,32 @@ function extrairReplyInfo(m) {
     const tipo = getContentType(quoted);
     
     let textoReply = '';
+    let tipoMidia = 'texto';
+    
     if (tipo === 'conversation') {
       textoReply = quoted.conversation || '';
+      tipoMidia = 'texto';
     } else if (tipo === 'extendedTextMessage') {
       textoReply = quoted.extendedTextMessage?.text || '';
+      tipoMidia = 'texto';
     } else if (tipo === 'imageMessage') {
       textoReply = quoted.imageMessage?.caption || '[imagem]';
+      tipoMidia = 'imagem';
     } else if (tipo === 'videoMessage') {
       textoReply = quoted.videoMessage?.caption || '[vídeo]';
+      tipoMidia = 'video';
     } else if (tipo === 'audioMessage') {
       textoReply = '[áudio]';
+      tipoMidia = 'audio';
+    } else if (tipo === 'stickerMessage') {
+      textoReply = '[figurinha]';
+      tipoMidia = 'sticker';
+    } else if (tipo === 'documentMessage') {
+      textoReply = quoted.documentMessage?.caption || quoted.documentMessage?.fileName || '[documento]';
+      tipoMidia = 'documento';
     } else {
       textoReply = '[conteúdo]';
+      tipoMidia = 'outro';
     }
     
     const participantJid = context.participant || null;
@@ -402,13 +420,20 @@ function extrairReplyInfo(m) {
     
     return {
       texto: textoReply,
+      textoCompleto: textoReply, // CORREÇÃO: Garantir texto completo
+      tipoMidia: tipoMidia,
       participantJid: participantJid,
       ehRespostaAoBot: ehRespostaAoBot,
       usuarioCitadoNome: usuarioCitadoNome,
-      usuarioCitadoNumero: usuarioCitadoNumero
+      usuarioCitadoNumero: usuarioCitadoNumero,
+      ehSticker: tipo === 'stickerMessage',
+      ehAudio: tipo === 'audioMessage',
+      ehImagem: tipo === 'imageMessage',
+      ehVideo: tipo === 'videoMessage'
     };
     
   } catch (e) {
+    console.error('Erro ao extrair reply info:', e);
     return null;
   }
 }
@@ -645,9 +670,10 @@ async function transcreverAudioParaTexto(audioBuffer) {
     console.error('❌ Erro na transcrição REAL:', error.message);
     
     // Tenta limpar arquivos em caso de erro
+    let audioPath, convertedPath;
     try {
-      fs.unlinkSync(audioPath);
-      fs.unlinkSync(convertedPath);
+      if (audioPath) fs.unlinkSync(audioPath);
+      if (convertedPath) fs.unlinkSync(convertedPath);
     } catch (e) {}
     
     if (error.response) {
@@ -1009,7 +1035,7 @@ async function simularGravacaoAudio(sock, jid, tempoMs) {
   try {
     console.log(`🎤 [GRAVANDO] Akira está preparando áudio por ${(tempoMs/1000).toFixed(1)}s...`);
     
-    // Mostra que está gravando (status de gravação)
+    // Mostra que está gravação (status de gravação)
     await sock.sendPresenceUpdate('recording', jid);
     await delay(tempoMs);
     
@@ -1019,6 +1045,29 @@ async function simularGravacaoAudio(sock, jid, tempoMs) {
     console.log('✅ [PRONTO] Áudio preparado');
   } catch (e) {
     console.error('Erro na simulação de gravação:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÃO PARA OBTER INFORMAÇÕES DO GRUPO
+// ═══════════════════════════════════════════════════════════════════════
+async function obterInfoGrupo(sock, groupId) {
+  try {
+    const groupMetadata = await sock.groupMetadata(groupId);
+    return {
+      id: groupId,
+      subject: groupMetadata.subject || 'Grupo sem nome',
+      participants: groupMetadata.participants || [],
+      created: groupMetadata.creation || Date.now()
+    };
+  } catch (e) {
+    console.error('Erro ao obter info do grupo:', e);
+    return {
+      id: groupId,
+      subject: 'Grupo sem nome',
+      participants: [],
+      created: Date.now()
+    };
   }
 }
 
@@ -1119,7 +1168,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
           
           await sock.sendMessage(m.key.remoteJid, { 
             sticker: stickerResult.buffer 
-          }, { quoted: m });
+            }, { quoted: m });
           console.log('✅ Sticker animado criado com sucesso');
         } catch (e) {
           console.error('Erro no comando gif:', e);
@@ -1912,6 +1961,7 @@ async function conectar() {
         console.log('🎤 Resposta a voz: Ativada (STT REAL + TTS)');
         console.log('🎤 Simulação gravação: Ativada');
         console.log('🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)');
+        console.log('📝 Mensagem citada: COMPLETA para API (CORREÇÃO APLICADA)');
         console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
@@ -2095,13 +2145,14 @@ async function conectar() {
           ativar = await deveResponder(m, ehGrupo, texto, replyInfo, false);
         }
         
-        // === FORMATAR MENSAGEM CITADA PARA API ===
+        // === FORMATAR MENSAGEM CITADA PARA API - CORREÇÃO COMPLETA ===
         if (replyInfo) {
           if (replyInfo.ehRespostaAoBot) {
-            mensagemCitadaFormatada = `[Respondendo à Akira: "${replyInfo.texto.substring(0, 100)}..."]`;
+            // Passa o TEXTO COMPLETO da mensagem citada - CORREÇÃO APLICADA
+            mensagemCitadaFormatada = `[Respondendo à Akira: "${replyInfo.textoCompleto}"]`;
           } else {
-            // Formato melhorado: inclui quem escreveu a mensagem citada
-            mensagemCitadaFormatada = `[${replyInfo.usuarioCitadoNome} disse: "${replyInfo.texto.substring(0, 100)}..."]`;
+            // Formato melhorado: inclui quem escreveu a mensagem citada - CORREÇÃO APLICADA
+            mensagemCitadaFormatada = `[${replyInfo.usuarioCitadoNome} disse: "${replyInfo.textoCompleto}"]`;
           }
         }
         
@@ -2117,27 +2168,43 @@ async function conectar() {
           console.log(`\n🔥 [PROCESSANDO TEXTO] ${nome}: ${texto.substring(0, 60)}...`);
         }
         
-        // === PAYLOAD PARA API (MELHORADO) ===
-        const payload = {
+        // === PAYLOAD PARA API (MELHORADO E CORRIGIDO) ===
+        const payloadBase = {
           usuario: nome,
           numero: numeroReal,
           mensagem: textoParaAPI,
-          mensagem_citada: mensagemCitadaFormatada,
+          mensagem_citada: mensagemCitadaFormatada,  // AGORA COM TEXTO COMPLETO
           tipo_conversa: ehGrupo ? 'grupo' : 'pv',
           tipo_mensagem: temAudio ? 'audio' : 'texto',
           // Informações adicionais para contexto
           reply_info: replyInfo ? {
             reply_to_bot: replyInfo.ehRespostaAoBot,
             usuario_citado_nome: replyInfo.usuarioCitadoNome,
-            usuario_citado_numero: replyInfo.usuarioCitadoNumero
+            usuario_citado_numero: replyInfo.usuarioCitadoNumero,
+            texto_citado_completo: replyInfo.textoCompleto,  // ADICIONADO
+            tipo_midia: replyInfo.tipoMidia || 'texto'
           } : null
         };
         
+        // Adicionar informações do grupo se for grupo
+        if (ehGrupo) {
+          try {
+            const grupoInfo = await obterInfoGrupo(sock, m.key.remoteJid);
+            payloadBase.grupo_id = m.key.remoteJid;
+            payloadBase.grupo_nome = grupoInfo.subject;
+          } catch (e) {
+            console.error('Erro ao obter info do grupo:', e);
+            payloadBase.grupo_id = m.key.remoteJid;
+            payloadBase.grupo_nome = 'Grupo sem nome';
+          }
+        }
+        
         console.log('📤 Enviando para API Akira V21...');
+        console.log('📝 Mensagem citada enviada:', mensagemCitadaFormatada.substring(0, 100) + '...');
         
         let resposta = '...';
         try {
-          const res = await axios.post(API_URL, payload, {
+          const res = await axios.post(API_URL, payloadBase, {
             timeout: 120000,
             headers: { 'Content-Type': 'application/json' }
           });
@@ -2239,6 +2306,7 @@ app.get('/', (req, res) => res.send(`
     <p>🎤 Resposta a voz: Ativada (STT REAL + TTS)</p>
     <p>🎤 Simulação gravação: Ativada</p>
     <p>🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)</p>
+    <p>📝 Mensagem citada: COMPLETA para API (correção aplicada)</p>
     <p><a href="/qr" style="color:#0f0">Ver QR</a> | <a href="/health" style="color:#0f0">Health</a></p>
   </body></html>
 `));
@@ -2268,7 +2336,8 @@ app.get('/health', (req, res) => {
     usuarios_mutados: mutedUsers.size,
     progress_messages: progressMessages.size,
     uptime: process.uptime(),
-    version: 'v21_completo_moderacao_stt_real_deepgram_melhorado'
+    version: 'v21_completo_moderacao_stt_real_deepgram_melhorado',
+    correcao_mensagem_citada: 'COMPLETA para API'
   });
 });
 
