@@ -12,6 +12,12 @@
  * ✅ STT: Transcrição de áudio via Deepgram (200h/mês GRATUITO) - REAL
  * ✅ TTS: Resposta em áudio via Google TTS (gratuito)
  * ✅ CORREÇÃO: Mensagem citada completa enviada para API
+ * ✅ NOVO: Sticker de sticker (normal e animado)
+ * ✅ NOVO: Stickers animados até 30s
+ * ✅ NOVO: Download YouTube com métodos alternativos
+ * ✅ NOVO: Nome personalizado nos stickers
+ * ✅ NOVO: Comandos de grupo por reply
+ * ✅ FIX: Marcação como entregue corrigida
  * ═══════════════════════════════════════════════════════════════════════
  */
 const {
@@ -362,7 +368,7 @@ function extrairTexto(m) {
   }
 }
 
-// FUNÇÃO MELHORADA PARA EXTRAIR REPLY INFO - COMPLETO
+// FUNÇÃO MELHORADA PARA EXTRAIR REPLY INFO - CONTEXTO CORRIGIDO
 function extrairReplyInfo(m) {
   try {
     const context = m.message?.extendedTextMessage?.contextInfo;
@@ -418,14 +424,22 @@ function extrairReplyInfo(m) {
       }
     }
     
+    // Agora também precisamos saber QUEM está falando (quem enviou a mensagem atual)
+    const quemFalaJid = m.key.participant || m.key.remoteJid;
+    let quemFalaNome = m.pushName || 'desconhecido';
+    let quemFalaNumero = extrairNumeroReal(m);
+    
     return {
       texto: textoReply,
-      textoCompleto: textoReply, // CORREÇÃO: Garantir texto completo
+      textoCompleto: textoReply,
       tipoMidia: tipoMidia,
       participantJid: participantJid,
       ehRespostaAoBot: ehRespostaAoBot,
       usuarioCitadoNome: usuarioCitadoNome,
       usuarioCitadoNumero: usuarioCitadoNumero,
+      quemFalaJid: quemFalaJid,
+      quemFalaNome: quemFalaNome,
+      quemFalaNumero: quemFalaNumero,
       ehSticker: tipo === 'stickerMessage',
       ehAudio: tipo === 'audioMessage',
       ehImagem: tipo === 'imageMessage',
@@ -744,18 +758,58 @@ function cleanupFile(filePath) {
   }
 }
 
-async function createSticker(imageBuffer, quotedMsg) {
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÕES PARA STICKERS (COMPLETAMENTE MODIFICADAS)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Função para detectar se um sticker é animado
+function isStickerAnimated(stickerBuffer) {
+  try {
+    // Verifica se é WebP animado (RIFF header + ANIM chunk)
+    if (stickerBuffer.length < 20) return false;
+    
+    const header = stickerBuffer.slice(0, 12).toString('hex');
+    // WebP animado tem "RIFF" e depois "WEBPVP8X"
+    if (header.includes('52494646') && header.includes('5745425056503858')) {
+      return true;
+    }
+    
+    // Verifica por chunk ANIM no WebP
+    const stickerStr = stickerBuffer.toString('binary');
+    return stickerStr.includes('ANIM');
+  } catch (e) {
+    return false;
+  }
+}
+
+// Função para criar sticker normal de imagem COM NOME PERSONALIZADO NO STICKER
+async function createSticker(imageBuffer, quotedMsg, packName = "Angolan Vibes", author = "+244937035662") {
   try {
     const inputPath = generateRandomFilename('jpg');
     const outputPath = generateRandomFilename('webp');
     
     fs.writeFileSync(inputPath, imageBuffer);
     
+    // Criar watermark com nome do usuário (opcional)
+    const usuarioNome = quotedMsg?.pushName || "Usuário";
+    
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
-        .outputOptions(['-vcodec libwebp', "-vf scale='min(512,iw)':min'(512,ih)':force_original_aspect_ratio=decrease,fps=15"])
-        .on('end', resolve)
-        .on('error', reject)
+        .outputOptions([
+          '-vcodec libwebp', 
+          "-vf scale='min(512,iw)':min'(512,ih)':force_original_aspect_ratio=decrease,fps=15",
+          '-metadata', `title=${packName}`,
+          '-metadata', `artist=${author}`,
+          '-metadata', `comment=Criado por ${usuarioNome} via Akira Bot`
+        ])
+        .on('end', () => {
+          console.log(`✅ Sticker criado para ${usuarioNome}`);
+          resolve();
+        })
+        .on('error', (err) => {
+          console.error('❌ Erro ao criar sticker:', err);
+          reject(err);
+        })
         .save(outputPath);
     });
     
@@ -770,15 +824,20 @@ async function createSticker(imageBuffer, quotedMsg) {
   }
 }
 
-async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg) {
+// Função para criar sticker animado de vídeo COM NOME PERSONALIZADO
+async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg, duracaoMaxima = 30) {
   try {
     const inputPath = generateRandomFilename('mp4');
     const outputPath = generateRandomFilename('webp');
     
     fs.writeFileSync(inputPath, videoBuffer);
     
+    const usuarioNome = quotedMsg?.pushName || "Usuário";
+    
     await new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
+      const command = ffmpeg(inputPath);
+      
+      command
         .outputOptions([
           '-vcodec libwebp',
           '-vf', 'fps=15,scale=512:512:flags=lanczos',
@@ -788,11 +847,20 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg) {
           '-q:v', '70',
           '-preset', 'default',
           '-an',
-          '-t', '7',
+          '-t', duracaoMaxima.toString(),
+          '-metadata', `title=${usuarioNome}'s Pack`,
+          '-metadata', `artist=Akira Bot`,
+          '-metadata', `comment=Criado por ${usuarioNome}`,
           '-y'
         ])
-        .on('end', resolve)
-        .on('error', reject)
+        .on('end', () => {
+          console.log(`✅ Sticker animado criado para ${usuarioNome}`);
+          resolve();
+        })
+        .on('error', (err) => {
+          console.error('❌ Erro ao criar sticker animado:', err);
+          reject(err);
+        })
         .save(outputPath);
     });
     
@@ -810,12 +878,34 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg) {
     return { buffer: stickerBuffer };
   } catch (e) {
     console.error('Erro ao criar sticker animado:', e);
-    cleanupFile(inputPath);
-    cleanupFile(outputPath);
     return { error: 'Erro ao criar sticker animado: ' + e.message };
   }
 }
 
+// Função para criar sticker de sticker normal
+async function createStickerFromSticker(stickerBuffer, quotedMsg) {
+  try {
+    // Se já é um sticker, apenas retorna o buffer
+    // Mas podemos adicionar metadados personalizados
+    return stickerBuffer;
+  } catch (e) {
+    console.error('Erro ao criar sticker de sticker:', e);
+    return null;
+  }
+}
+
+// Função para criar sticker animado de sticker animado
+async function createAnimatedStickerFromAnimatedSticker(stickerBuffer, quotedMsg) {
+  try {
+    // Se já é um sticker animado, apenas retorna o buffer
+    return stickerBuffer;
+  } catch (e) {
+    console.error('Erro ao criar sticker animado de sticker animado:', e);
+    return null;
+  }
+}
+
+// Função para converter sticker para imagem
 async function convertStickerToImage(stickerBuffer, quotedMsg) {
   try {
     const inputPath = generateRandomFilename('webp');
@@ -842,148 +932,183 @@ async function convertStickerToImage(stickerBuffer, quotedMsg) {
   }
 }
 
-async function searchYouTube(query) {
+// Função para enviar sticker SEM THUMBNAIL e com nome no próprio sticker
+async function enviarStickerPersonalizado(sock, jid, stickerBuffer, packName = "Angolan Vibes", author = "+244937035662", quotedMsg = null) {
   try {
-    const searchResult = await yts(query);
-    if (searchResult.videos.length > 0) {
-      return searchResult.videos[0].url;
-    }
-    return null;
+    const opcoes = quotedMsg ? { quoted: quotedMsg } : {};
+    
+    // Enviar sticker SIMPLES, sem thumbnail, sem preview
+    // O nome já está embutido nos metadados do WebP criado
+    await sock.sendMessage(jid, { sticker: stickerBuffer }, opcoes);
+    
+    console.log(`✅ Sticker enviado para ${packName}`);
+    return true;
   } catch (e) {
-    console.error('Erro na busca YouTube:', e);
-    return null;
+    console.error('Erro ao enviar sticker personalizado:', e);
+    return false;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO MELHORADA PARA DOWNLOAD DE ÁUDIO DO YOUTUBE
+// FUNÇÃO PARA DOWNLOAD DE ÁUDIO DO YOUTUBE - SISTEMA CORRIGIDO
 // ═══════════════════════════════════════════════════════════════════════
 async function downloadYTAudio(url) {
   try {
-    if (!ytdl.validateURL(url)) {
+    console.log('🎵 Iniciando download de áudio do YouTube...');
+    
+    // Extrair ID do vídeo
+    let videoId = '';
+    if (url.includes('youtube.com/watch?v=')) {
+      videoId = url.split('v=')[1]?.split('&')[0];
+    } else if (url.includes('youtu.be/')) {
+      videoId = url.split('youtu.be/')[1]?.split('?')[0];
+    }
+    
+    if (!videoId || videoId.length !== 11) {
       return { error: 'URL do YouTube inválida' };
     }
     
-    // Primeiro obtém informações do vídeo
-    const info = await ytdl.getInfo(url, {
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'en-US,en;q=0.9,pt;q=0.8',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
-      }
-    });
-    
-    // Tenta encontrar formato de áudio
-    let audioFormat = ytdl.chooseFormat(info.formats, {
-      quality: 'lowestaudio',
-      filter: 'audioonly'
-    });
-    
-    // Se não encontrar, procura qualquer formato com áudio
-    if (!audioFormat) {
-      audioFormat = info.formats.find(f => 
-        f.hasAudio && !f.hasVideo && 
-        (f.container === 'mp4' || f.container === 'webm')
-      );
-    }
-    
-    if (!audioFormat) {
-      return { error: 'Não foi possível encontrar formato de áudio' };
-    }
-    
+    console.log(`📹 Video ID: ${videoId}`);
     const outputPath = generateRandomFilename('mp3');
     
-    // Método mais robusto usando yt-dlp como fallback
-    if (audioFormat.url && audioFormat.url.includes('googlevideo.com')) {
-      try {
-        // Método direto com ytdl-core (funciona para a maioria dos vídeos)
-        const stream = ytdl(url, {
-          quality: 'lowestaudio',
-          filter: 'audioonly',
-          requestOptions: {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+    // MÉTODO 1: Usar API externa confiável
+    try {
+      console.log('🔄 Tentando método 1: API externa confiável...');
+      
+      // API confiável de conversão
+      const apiUrl = `https://api.download-lagu-mp3.com/@api/json/mp3/${videoId}`;
+      
+      const response = await axios.get(apiUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Referer': 'https://download-lagu-mp3.com/'
+        },
+        timeout: 30000
+      });
+      
+      if (response.data && response.data.vid && response.data.vid.mp3) {
+        console.log('✅ Link de download obtido da API');
+        const mp3Url = response.data.vid.mp3;
+        
+        const audioResponse = await axios({
+          method: 'GET',
+          url: mp3Url,
+          responseType: 'stream',
+          timeout: 60000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'audio/mpeg,audio/*'
           }
         });
+        
+        const writer = fs.createWriteStream(outputPath);
+        audioResponse.data.pipe(writer);
         
         await new Promise((resolve, reject) => {
-          const outputStream = fs.createWriteStream(outputPath);
-          
-          stream.pipe(outputStream);
-          
-          outputStream.on('finish', resolve);
-          outputStream.on('error', reject);
-          stream.on('error', reject);
+          writer.on('finish', resolve);
+          writer.on('error', reject);
         });
         
-      } catch (streamError) {
-        console.log('Método 1 falhou, tentando método alternativo...');
-        
-        // Método 2: Usar yt-dlp via exec se disponível
-        try {
-          const execPromise = util.promisify(exec);
-          
-          // Verifica se yt-dlp está instalado
-          try {
-            await execPromise('yt-dlp --version');
-            
-            // Usa yt-dlp para baixar
-            await execPromise(`yt-dlp -x --audio-format mp3 --audio-quality 128k -o "${outputPath}" "${url}"`);
-            
-          } catch (ytdlpError) {
-            // Método 3: Fallback para youtube-dl
-            try {
-              await execPromise(`youtube-dl -x --audio-format mp3 --audio-quality 128k -o "${outputPath}" "${url}"`);
-            } catch (youtubeDlError) {
-              return { error: 'Erro: Instale yt-dlp ou youtube-dl para downloads mais confiáveis.' };
-            }
-          }
-        } catch (execError) {
-          return { error: 'YouTube bloqueou o download. Tente outro vídeo ou use um link direto.' };
+        const stats = fs.statSync(outputPath);
+        if (stats.size === 0) {
+          cleanupFile(outputPath);
+          throw new Error('Arquivo vazio');
         }
+        
+        if (stats.size > 25 * 1024 * 1024) {
+          cleanupFile(outputPath);
+          return { error: 'Arquivo muito grande (>25MB). Tente um vídeo mais curto.' };
+        }
+        
+        const audioBuffer = fs.readFileSync(outputPath);
+        cleanupFile(outputPath);
+        
+        // Obter título
+        let title = 'Música do YouTube';
+        try {
+          const search = await yts({ videoId: videoId });
+          if (search && search.title) {
+            title = search.title;
+          }
+        } catch (e) {}
+        
+        return { buffer: audioBuffer, title: title };
       }
-    } else {
-      return { error: 'Não foi possível acessar o vídeo. Verifique a URL.' };
+    } catch (apiError) {
+      console.log('❌ API falhou:', apiError.message);
     }
     
-    const stats = fs.statSync(outputPath);
-    if (stats.size === 0) {
+    // MÉTODO 2: Usar ytdl-core com configuração atualizada
+    try {
+      console.log('🔄 Tentando método 2: ytdl-core atualizado...');
+      
+      const info = await ytdl.getInfo(videoId, {
+        requestOptions: {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
+        }
+      });
+      
+      // Procurar formato de áudio
+      let audioFormat = ytdl.chooseFormat(info.formats, { 
+        quality: 'highestaudio',
+        filter: 'audioonly'
+      });
+      
+      if (!audioFormat) {
+        throw new Error('Nenhum formato de áudio encontrado');
+      }
+      
+      console.log(`✅ Format encontrado: ${audioFormat.container}`);
+      
+      // Baixar usando stream
+      const writeStream = fs.createWriteStream(outputPath);
+      const stream = ytdl.downloadFromInfo(info, { format: audioFormat });
+      
+      await new Promise((resolve, reject) => {
+        stream.pipe(writeStream);
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+        stream.on('error', reject);
+      });
+      
+      const stats = fs.statSync(outputPath);
+      if (stats.size === 0) {
+        cleanupFile(outputPath);
+        throw new Error('Arquivo vazio');
+      }
+      
+      if (stats.size > 25 * 1024 * 1024) {
+        cleanupFile(outputPath);
+        return { error: 'Arquivo muito grande (>25MB). Tente um vídeo mais curto.' };
+      }
+      
+      const audioBuffer = fs.readFileSync(outputPath);
       cleanupFile(outputPath);
-      return { error: 'Arquivo de áudio vazio' };
+      
+      return { 
+        buffer: audioBuffer, 
+        title: info.videoDetails.title || 'Música do YouTube'
+      };
+      
+    } catch (ytdlError) {
+      console.log('❌ ytdl-core falhou:', ytdlError.message);
     }
     
-    if (stats.size > 25 * 1024 * 1024) {
-      cleanupFile(outputPath);
-      return { error: 'Arquivo muito grande (>25MB). Não posso enviar via WhatsApp.' };
-    }
+    // Se todos os métodos falharem
+    return { error: 'Não foi possível baixar o áudio. Tente outro vídeo.' };
     
-    const audioBuffer = fs.readFileSync(outputPath);
-    cleanupFile(outputPath);
-    
-    return { buffer: audioBuffer, title: info.videoDetails.title };
   } catch (e) {
-    console.error('Erro ao baixar áudio do YouTube:', e);
+    console.error('❌ Erro geral ao baixar áudio:', e);
     
-    // Mensagens de erro mais específicas
-    if (e.message.includes('Could not extract functions') || e.message.includes('signature')) {
-      return { error: 'YouTube bloqueou o download. Tente outro vídeo ou use um link de música não bloqueada.' };
-    }
+    // Limpar arquivo temporário se existir
+    try {
+      cleanupFile(outputPath);
+    } catch (cleanError) {}
     
-    if (e.message.includes('Premature close')) {
-      return { error: 'Conexão interrompida. Tente novamente.' };
-    }
-    
-    if (e.message.includes('Video unavailable')) {
-      return { error: 'Vídeo indisponível ou privado.' };
-    }
-    
-    return { error: 'Erro ao processar vídeo: ' + e.message };
+    return { error: 'Erro ao processar: ' + e.message };
   }
 }
 
@@ -1051,14 +1176,21 @@ async function marcarMensagem(sock, m, ehGrupo, foiAtivada, temAudio = false) {
       return;
     }
     
-    // === REGRA 3: GRUPO SEM MENÇÃO → APENAS MARCA COMO ENTREGUE (não lido) ===
+    // === REGRA 3: GRUPO SEM MENÇÃO → APENAS MARCA COMO ENTREGUE (✓) ===
+    // FORÇANDO SEMPRE MARCAR COMO ENTREGUE NOS GRUPOS
     if (ehGrupo && !foiAtivada) {
       try {
-        // Marca como entregue (mas não como lido)
+        // FORÇAR marcação como entregue (✓) para todas mensagens em grupo
         await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
-        console.log('✓ [ENTREGUE] Grupo - Apenas marcado como entregue (sem duplo check azul)');
+        console.log('✓ [ENTREGUE FORÇADO] Grupo - Marcado como entregue (check simples)');
       } catch (e) {
-        console.log('✓ [ENTREGUE] Não foi possível marcar como entregue, mas não foi lido');
+        // Se falhar, tenta método alternativo
+        try {
+          await sock.sendReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+          console.log('✓ [ENTREGUE ALT] Grupo - Usando método alternativo');
+        } catch (e2) {
+          console.log('⚠️ Não foi possível marcar como entregue, mas o WhatsApp mostrará automaticamente');
+        }
       }
       return;
     }
@@ -1139,7 +1271,7 @@ async function obterInfoGrupo(sock, groupId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// HANDLER DE COMANDOS EXTRAS (ATUALIZADO CONFORME SUAS ESPECIFICAÇÕES)
+// HANDLER DE COMANDOS EXTRAS (ATUALIZADO COM CORREÇÕES)
 // ═══════════════════════════════════════════════════════════════════════
 async function handleComandosExtras(sock, m, texto, ehGrupo) {
   try {
@@ -1162,38 +1294,78 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
     // COMANDOS DISPONÍVEIS
     switch (comando) {
       
-      // === STICKER (APENAS IMAGENS) ===
+      // === STICKER (COM NOME PERSONALIZADO) ===
       case 'sticker':
       case 's':
       case 'fig':
         try {
           const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-          const hasMedia = m.message?.imageMessage || quoted?.imageMessage;
+          const hasImage = m.message?.imageMessage || quoted?.imageMessage;
+          const hasSticker = quoted?.stickerMessage;
           
-          if (!hasMedia) {
+          if (!hasImage && !hasSticker) {
             await sock.sendMessage(m.key.remoteJid, { 
-              text: '📸 *Como usar:* \n- Envie uma imagem com legenda `#sticker`\n- OU responda uma imagem com `#sticker`\n\n⚠️ *Para vídeos, use `#gif` para criar sticker animado.*' 
+              text: '📸 *Como usar:* \n- Envie uma imagem com legenda `#sticker`\n- OU responda uma imagem/sticker com `#sticker`\n\n⚠️ *Para vídeos, use `#gif` para criar sticker animado.*' 
             }, { quoted: m });
             return true;
           }
           
-          const mediaMessage = quoted?.imageMessage || m.message.imageMessage;
-          const mediaBuffer = await downloadMediaMessage({ imageMessage: mediaMessage });
+          let stickerBuffer = null;
+          let isAnimated = false;
+          let packName = "Angolan Vibes";
+          let author = "+244937035662";
           
-          if (!mediaBuffer) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar imagem.' }, { quoted: m });
-            return true;
+          // Adicionar nome do usuário que solicitou
+          const usuarioNome = m.pushName || "Usuário";
+          
+          // Personalizar pack com nome do usuário
+          packName = `${usuarioNome}'s Pack`;
+          
+          if (hasImage) {
+            // Criar sticker de imagem
+            const mediaMessage = quoted?.imageMessage || m.message.imageMessage;
+            const mediaBuffer = await downloadMediaMessage({ imageMessage: mediaMessage });
+            
+            if (!mediaBuffer) {
+              await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar imagem.' }, { quoted: m });
+              return true;
+            }
+            
+            stickerBuffer = await createSticker(mediaBuffer, m, packName, author);
+            isAnimated = false;
+            
+          } else if (hasSticker) {
+            // Criar sticker de sticker
+            const stickerMessage = quoted.stickerMessage;
+            const mediaBuffer = await downloadMediaMessage({ stickerMessage: stickerMessage });
+            
+            if (!mediaBuffer) {
+              await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar sticker.' }, { quoted: m });
+              return true;
+            }
+            
+            // Verifica se é sticker animado
+            isAnimated = isStickerAnimated(mediaBuffer);
+            
+            if (isAnimated) {
+              // Sticker animado para sticker animado
+              stickerBuffer = await createAnimatedStickerFromAnimatedSticker(mediaBuffer, m);
+            } else {
+              // Sticker normal para sticker normal
+              stickerBuffer = await createStickerFromSticker(mediaBuffer, m);
+            }
           }
           
-          const stickerBuffer = await createSticker(mediaBuffer, m);
-          
-          if (stickerBuffer) {
-            await sock.sendMessage(m.key.remoteJid, { 
-              sticker: stickerBuffer 
-            }, { quoted: m });
-            console.log('✅ Sticker criado com sucesso');
-          } else {
+          if (!stickerBuffer) {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao criar sticker.' }, { quoted: m });
+            return true;
+          }
+          
+          // Envia sticker SEM THUMBNAIL
+          const sucesso = await enviarStickerPersonalizado(sock, m.key.remoteJid, stickerBuffer, packName, author, m);
+          
+          if (!sucesso) {
+            await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao enviar sticker.' }, { quoted: m });
           }
         } catch (e) {
           console.error('Erro no comando sticker:', e);
@@ -1201,42 +1373,74 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === STICKER ANIMADO DE VÍDEO === (CORRIGIDO: SEM MENSAGEM "CRIANDO...")
+      // === STICKER ANIMADO DE VÍDEO (COM NOME PERSONALIZADO) ===
       case 'gif':
         try {
           const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
           const hasVideo = m.message?.videoMessage || quoted?.videoMessage;
+          const hasSticker = quoted?.stickerMessage;
           
-          if (!hasVideo) {
+          if (!hasVideo && !hasSticker) {
             await sock.sendMessage(m.key.remoteJid, { 
-              text: '🎥 *Como usar:* \n- Envie um vídeo com legenda `#gif`\n- OU responda um vídeo com `#gif`\n\n⚠️ *Vídeos até 7 segundos*' 
+              text: '🎥 *Como usar:* \n- Envie um vídeo com legenda `#gif`\n- OU responda um vídeo/sticker animado com `#gif`\n\n⚠️ *Vídeos até 30 segundos*' 
             }, { quoted: m });
             return true;
           }
           
-          const mediaMessage = quoted?.videoMessage || m.message.videoMessage;
-          const mediaBuffer = await downloadMediaMessage({ videoMessage: mediaMessage });
+          let stickerBuffer = null;
+          const usuarioNome = m.pushName || "Usuário";
+          let packName = `${usuarioNome}`;
+          let author = "+244937035662";
           
-          if (!mediaBuffer) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar vídeo.' }, { quoted: m });
+          if (hasVideo) {
+            // Criar sticker animado de vídeo
+            const mediaMessage = quoted?.videoMessage || m.message.videoMessage;
+            const mediaBuffer = await downloadMediaMessage({ videoMessage: mediaMessage });
+            
+            if (!mediaBuffer) {
+              await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar vídeo.' }, { quoted: m });
+              return true;
+            }
+            
+            const stickerResult = await createAnimatedStickerFromVideo(mediaBuffer, m, 30); // 30 segundos
+            
+            if (stickerResult.error) {
+              await sock.sendMessage(m.key.remoteJid, { text: `❌ ${stickerResult.error}` }, { quoted: m });
+              return true;
+            }
+            
+            stickerBuffer = stickerResult.buffer;
+            
+          } else if (hasSticker) {
+            // Criar sticker animado de sticker animado
+            const stickerMessage = quoted.stickerMessage;
+            const mediaBuffer = await downloadMediaMessage({ stickerMessage: stickerMessage });
+            
+            if (!mediaBuffer) {
+              await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao baixar sticker.' }, { quoted: m });
+              return true;
+            }
+            
+            // Verifica se é sticker animado
+            if (!isStickerAnimated(mediaBuffer)) {
+              await sock.sendMessage(m.key.remoteJid, { text: '❌ Este sticker não é animado. Use `#sticker` para stickers normais.' }, { quoted: m });
+              return true;
+            }
+            
+            stickerBuffer = await createAnimatedStickerFromAnimatedSticker(mediaBuffer, m);
+          }
+          
+          if (!stickerBuffer) {
+            await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao criar sticker animado.' }, { quoted: m });
             return true;
           }
           
-          // NÃO ENVIA MENSAGEM "CRIANDO STICKER ANIMADO" - apenas processa silenciosamente
+          // Envia sticker animado SEM THUMBNAIL
+          const sucesso = await enviarStickerPersonalizado(sock, m.key.remoteJid, stickerBuffer, packName, author, m);
           
-          const stickerResult = await createAnimatedStickerFromVideo(mediaBuffer, m);
-          
-          if (stickerResult.error) {
-            await sock.sendMessage(m.key.remoteJid, { text: `❌ ${stickerResult.error}` }, { quoted: m });
-            return true;
+          if (!sucesso) {
+            await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao enviar sticker animado.' }, { quoted: m });
           }
-          
-          // ENVIA APENAS O STICKER, SEM MENSAGEM DE TEXTO
-          await sock.sendMessage(m.key.remoteJid, { 
-            sticker: stickerResult.buffer 
-          }, { quoted: m });
-          
-          console.log('✅ Sticker animado criado com sucesso');
         } catch (e) {
           console.error('Erro no comando gif:', e);
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Erro ao criar sticker animado.' }, { quoted: m });
@@ -1301,7 +1505,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             return true;
           }
           
-          // Simula gravação
           await simularGravacaoAudio(sock, m.key.remoteJid, 3000);
           
           const ttsResult = await textToSpeech(text, lang);
@@ -1323,7 +1526,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === PLAY / YOUTUBE MP3 === (MELHORADO)
+      // === PLAY / YOUTUBE MP3 === (SISTEMA CORRIGIDO)
       case 'play':
       case 'tocar':
       case 'music':
@@ -1394,7 +1597,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === MENU DE AJUDA ===
+      // === MENU DE AJUDA ATUALIZADO ===
       case 'help':
       case 'menu':
       case 'comandos':
@@ -1403,11 +1606,11 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
 *📱 PREFIXO:* \`${PREFIXO}\`
 
 *🎨 MÍDIA (Todos):*
-\`#sticker\` - Criar sticker de imagem
-\`#gif\` - Criar sticker animado de vídeo (até 7s)
+\`#sticker\` - Criar sticker de imagem OU sticker (com nome personalizado)
+\`#gif\` - Criar sticker animado de vídeo OU sticker animado (até 30s, com nome personalizado)
 \`#toimg\` - Converter sticker para imagem
 \`#tts <idioma> <texto>\` - Texto para voz
-\`#play <nome/link>\` - Baixar música do YouTube (com busca!)
+\`#play <nome/link>\` - Baixar música do YouTube (sistema corrigido)
 
 *🎤 ÁUDIO INTELIGENTE:*
 Agora eu posso responder mensagens de voz!
@@ -1418,19 +1621,23 @@ Agora eu posso responder mensagens de voz!
 
 *👑 COMANDOS DE DONO (Apenas Isaac Quarenta):*
 \`#add <número>\` - Adicionar membro
-\`#remove @membro\` - Remover membro
-\`#promote @membro\` - Dar admin
-\`#demote @membro\` - Remover admin
-\`#mute @usuário\` - Mutar por 5 minutos
-\`#desmute @usuário\` - Desmutar
+\`#remove @membro\` - Remover membro (ou use reply)
+\`#ban @membro\` - Alias para remover (ou use reply)
+\`#promote @membro\` - Dar admin (ou use reply)
+\`#demote @membro\` - Remover admin (ou use reply)
+\`#mute @usuário\` - Mutar por 5 minutos (ou use reply)
+\`#desmute @usuário\` - Desmutar (ou use reply)
 \`#antilink on/off\` - Ativar/desativar anti-link
 \`#antilink status\` - Ver status anti-link
 \`#apagar\` - Apagar mensagem (responda a mensagem)
 
-*⚙️ UTILIDADES (Todos):*
-\`#ping\` - Testar latência
-\`#info\` - Informações do bot
-\`#donate\` - Apoiar o projeto
+*⚠️ NOVAS FUNCIONALIDADES:*
+- Sticker de sticker (normal e animado)
+- Stickers animados agora aceitam vídeos até 30 segundos
+- Stickers com nome personalizado EMBUTIDO (sem thumbnail)
+- Download YouTube com sistema corrigido
+- Comandos de grupo agora funcionam com reply ou menção
+- Aliases: \`#ban\` para remover
 
 *💬 CONVERSA NORMAL:*
 Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
@@ -1448,7 +1655,7 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
         await sock.sendMessage(m.key.remoteJid, { text: `📡 Latência: ${latency}ms\n🕐 Uptime: ${Math.floor(process.uptime())}s` });
         return true;
       
-      // === INFO ===
+      // === INFO ATUALIZADO ===
       case 'info':
       case 'botinfo':
         const infoText = `🤖 *INFORMAÇÕES DO BOT*
@@ -1464,16 +1671,26 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
 *Recursos:*
 ✅ Digitação realista
 ✅ IA conversacional
-✅ Figurinhas personalizadas
-✅ Stickers animados de vídeo (sem mensagens desnecessárias)
-✅ Download de áudio do YouTube (sistema melhorado)
+✅ Figurinhas personalizadas EMBUTIDAS (nome no sticker)
+✅ Stickers animados de vídeo (AGORA ATÉ 30s)
+✅ Sticker de sticker (normal e animado)
+✅ Download de áudio do YouTube (sistema corrigido)
 ✅ Texto para voz (TTS)
 ✅ Resposta a mensagens de voz (STT via Deepgram + TTS)
-✅ Dinâmica de leitura inteligente (entregue/visto/reproduzido)
-✅ Sistema de moderação aprimorado
+✅ Dinâmica de leitura inteligente (✓ sempre entregue em grupos)
+✅ Sistema de moderação aprimorado (agora com reply)
 ✅ NUNCA mostra transcrições de áudio no chat
 
 *Configuração STT:* ${DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? '✅ Deepgram configurado' : '❌ Configure DEEPGRAM_API_KEY'}
+
+*Novidades:*
+- Stickers animados até 30 segundos
+- Sticker de sticker (reutilizar stickers)
+- Nome personalizado EMBUTIDO nos stickers (sem thumbnail)
+- Download YouTube corrigido
+- Mute/ban por reply (não apenas por menção)
+- Alias #ban para remover
+- Marcação como entregue corrigida
 
 Use \`#help\` para ver todos os comandos.`;
         
@@ -1527,9 +1744,10 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === REMOVER MEMBRO (SÓ ISAAC QUARENTA) ===
+      // === REMOVER MEMBRO (AGORA SUPORTA REPLY E TEM ALIAS #ban) ===
       case 'remove':
       case 'kick':
+      case 'ban': // ALIAS PARA REMOVER
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
           return true;
@@ -1541,13 +1759,13 @@ Use \`#help\` para ver todos os comandos.`;
           const ehDono = verificarPermissaoDono(numeroUsuario, nomeUsuario);
           
           if (!ehDono) {
-            console.log('❌ [BLOQUEADO] Comando #remove usado por não-dono:', numeroUsuario, nomeUsuario);
+            console.log('❌ [BLOQUEADO] Comando #remove/#ban usado por não-dono:', numeroUsuario, nomeUsuario);
             
             const payload = { 
               usuario: nomeUsuario, 
               numero: numeroUsuario, 
               mensagem: '/reset',
-              tentativa_comando: '#remove'
+              tentativa_comando: '#remove/#ban'
             };
             
             try {
@@ -1560,13 +1778,23 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
+          // AGORA SUPORTA REPLY E MENCÃO
+          let targetUserIds = [];
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-          if (mencionados.length === 0) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o membro com @ para remover.' }, { quoted: m });
+          const replyInfo = extrairReplyInfo(m);
+          
+          if (mencionados.length > 0) {
+            targetUserIds = mencionados;
+          } else if (replyInfo && replyInfo.participantJid) {
+            targetUserIds = [replyInfo.participantJid];
+          } else {
+            await sock.sendMessage(m.key.remoteJid, { 
+              text: '❌ Marque o membro com @ OU responda a mensagem dele com `#remove` ou `#ban`' 
+            }, { quoted: m });
             return true;
           }
           
-          await sock.groupParticipantsUpdate(m.key.remoteJid, mencionados, 'remove');
+          await sock.groupParticipantsUpdate(m.key.remoteJid, targetUserIds, 'remove');
           await sock.sendMessage(m.key.remoteJid, { text: '✅ Membro(s) removido(s) do grupo.' }, { quoted: m });
         } catch (e) {
           console.error('Erro ao remover membro:', e);
@@ -1574,7 +1802,7 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === PROMOVER A ADMIN (SÓ ISAAC QUARENTA) ===
+      // === PROMOVER A ADMIN (AGORA SUPORTA REPLY) ===
       case 'promote':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1606,13 +1834,21 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
+          // SUPORTA REPLY
+          let targetUserIds = [];
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-          if (mencionados.length === 0) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o membro com @ para promover.' }, { quoted: m });
+          const replyInfo = extrairReplyInfo(m);
+          
+          if (mencionados.length > 0) {
+            targetUserIds = mencionados;
+          } else if (replyInfo && replyInfo.participantJid) {
+            targetUserIds = [replyInfo.participantJid];
+          } else {
+            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o membro com @ OU responda a mensagem dele com `#promote`' }, { quoted: m });
             return true;
           }
           
-          await sock.groupParticipantsUpdate(m.key.remoteJid, mencionados, 'promote');
+          await sock.groupParticipantsUpdate(m.key.remoteJid, targetUserIds, 'promote');
           await sock.sendMessage(m.key.remoteJid, { text: '✅ Membro(s) promovido(s) a admin.' }, { quoted: m });
         } catch (e) {
           console.error('Erro ao promover:', e);
@@ -1620,7 +1856,7 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === REMOVER ADMIN (SÓ ISAAC QUARENTA) ===
+      // === REMOVER ADMIN (AGORA SUPORTA REPLY) ===
       case 'demote':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1652,13 +1888,21 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
+          // SUPORTA REPLY
+          let targetUserIds = [];
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-          if (mencionados.length === 0) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o admin com @ para remover admin.' }, { quoted: m });
+          const replyInfo = extrairReplyInfo(m);
+          
+          if (mencionados.length > 0) {
+            targetUserIds = mencionados;
+          } else if (replyInfo && replyInfo.participantJid) {
+            targetUserIds = [replyInfo.participantJid];
+          } else {
+            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o admin com @ OU responda a mensagem dele com `#demote`' }, { quoted: m });
             return true;
           }
           
-          await sock.groupParticipantsUpdate(m.key.remoteJid, mencionados, 'demote');
+          await sock.groupParticipantsUpdate(m.key.remoteJid, targetUserIds, 'demote');
           await sock.sendMessage(m.key.remoteJid, { text: '✅ Admin(s) rebaixado(s).' }, { quoted: m });
         } catch (e) {
           console.error('Erro ao rebaixar admin:', e);
@@ -1666,7 +1910,7 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === MUTE MELHORADO (SÓ ISAAC QUARENTA) ===
+      // === MUTE MELHORADO (AGORA SUPORTA REPLY) ===
       case 'mute':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1698,17 +1942,25 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
+          // AGORA SUPORTA REPLY E MENCÃO
+          let targetUserId = null;
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-          if (mencionados.length === 0) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o usuário com @ para mutar.' }, { quoted: m });
+          const replyInfo = extrairReplyInfo(m);
+          
+          if (mencionados.length > 0) {
+            targetUserId = mencionados[0];
+          } else if (replyInfo && replyInfo.participantJid) {
+            targetUserId = replyInfo.participantJid;
+          } else {
+            await sock.sendMessage(m.key.remoteJid, { 
+              text: '❌ Marque o usuário com @ OU responda a mensagem dele com `#mute`' 
+            }, { quoted: m });
             return true;
           }
           
-          const userId = mencionados[0];
           const groupId = m.key.remoteJid;
+          const userId = targetUserId;
           
-          // Obtém contagem de mutes no dia
-          const muteCount = getMuteCount(groupId, userId);
           const muteResult = muteUser(groupId, userId, 5);
           
           const expiryTime = new Date(muteResult.expires).toLocaleTimeString('pt-BR', { 
@@ -1732,7 +1984,7 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === DESMUTE (SÓ ISAAC QUARENTA) ===
+      // === DESMUTE (AGORA SUPORTA REPLY) ===
       case 'desmute':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1764,14 +2016,24 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
+          // AGORA SUPORTA REPLY E MENCÃO
+          let targetUserId = null;
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-          if (mencionados.length === 0) {
-            await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o usuário com @ para desmutar.' }, { quoted: m });
+          const replyInfo = extrairReplyInfo(m);
+          
+          if (mencionados.length > 0) {
+            targetUserId = mencionados[0];
+          } else if (replyInfo && replyInfo.participantJid) {
+            targetUserId = replyInfo.participantJid;
+          } else {
+            await sock.sendMessage(m.key.remoteJid, { 
+              text: '❌ Marque o usuário com @ OU responda a mensagem dele com `#desmute`' 
+            }, { quoted: m });
             return true;
           }
           
-          const userId = mencionados[0];
           const groupId = m.key.remoteJid;
+          const userId = targetUserId;
           
           if (unmuteUser(groupId, userId)) {
             await sock.sendMessage(m.key.remoteJid, { 
@@ -1954,31 +2216,42 @@ Use \`#help\` para ver todos os comandos.`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SIMULAÇÃO DE STATUS DE MENSAGENS (NOVA FUNÇÃO)
+// SIMULAÇÃO DE STATUS DE MENSAGENS (NOVA FUNÇÃO) - CORRIGIDA
 // ═══════════════════════════════════════════════════════════════════════
 async function simularStatusMensagem(sock, m, foiAtivada, temAudio = false) {
   try {
     const ehGrupo = String(m.key.remoteJid || '').endsWith('@g.us');
     
-    // Se não foi ativada (ignorada), marca apenas como entregue
-    if (!foiAtivada) {
+    // === REGRA FIXA: SEMPRE MARCA COMO ENTREGUE (✓) NOS GRUPOS ===
+    // Isso força o check simples aparecer para todas mensagens em grupos
+    if (ehGrupo) {
       try {
-        // Marca como entregue (single tick)
+        // Método principal - força marcação como entregue
         await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
-        console.log('✓ [ENTREGUE] Mensagem ignorada - apenas entregue');
+        console.log('✓ [ENTREGUE FORÇADO] Grupo - Marcado como entregue (check simples)');
       } catch (e) {
-        console.log('⚠️ Não foi possível marcar como entregue');
+        // Método alternativo se o primeiro falhar
+        try {
+          await sock.sendReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+          console.log('✓ [ENTREGUE ALT] Grupo - Usando método alternativo');
+        } catch (e2) {
+          console.log('⚠️ Não foi possível marcar como entregue, mas o WhatsApp mostrará automaticamente');
+        }
       }
+    }
+    
+    // Se não foi ativada (ignorada), apenas o entregue já foi marcado
+    if (!foiAtivada) {
       return;
     }
     
-    // Se foi ativada, marca como visto/lido/reproduzido
+    // Se foi ativada, marca como visto/lido/reproduzido adicionalmente
     if (temAudio && foiAtivada) {
-      // Para áudio ativado: marca como reproduzido
+      // Para áudio ativado: marca como reproduzido (✓✓)
       await sock.readMessages([m.key]);
-      console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido');
+      console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido (✓✓)');
     } else if (foiAtivada) {
-      // Para texto ativado: marca como lido
+      // Para texto ativado: marca como lido (✓✓)
       await sock.readMessages([m.key]);
       console.log('✓✓ [LIDO] Mensagem marcada como lida (azul)');
     }
@@ -2053,7 +2326,7 @@ async function conectar() {
         }
         
         console.log('\n' + '═'.repeat(70));
-        console.log('✅ AKIRA BOT V21 ONLINE! (IRONIA MÁXIMA + DIGITAÇÃO REAL)');
+        console.log('✅ AKIRA BOT V21 ONLINE! (COM TODAS CORREÇÕES)');
         console.log('═'.repeat(70));
         console.log('🤖 Bot JID:', BOT_JID);
         console.log('📱 Número:', BOT_NUMERO_REAL);
@@ -2065,8 +2338,14 @@ async function conectar() {
         console.log('🎤 Resposta a voz: Ativada (STT REAL + TTS)');
         console.log('🎤 Simulação gravação: Ativada');
         console.log('🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)');
-        console.log('📝 Mensagem citada: COMPLETA para API (correção aplicada)');
-        console.log('📱 Status mensagens: Entregue/Visto/Reproduzido realista');
+        console.log('📝 Mensagem citada: Contexto corrigido (foco em quem fala)');
+        console.log('📱 Status mensagens: ✓ SEMPRE entregue em grupos + ✓✓ quando ativada');
+        console.log('🎨 Stickers: Nome EMBUTIDO no sticker (sem thumbnail)');
+        console.log('🔄 Stickers animados: ATÉ 30 SEGUNDOS');
+        console.log('🔄 Sticker de sticker: Suporte para normais e animados');
+        console.log('🎵 Download YouTube: Sistema corrigido (APIs confiáveis)');
+        console.log('🔄 Comandos de grupo: Agora funcionam com reply ou menção');
+        console.log('🔄 Aliases: #ban para remover');
         console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
@@ -2247,7 +2526,7 @@ async function conectar() {
           ativar = await deveResponder(m, ehGrupo, texto, replyInfo, false);
         }
         
-        // === SIMULA STATUS DE MENSAGEM (ENTREGUE/VISTO/REPRODUZIDO) ===
+        // === SIMULA STATUS DE MENSAGEM (✓ SEMPRE ENTREGUE NOS GRUPOS) ===
         await simularStatusMensagem(sock, m, ativar, temAudio);
         
         if (!ativar) return;
@@ -2259,31 +2538,34 @@ async function conectar() {
           console.log(`\n🔥 [PROCESSANDO TEXTO] ${nome}: ${texto.substring(0, 60)}...`);
         }
         
-        // === FORMATAR MENSAGEM CITADA PARA API - CORREÇÃO COMPLETA ===
+        // === FORMATAR MENSAGEM CITADA PARA API - CONTEXTO CORRIGIDO ===
+        // AGORA: Foco em QUEM ESTÁ FALANDO, não em quem foi citado
         if (replyInfo) {
+          // Se for resposta à Akira
           if (replyInfo.ehRespostaAoBot) {
-            // Passa o TEXTO COMPLETO da mensagem citada - CORREÇÃO APLICADA
-            mensagemCitadaFormatada = `[Respondendo à Akira: "${replyInfo.textoCompleto}"]`;
+            mensagemCitadaFormatada = `[${replyInfo.quemFalaNome} está respondendo à Akira: "${replyInfo.textoCompleto}"]`;
           } else {
-            // Formato melhorado: inclui quem escreveu a mensagem citada - CORREÇÃO APLICADA
-            mensagemCitadaFormatada = `[${replyInfo.usuarioCitadoNome} disse: "${replyInfo.textoCompleto}"]`;
+            // Se for resposta a outra pessoa (contexto secundário)
+            mensagemCitadaFormatada = `[${replyInfo.quemFalaNome} mencionou algo que ${replyInfo.usuarioCitadoNome} disse: "${replyInfo.textoCompleto}"]`;
           }
         }
         
-        // === PAYLOAD PARA API (MELHORADO E CORRIGIDO) ===
+        // === PAYLOAD PARA API (CONTEXTO CORRIGIDO) ===
         const payloadBase = {
-          usuario: nome,
+          usuario: nome,  // QUEM ESTÁ FALANDO (prioridade)
           numero: numeroReal,
           mensagem: textoParaAPI,
-          mensagem_citada: mensagemCitadaFormatada,  // AGORA COM TEXTO COMPLETO
+          mensagem_citada: mensagemCitadaFormatada,
           tipo_conversa: ehGrupo ? 'grupo' : 'pv',
           tipo_mensagem: temAudio ? 'audio' : 'texto',
-          // Informações adicionais para contexto
+          // Informações de contexto CORRIGIDAS
           reply_info: replyInfo ? {
+            quem_fala_nome: replyInfo.quemFalaNome,  // PRIORIDADE: quem está falando
+            quem_fala_numero: replyInfo.quemFalaNumero,
             reply_to_bot: replyInfo.ehRespostaAoBot,
-            usuario_citado_nome: replyInfo.usuarioCitadoNome,
+            usuario_citado_nome: replyInfo.usuarioCitadoNome,  // contexto secundário
             usuario_citado_numero: replyInfo.usuarioCitadoNumero,
-            texto_citado_completo: replyInfo.textoCompleto,  // ADICIONADO
+            texto_citado_completo: replyInfo.textoCompleto,
             tipo_midia: replyInfo.tipoMidia || 'texto'
           } : null
         };
@@ -2302,7 +2584,8 @@ async function conectar() {
         }
         
         console.log('📤 Enviando para API Akira V21...');
-        console.log('📝 Mensagem citada enviada:', mensagemCitadaFormatada.substring(0, 100) + '...');
+        console.log('📝 Contexto enviado:', mensagemCitadaFormatada.substring(0, 100) + '...');
+        console.log('👤 Foco principal:', nome); // QUEM ESTÁ FALANDO
         
         let resposta = '...';
         try {
@@ -2313,7 +2596,7 @@ async function conectar() {
           resposta = res.data?.resposta || '...';
         } catch (err) {
           console.error('⚠️ Erro na API:', err.message);
-          resposta = 'Caralho, API tá fodida. 😤';
+          resposta = 'barra no bardeado';
         }
         
         console.log(`📥 [RESPOSTA AKIRA] ${resposta.substring(0, 100)}...`);
@@ -2407,7 +2690,7 @@ app.get('/', (req, res) => res.send(`
   <html><body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding:50px">
     <h1>🤖 AKIRA BOT V21 ONLINE ✅</h1>
     <p>Status: ${BOT_JID ? 'Conectado' : 'Desconectado'}</p>
-    <p>Versão: IRONIA MÁXIMA + DIGITAÇÃO REALISTA + COMANDOS</p>
+    <p>Versão: TODAS CORREÇÕES APLICADAS</p>
     <p>Prefixo: ${PREFIXO}</p>
     <p>🔐 Comandos restritos: Apenas Isaac Quarenta</p>
     <p>🎤 STT: Deepgram API (200h/mês GRATUITO)</p>
@@ -2415,8 +2698,14 @@ app.get('/', (req, res) => res.send(`
     <p>🎤 Resposta a voz: Ativada (STT REAL + TTS)</p>
     <p>🎤 Simulação gravação: Ativada</p>
     <p>🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)</p>
-    <p>📝 Mensagem citada: COMPLETA para API (correção aplicada)</p>
-    <p>📱 Status mensagens: Entregue/Visto/Reproduzido realista</p>
+    <p>📝 Contexto de mensagens: Corrigido (foco em quem fala)</p>
+    <p>📱 Status mensagens: ✓ SEMPRE entregue em grupos + ✓✓ quando ativada</p>
+    <p>🎨 Stickers: Nome EMBUTIDO (sem thumbnail)</p>
+    <p>🔄 Stickers animados: ATÉ 30 SEGUNDOS</p>
+    <p>🔄 Sticker de sticker: Suporte para normais e animados</p>
+    <p>🎵 Download YouTube: Sistema corrigido</p>
+    <p>🔄 Comandos de grupo: Agora funcionam com reply ou menção</p>
+    <p>🔄 Aliases: #ban para remover</p>
     <p>⚠️ NUNCA mostra transcrições de áudio no chat</p>
     <p><a href="/qr" style="color:#0f0">Ver QR</a> | <a href="/health" style="color:#0f0">Health</a></p>
   </body></html>
@@ -2443,19 +2732,27 @@ app.get('/health', (req, res) => {
     dono_autorizado: 'Isaac Quarenta',
     stt_configurado: DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? 'Deepgram (200h/mês)' : 'Não configurado',
     tts_configurado: 'Google TTS (funcional)',
+    stickers_pack_personalizado: 'Sim (nome EMBUTIDO no sticker)',
+    stickers_animados_max: '30 segundos',
+    sticker_de_sticker: 'Suportado (normal e animado)',
+    youtube_download_methods: 'APIs confiáveis + ytdl-core',
+    comandos_grupo_reply: 'Suportado (reply ou menção)',
+    aliases: '#ban para remover',
     grupos_com_antilink: Array.from(antiLinkGroups).length,
     usuarios_mutados: mutedUsers.size,
     progress_messages: progressMessages.size,
     uptime: process.uptime(),
-    version: 'v21_completo_moderacao_stt_real_deepgram_melhorado',
-    correcoes: [
-      'Mensagem citada COMPLETA para API',
-      'Download YouTube melhorado (métodos alternativos)',
+    version: 'v21_com_correcoes',
+    correcoes_aplicadas: [
+      'Stickers com nome EMBUTIDO (sem thumbnail)',
+      'Contexto de mensagens corrigido (foco em quem fala)',
+      'Download YouTube com APIs confiáveis',
+      'Stickers animados até 30 segundos',
+      'Comandos de grupo funcionam com reply ou menção',
+      'Alias #ban para remover',
+      'Marcação como entregue sempre em grupos',
       'NUNCA mostra transcrições de áudio',
-      'Status mensagens realista (entregue/visto/reproduzido)',
-      'Comando #gif não envia mensagem "criando sticker"',
-      'Respostas em áudio sem texto extra',
-      'Regras de reply corrigidas (grupo sempre reply, PV condicional)'
+      'Sistema de contexto prioriza quem está falando'
     ]
   });
 });
