@@ -54,7 +54,7 @@ ffmpeg.setFfmpegPath(ffmpegStatic);
 // ═══════════════════════════════════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
 const API_URL = process.env.API_URL || 'https://akra35567-akira.hf.space/api/akira';
-const BOT_NUMERO_REAL = '37839265886398';
+const BOT_NUMERO_REAL = '40755431264474';
 const PREFIXO = '#'; // Prefixo para comandos extras
 const TEMP_FOLDER = './temp';
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -473,8 +473,8 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
       return true;
     }
     
-    if (textoLower.includes('akira')) {
-      console.log('✅ [ATIVAÇÃO ÁUDIO] Menção "akira" detectada');
+    if (textoLower.includes('belmira')) {
+      console.log('✅ [ATIVAÇÃO ÁUDIO] Menção "belmira" detectada');
       return true;
     }
     
