@@ -24,14 +24,6 @@ RUN npm install -g npm@latest && \
     npm install --omit=dev --prefer-offline --no-audit
 # Copia código da aplicação
 COPY index.js ./
-
-# Copia diretórios necessários
-COPY auth_info_baileys/ ./auth_info_baileys/
-COPY lib/ ./lib/
-
-# Cria diretório database se necessário
-RUN mkdir -p /app/database
-
 # Ajusta permissões
 RUN chown -R app:app /app && \
     mkdir -p /app/auth_info_baileys && \
@@ -45,3 +37,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD node -e "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 # Comando de inicialização
 CMD ["node", "index.js"]
+
+de acordo com nosso projeto commo ficaria o docker para o noso index
