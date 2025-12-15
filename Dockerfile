@@ -38,4 +38,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Comando de inicialização
 CMD ["node", "index.js"]
 
-de acordo com nosso projeto commo ficaria o docker para o noso index
+
