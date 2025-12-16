@@ -1,7 +1,10 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * AKIRA BOT V21 — DIGITAÇÃO REALISTA + DINÂMICAS WHATSAPP COMPLETAS
+ * AKIRA BOT V21 — CONTEXTO DE REPLY SUPER CLARO + TODAS FUNCIONALIDADES
  * ═══════════════════════════════════════════════════════════════════════
+ * ✅ CORREÇÃO: Separa claramente QUEM FALA vs QUEM FOI CITADO
+ * ✅ CORREÇÃO: Quando reply à Akira, marca explicitamente que é MENSAGEM DELA
+ * ✅ CORREÇÃO: Payload com contexto super claro para API
  * ✅ PV: Sempre marca como lido (✓✓ azul)
  * ✅ GRUPO: Só marca como lido se mencionada/reply
  * ✅ Status: Sempre online → composing → paused
@@ -368,7 +371,9 @@ function extrairTexto(m) {
   }
 }
 
-// FUNÇÃO MELHORADA PARA EXTRAIR REPLY INFO - CONTEXTO CORRIGIDO
+// ═══════════════════════════════════════════════════════════════════════
+// FUNÇÃO CRÍTICA CORRIGIDA: EXTRAIR REPLY INFO COM CONTEXTO SUPER CLARO
+// ═══════════════════════════════════════════════════════════════════════
 function extrairReplyInfo(m) {
   try {
     const context = m.message?.extendedTextMessage?.contextInfo;
@@ -377,73 +382,103 @@ function extrairReplyInfo(m) {
     const quoted = context.quotedMessage;
     const tipo = getContentType(quoted);
     
-    let textoReply = '';
+    // === EXTRAI TEXTO DA MENSAGEM CITADA ===
+    let textoMensagemCitada = '';
     let tipoMidia = 'texto';
     
     if (tipo === 'conversation') {
-      textoReply = quoted.conversation || '';
+      textoMensagemCitada = quoted.conversation || '';
       tipoMidia = 'texto';
     } else if (tipo === 'extendedTextMessage') {
-      textoReply = quoted.extendedTextMessage?.text || '';
+      textoMensagemCitada = quoted.extendedTextMessage?.text || '';
       tipoMidia = 'texto';
     } else if (tipo === 'imageMessage') {
-      textoReply = quoted.imageMessage?.caption || '[imagem]';
+      textoMensagemCitada = quoted.imageMessage?.caption || '[imagem]';
       tipoMidia = 'imagem';
     } else if (tipo === 'videoMessage') {
-      textoReply = quoted.videoMessage?.caption || '[vídeo]';
+      textoMensagemCitada = quoted.videoMessage?.caption || '[vídeo]';
       tipoMidia = 'video';
     } else if (tipo === 'audioMessage') {
-      textoReply = '[áudio]';
+      textoMensagemCitada = '[áudio]';
       tipoMidia = 'audio';
     } else if (tipo === 'stickerMessage') {
-      textoReply = '[figurinha]';
+      textoMensagemCitada = '[figurinha]';
       tipoMidia = 'sticker';
-    } else if (tipo === 'documentMessage') {
-      textoReply = quoted.documentMessage?.caption || quoted.documentMessage?.fileName || '[documento]';
-      tipoMidia = 'documento';
     } else {
-      textoReply = '[conteúdo]';
+      textoMensagemCitada = '[conteúdo]';
       tipoMidia = 'outro';
     }
     
-    const participantJid = context.participant || null;
-    const ehRespostaAoBot = ehOBot(participantJid);
+    // === IDENTIFICA QUEM ESCREVEU A MENSAGEM CITADA ===
+    const participantJidCitado = context.participant || null;
+    const ehRespostaAoBot = ehOBot(participantJidCitado);
     
-    // Obter informações do usuário que escreveu a mensagem citada
-    let usuarioCitadoNome = 'desconhecido';
-    let usuarioCitadoNumero = 'desconhecido';
+    // Informações de quem escreveu a mensagem citada
+    let nomeQuemEscreveuCitacao = 'desconhecido';
+    let numeroQuemEscreveuCitacao = 'desconhecido';
     
-    if (participantJid) {
+    if (participantJidCitado) {
       try {
-        // Tenta obter nome do usuário do store
-        const usuario = store?.contacts?.[participantJid] || {};
-        usuarioCitadoNome = usuario.name || usuario.notify || participantJid.split('@')[0] || 'desconhecido';
-        usuarioCitadoNumero = participantJid.split('@')[0] || 'desconhecido';
+        const usuario = store?.contacts?.[participantJidCitado] || {};
+        nomeQuemEscreveuCitacao = usuario.name || usuario.notify || participantJidCitado.split('@')[0] || 'desconhecido';
+        numeroQuemEscreveuCitacao = participantJidCitado.split('@')[0] || 'desconhecido';
       } catch (e) {
-        console.error('Erro ao obter info usuário citado:', e);
+        console.error('Erro ao obter info de quem escreveu citação:', e);
       }
     }
     
-    // Agora também precisamos saber QUEM está falando (quem enviou a mensagem atual)
-    const quemFalaJid = m.key.participant || m.key.remoteJid;
-    let quemFalaNome = m.pushName || 'desconhecido';
-    let quemFalaNumero = extrairNumeroReal(m);
+    // === IDENTIFICA QUEM ESTÁ FALANDO AGORA (A MENSAGEM ATUAL) ===
+    const quemFalaAgoraJid = m.key.participant || m.key.remoteJid;
+    let nomeQuemFalaAgora = m.pushName || 'desconhecido';
+    let numeroQuemFalaAgora = extrairNumeroReal(m);
+    
+    // === CORREÇÃO CRÍTICA: MARCA EXPLICITAMENTE SE É REPLY À AKIRA ===
+    let contextoClaro = '';
+    if (ehRespostaAoBot) {
+      // Se está respondendo ao bot, a mensagem citada é DA AKIRA
+      contextoClaro = `CONTEXTO: ${nomeQuemFalaAgora} está respondendo à mensagem anterior DA AKIRA que dizia: "${textoMensagemCitada}"`;
+    } else {
+      // Se está respondendo a outra pessoa
+      contextoClaro = `CONTEXTO: ${nomeQuemFalaAgora} está comentando sobre algo que ${nomeQuemEscreveuCitacao} disse: "${textoMensagemCitada}"`;
+    }
     
     return {
-      texto: textoReply,
-      textoCompleto: textoReply,
-      tipoMidia: tipoMidia,
-      participantJid: participantJid,
-      ehRespostaAoBot: ehRespostaAoBot,
-      usuarioCitadoNome: usuarioCitadoNome,
-      usuarioCitadoNumero: usuarioCitadoNumero,
-      quemFalaJid: quemFalaJid,
-      quemFalaNome: quemFalaNome,
-      quemFalaNumero: quemFalaNumero,
+      // === QUEM ESTÁ FALANDO AGORA (PRIORIDADE MÁXIMA) ===
+      quemFalaAgoraJid: quemFalaAgoraJid,
+      quemFalaAgoraNome: nomeQuemFalaAgora,
+      quemFalaAgoraNumero: numeroQuemFalaAgora,
+      
+      // === INFORMAÇÕES DA MENSAGEM CITADA ===
+      textoMensagemCitada: textoMensagemCitada,
+      tipoMidiaCitada: tipoMidia,
+      textoCompleto: textoMensagemCitada,
+      
+      // === QUEM ESCREVEU A MENSAGEM CITADA (PODE SER AKIRA OU OUTRO) ===
+      quemEscreveuCitacaoJid: participantJidCitado,
+      quemEscreveuCitacaoNome: nomeQuemEscreveuCitacao,
+      quemEscreveuCitacaoNumero: numeroQuemEscreveuCitacao,
+      usuarioCitadoNome: nomeQuemEscreveuCitacao,
+      usuarioCitadoNumero: numeroQuemEscreveuCitacao,
+      
+      // === FLAGS IMPORTANTES ===
+      ehRespostaAoBot: ehRespostaAoBot, // TRUE se a mensagem citada é DA AKIRA
+      
+      // === CONTEXTO SUPER CLARO PARA API ===
+      contextoClaro: contextoClaro,
+      
+      // === FLAGS DE TIPO ===
       ehSticker: tipo === 'stickerMessage',
       ehAudio: tipo === 'audioMessage',
       ehImagem: tipo === 'imageMessage',
-      ehVideo: tipo === 'videoMessage'
+      ehVideo: tipo === 'videoMessage',
+      
+      // Para compatibilidade com código anterior
+      participantJid: participantJidCitado,
+      texto: textoMensagemCitada,
+      tipoMidia: tipoMidia,
+      quemFalaJid: quemFalaAgoraJid,
+      quemFalaNome: nomeQuemFalaAgora,
+      quemFalaNumero: numeroQuemFalaAgora
     };
     
   } catch (e) {
@@ -855,7 +890,7 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg, duracaoMax
         ])
         .on('end', () => {
           console.log(`✅ Sticker animado criado para ${usuarioNome}`);
-          resolve();
+          resolve());
         })
         .on('error', (err) => {
           console.error('❌ Erro ao criar sticker animado:', err);
@@ -1267,6 +1302,52 @@ async function obterInfoGrupo(sock, groupId) {
       participants: [],
       created: Date.now()
     };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SIMULAÇÃO DE STATUS DE MENSAGENS (NOVA FUNÇÃO) - CORRIGIDA
+// ═══════════════════════════════════════════════════════════════════════
+async function simularStatusMensagem(sock, m, foiAtivada, temAudio = false) {
+  try {
+    const ehGrupo = String(m.key.remoteJid || '').endsWith('@g.us');
+    
+    // === REGRA FIXA: SEMPRE MARCA COMO ENTREGUE (✓) NOS GRUPOS ===
+    // Isso força o check simples aparecer para todas mensagens em grupos
+    if (ehGrupo) {
+      try {
+        // Método principal - força marcação como entregue
+        await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+        console.log('✓ [ENTREGUE FORÇADO] Grupo - Marcado como entregue (check simples)');
+      } catch (e) {
+        // Método alternativo se o primeiro falhar
+        try {
+          await sock.sendReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+          console.log('✓ [ENTREGUE ALT] Grupo - Usando método alternativo');
+        } catch (e2) {
+          console.log('⚠️ Não foi possível marcar como entregue, mas o WhatsApp mostrará automaticamente');
+        }
+      }
+    }
+    
+    // Se não foi ativada (ignorada), apenas o entregue já foi marcado
+    if (!foiAtivada) {
+      return;
+    }
+    
+    // Se foi ativada, marca como visto/lido/reproduzido adicionalmente
+    if (temAudio && foiAtivada) {
+      // Para áudio ativado: marca como reproduzido (✓✓)
+      await sock.readMessages([m.key]);
+      console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido (✓✓)');
+    } else if (foiAtivada) {
+      // Para texto ativado: marca como lido (✓✓)
+      await sock.readMessages([m.key]);
+      console.log('✓✓ [LIDO] Mensagem marcada como lida (azul)');
+    }
+    
+  } catch (e) {
+    console.error('Erro ao simular status:', e.message);
   }
 }
 
@@ -1785,8 +1866,8 @@ Use \`#help\` para ver todos os comandos.`;
           
           if (mencionados.length > 0) {
             targetUserIds = mencionados;
-          } else if (replyInfo && replyInfo.participantJid) {
-            targetUserIds = [replyInfo.participantJid];
+          } else if (replyInfo && replyInfo.quemEscreveuCitacaoJid) {
+            targetUserIds = [replyInfo.quemEscreveuCitacaoJid];
           } else {
             await sock.sendMessage(m.key.remoteJid, { 
               text: '❌ Marque o membro com @ OU responda a mensagem dele com `#remove` ou `#ban`' 
@@ -1841,8 +1922,8 @@ Use \`#help\` para ver todos os comandos.`;
           
           if (mencionados.length > 0) {
             targetUserIds = mencionados;
-          } else if (replyInfo && replyInfo.participantJid) {
-            targetUserIds = [replyInfo.participantJid];
+          } else if (replyInfo && replyInfo.quemEscreveuCitacaoJid) {
+            targetUserIds = [replyInfo.quemEscreveuCitacaoJid];
           } else {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o membro com @ OU responda a mensagem dele com `#promote`' }, { quoted: m });
             return true;
@@ -1895,8 +1976,8 @@ Use \`#help\` para ver todos os comandos.`;
           
           if (mencionados.length > 0) {
             targetUserIds = mencionados;
-          } else if (replyInfo && replyInfo.participantJid) {
-            targetUserIds = [replyInfo.participantJid];
+          } else if (replyInfo && replyInfo.quemEscreveuCitacaoJid) {
+            targetUserIds = [replyInfo.quemEscreveuCitacaoJid];
           } else {
             await sock.sendMessage(m.key.remoteJid, { text: '❌ Marque o admin com @ OU responda a mensagem dele com `#demote`' }, { quoted: m });
             return true;
@@ -1949,8 +2030,8 @@ Use \`#help\` para ver todos os comandos.`;
           
           if (mencionados.length > 0) {
             targetUserId = mencionados[0];
-          } else if (replyInfo && replyInfo.participantJid) {
-            targetUserId = replyInfo.participantJid;
+          } else if (replyInfo && replyInfo.quemEscreveuCitacaoJid) {
+            targetUserId = replyInfo.quemEscreveuCitacaoJid;
           } else {
             await sock.sendMessage(m.key.remoteJid, { 
               text: '❌ Marque o usuário com @ OU responda a mensagem dele com `#mute`' 
@@ -2023,8 +2104,8 @@ Use \`#help\` para ver todos os comandos.`;
           
           if (mencionados.length > 0) {
             targetUserId = mencionados[0];
-          } else if (replyInfo && replyInfo.participantJid) {
-            targetUserId = replyInfo.participantJid;
+          } else if (replyInfo && replyInfo.quemEscreveuCitacaoJid) {
+            targetUserId = replyInfo.quemEscreveuCitacaoJid;
           } else {
             await sock.sendMessage(m.key.remoteJid, { 
               text: '❌ Marque o usuário com @ OU responda a mensagem dele com `#desmute`' 
@@ -2216,52 +2297,6 @@ Use \`#help\` para ver todos os comandos.`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SIMULAÇÃO DE STATUS DE MENSAGENS (NOVA FUNÇÃO) - CORRIGIDA
-// ═══════════════════════════════════════════════════════════════════════
-async function simularStatusMensagem(sock, m, foiAtivada, temAudio = false) {
-  try {
-    const ehGrupo = String(m.key.remoteJid || '').endsWith('@g.us');
-    
-    // === REGRA FIXA: SEMPRE MARCA COMO ENTREGUE (✓) NOS GRUPOS ===
-    // Isso força o check simples aparecer para todas mensagens em grupos
-    if (ehGrupo) {
-      try {
-        // Método principal - força marcação como entregue
-        await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
-        console.log('✓ [ENTREGUE FORÇADO] Grupo - Marcado como entregue (check simples)');
-      } catch (e) {
-        // Método alternativo se o primeiro falhar
-        try {
-          await sock.sendReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
-          console.log('✓ [ENTREGUE ALT] Grupo - Usando método alternativo');
-        } catch (e2) {
-          console.log('⚠️ Não foi possível marcar como entregue, mas o WhatsApp mostrará automaticamente');
-        }
-      }
-    }
-    
-    // Se não foi ativada (ignorada), apenas o entregue já foi marcado
-    if (!foiAtivada) {
-      return;
-    }
-    
-    // Se foi ativada, marca como visto/lido/reproduzido adicionalmente
-    if (temAudio && foiAtivada) {
-      // Para áudio ativado: marca como reproduzido (✓✓)
-      await sock.readMessages([m.key]);
-      console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido (✓✓)');
-    } else if (foiAtivada) {
-      // Para texto ativado: marca como lido (✓✓)
-      await sock.readMessages([m.key]);
-      console.log('✓✓ [LIDO] Mensagem marcada como lida (azul)');
-    }
-    
-  } catch (e) {
-    console.error('Erro ao simular status:', e.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // CONEXÃO PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════
 async function conectar() {
@@ -2326,19 +2361,22 @@ async function conectar() {
         }
         
         console.log('\n' + '═'.repeat(70));
-        console.log('✅ AKIRA BOT V21 ONLINE! (COM TODAS CORREÇÕES)');
+        console.log('✅ AKIRA BOT V21 ONLINE! (CONTEXTO REPLY SUPER CLARO)');
         console.log('═'.repeat(70));
         console.log('🤖 Bot JID:', BOT_JID);
         console.log('📱 Número:', BOT_NUMERO_REAL);
         console.log('🔗 API:', API_URL);
         console.log('⚙️ Prefixo comandos:', PREFIXO);
         console.log('🔐 Comandos restritos: Apenas Isaac Quarenta');
+        console.log('✅ CORREÇÃO: Separa claramente QUEM FALA vs QUEM FOI CITADO');
+        console.log('✅ CORREÇÃO: Quando reply à Akira, marca explicitamente que é MENSAGEM DELA');
+        console.log('✅ CORREÇÃO: Payload com contexto super claro para API');
         console.log('🎤 STT: Deepgram API (200h/mês GRATUITO)');
         console.log('🎤 TTS: Google TTS (funcional)');
         console.log('🎤 Resposta a voz: Ativada (STT REAL + TTS)');
         console.log('🎤 Simulação gravação: Ativada');
         console.log('🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)');
-        console.log('📝 Mensagem citada: Contexto corrigido (foco em quem fala)');
+        console.log('📝 Contexto de mensagens: SUPER CLARO (quem fala vs quem foi citado)');
         console.log('📱 Status mensagens: ✓ SEMPRE entregue em grupos + ✓✓ quando ativada');
         console.log('🎨 Stickers: Nome EMBUTIDO no sticker (sem thumbnail)');
         console.log('🔄 Stickers animados: ATÉ 30 SEGUNDOS');
@@ -2375,9 +2413,15 @@ async function conectar() {
         const numeroReal = extrairNumeroReal(m);
         const nome = m.pushName || numeroReal;
         const texto = extrairTexto(m).trim();
+        
+        // === EXTRAI REPLY INFO COM CONTEXTO SUPER CLARO ===
         const replyInfo = extrairReplyInfo(m);
         
-        // Verifica se é mensagem de áudio
+        // Log do contexto claro
+        if (replyInfo) {
+          console.log('📋 [CONTEXTO CLARO]:', replyInfo.contextoClaro);
+        }
+        
         const tipo = getContentType(m.message);
         const temAudio = tipo === 'audioMessage';
         let textoAudio = '';
@@ -2517,7 +2561,6 @@ async function conectar() {
         // === VERIFICA SE DEVE RESPONDER ===
         let ativar = false;
         let textoParaAPI = texto;
-        let mensagemCitadaFormatada = '';
         
         if (temAudio && processarComoAudio) {
           ativar = await deveResponder(m, ehGrupo, textoAudio, replyInfo, true);
@@ -2538,54 +2581,70 @@ async function conectar() {
           console.log(`\n🔥 [PROCESSANDO TEXTO] ${nome}: ${texto.substring(0, 60)}...`);
         }
         
-        // === FORMATAR MENSAGEM CITADA PARA API - CONTEXTO CORRIGIDO ===
-        // AGORA: Foco em QUEM ESTÁ FALANDO, não em quem foi citado
-        if (replyInfo) {
-          // Se for resposta à Akira
-          if (replyInfo.ehRespostaAoBot) {
-            mensagemCitadaFormatada = `[${replyInfo.quemFalaNome} está respondendo à Akira: "${replyInfo.textoCompleto}"]`;
-          } else {
-            // Se for resposta a outra pessoa (contexto secundário)
-            mensagemCitadaFormatada = `[${replyInfo.quemFalaNome} mencionou algo que ${replyInfo.usuarioCitadoNome} disse: "${replyInfo.textoCompleto}"]`;
-          }
-        }
-        
-        // === PAYLOAD PARA API (CONTEXTO CORRIGIDO) ===
+        // ═══════════════════════════════════════════════════════════════
+        // PAYLOAD PARA API COM CONTEXTO SUPER CLARO
+        // ═══════════════════════════════════════════════════════════════
         const payloadBase = {
-          usuario: nome,  // QUEM ESTÁ FALANDO (prioridade)
+          usuario: nome,
           numero: numeroReal,
           mensagem: textoParaAPI,
-          mensagem_citada: mensagemCitadaFormatada,
           tipo_conversa: ehGrupo ? 'grupo' : 'pv',
-          tipo_mensagem: temAudio ? 'audio' : 'texto',
-          // Informações de contexto CORRIGIDAS
-          reply_info: replyInfo ? {
-            quem_fala_nome: replyInfo.quemFalaNome,  // PRIORIDADE: quem está falando
-            quem_fala_numero: replyInfo.quemFalaNumero,
-            reply_to_bot: replyInfo.ehRespostaAoBot,
-            usuario_citado_nome: replyInfo.usuarioCitadoNome,  // contexto secundário
-            usuario_citado_numero: replyInfo.usuarioCitadoNumero,
-            texto_citado_completo: replyInfo.textoCompleto,
-            tipo_midia: replyInfo.tipoMidia || 'texto'
-          } : null
+          tipo_mensagem: temAudio ? 'audio' : 'texto'
         };
         
-        // Adicionar informações do grupo se for grupo
+        // === ADICIONA CONTEXTO DE REPLY SUPER CLARO ===
+        if (replyInfo) {
+          // Envia mensagem citada formatada de forma SUPER CLARA
+          if (replyInfo.ehRespostaAoBot) {
+            // CASO 1: Usuário está respondendo à AKIRA
+            payloadBase.mensagem_citada = `[MENSAGEM ANTERIOR DA AKIRA: "${replyInfo.textoMensagemCitada}"]`;
+          } else {
+            // CASO 2: Usuário está comentando sobre mensagem de outra pessoa
+            payloadBase.mensagem_citada = `[MENSAGEM DE ${replyInfo.quemEscreveuCitacaoNome.toUpperCase()}: "${replyInfo.textoMensagemCitada}"]`;
+          }
+          
+          // Envia reply_info detalhado
+          payloadBase.reply_info = {
+            // PRIORIDADE: Quem está falando AGORA
+            quem_fala_agora_nome: replyInfo.quemFalaAgoraNome,
+            quem_fala_agora_numero: replyInfo.quemFalaAgoraNumero,
+            
+            // Informações da mensagem citada
+            texto_mensagem_citada: replyInfo.textoMensagemCitada,
+            tipo_midia_citada: replyInfo.tipoMidiaCitada,
+            
+            // Quem escreveu a mensagem citada
+            quem_escreveu_citacao_nome: replyInfo.quemEscreveuCitacaoNome,
+            quem_escreveu_citacao_numero: replyInfo.quemEscreveuCitacaoNumero,
+            
+            // FLAG CRÍTICA: Indica se a mensagem citada é DA AKIRA
+            reply_to_bot: replyInfo.ehRespostaAoBot,
+            mensagem_citada_eh_da_akira: replyInfo.ehRespostaAoBot,
+            
+            // Contexto super claro para API
+            contexto_claro: replyInfo.contextoClaro
+          };
+        } else {
+          payloadBase.mensagem_citada = '';
+          payloadBase.reply_info = null;
+        }
+        
+        // Adiciona info de grupo
         if (ehGrupo) {
           try {
             const grupoInfo = await obterInfoGrupo(sock, m.key.remoteJid);
             payloadBase.grupo_id = m.key.remoteJid;
             payloadBase.grupo_nome = grupoInfo.subject;
           } catch (e) {
-            console.error('Erro ao obter info do grupo:', e);
             payloadBase.grupo_id = m.key.remoteJid;
-            payloadBase.grupo_nome = 'Grupo sem nome';
+            payloadBase.grupo_nome = 'Grupo';
           }
         }
         
-        console.log('📤 Enviando para API Akira V21...');
-        console.log('📝 Contexto enviado:', mensagemCitadaFormatada.substring(0, 100) + '...');
-        console.log('👤 Foco principal:', nome); // QUEM ESTÁ FALANDO
+        console.log('📤 Enviando para API com contexto SUPER CLARO...');
+        if (replyInfo) {
+          console.log('📋 Contexto:', payloadBase.mensagem_citada.substring(0, 100));
+        }
         
         let resposta = '...';
         try {
@@ -2599,7 +2658,7 @@ async function conectar() {
           resposta = 'barra no bardeado';
         }
         
-        console.log(`📥 [RESPOSTA AKIRA] ${resposta.substring(0, 100)}...`);
+        console.log(`📥 [RESPOSTA] ${resposta.substring(0, 100)}...`);
         
         // === DECIDE COMO RESPONDER (REGRAS CORRIGIDAS) ===
         let opcoes = {};
@@ -2690,23 +2749,14 @@ app.get('/', (req, res) => res.send(`
   <html><body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding:50px">
     <h1>🤖 AKIRA BOT V21 ONLINE ✅</h1>
     <p>Status: ${BOT_JID ? 'Conectado' : 'Desconectado'}</p>
-    <p>Versão: TODAS CORREÇÕES APLICADAS</p>
+    <p>✅ CORREÇÃO: Contexto reply super claro</p>
+    <p>✅ CORREÇÃO: Separa QUEM FALA vs QUEM FOI CITADO</p>
+    <p>✅ CORREÇÃO: Akira não confunde suas mensagens</p>
     <p>Prefixo: ${PREFIXO}</p>
     <p>🔐 Comandos restritos: Apenas Isaac Quarenta</p>
     <p>🎤 STT: Deepgram API (200h/mês GRATUITO)</p>
     <p>🎤 TTS: Google TTS (funcional)</p>
-    <p>🎤 Resposta a voz: Ativada (STT REAL + TTS)</p>
-    <p>🎤 Simulação gravação: Ativada</p>
-    <p>🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)</p>
-    <p>📝 Contexto de mensagens: Corrigido (foco em quem fala)</p>
-    <p>📱 Status mensagens: ✓ SEMPRE entregue em grupos + ✓✓ quando ativada</p>
-    <p>🎨 Stickers: Nome EMBUTIDO (sem thumbnail)</p>
-    <p>🔄 Stickers animados: ATÉ 30 SEGUNDOS</p>
-    <p>🔄 Sticker de sticker: Suporte para normais e animados</p>
-    <p>🎵 Download YouTube: Sistema corrigido</p>
-    <p>🔄 Comandos de grupo: Agora funcionam com reply ou menção</p>
-    <p>🔄 Aliases: #ban para remover</p>
-    <p>⚠️ NUNCA mostra transcrições de áudio no chat</p>
+    <p>🛡️ Sistema de moderação: Ativo</p>
     <p><a href="/qr" style="color:#0f0">Ver QR</a> | <a href="/health" style="color:#0f0">Health</a></p>
   </body></html>
 `));
@@ -2742,17 +2792,18 @@ app.get('/health', (req, res) => {
     usuarios_mutados: mutedUsers.size,
     progress_messages: progressMessages.size,
     uptime: process.uptime(),
-    version: 'v21_com_correcoes',
+    version: 'v21_contexto_super_claro',
     correcoes_aplicadas: [
+      'Contexto reply super claro (quem fala vs quem foi citado)',
+      'Marca explicitamente quando reply é à Akira',
       'Stickers com nome EMBUTIDO (sem thumbnail)',
-      'Contexto de mensagens corrigido (foco em quem fala)',
-      'Download YouTube com APIs confiáveis',
       'Stickers animados até 30 segundos',
+      'Download YouTube com APIs confiáveis',
       'Comandos de grupo funcionam com reply ou menção',
       'Alias #ban para remover',
       'Marcação como entregue sempre em grupos',
       'NUNCA mostra transcrições de áudio',
-      'Sistema de contexto prioriza quem está falando'
+      'Payload com contexto super claro para API'
     ]
   });
 });
