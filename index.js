@@ -890,7 +890,7 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg, duracaoMax
         ])
         .on('end', () => {
           console.log(`✅ Sticker animado criado para ${usuarioNome}`);
-          resolve());
+          resolve();
         })
         .on('error', (err) => {
           console.error('❌ Erro ao criar sticker animado:', err);
