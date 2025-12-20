@@ -1,28 +1,14 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * AKIRA BOT V21 — CONTEXTO DE REPLY SUPER CLARO + TODAS FUNCIONALIDADES
+ * AKIRA BOT V21 — CONTEXTO DE REPLY CORRIGIDO (SEM REPETIÇÃO)
  * ═══════════════════════════════════════════════════════════════════════
- * ✅ CORREÇÃO: Separa claramente QUEM FALA vs QUEM FOI CITADO
- * ✅ CORREÇÃO: Quando reply à Akira, marca explicitamente que é MENSAGEM DELA
- * ✅ CORREÇÃO: Payload com contexto super claro para API
- * ✅ PV: Sempre marca como lido (✓✓ azul)
- * ✅ GRUPO: Só marca como lido se mencionada/reply
- * ✅ Status: Sempre online → composing → paused
- * ✅ Tempo de digitação proporcional ao tamanho
- * ✅ COMANDOS: sticker, gif (animado), toimg, tts, play, etc.
- * ✅ COMANDOS DE GRUPO: Apenas Isaac Quarenta pode usar
- * ✅ MODERAÇÃO: Mute, anti-link, etc.
- * ✅ STT: Transcrição de áudio via Deepgram (200h/mês GRATUITO) - REAL
- * ✅ TTS: Resposta em áudio via Google TTS (gratuito)
- * ✅ CORREÇÃO: Mensagem citada completa enviada para API
- * ✅ NOVO: Sticker de sticker (normal e animado)
- * ✅ NOVO: Stickers animados até 30s
- * ✅ NOVO: Download YouTube com métodos alternativos
- * ✅ NOVO: Nome personalizado nos stickers
- * ✅ NOVO: Comandos de grupo por reply
- * ✅ FIX: Marcação como entregue corrigida
+ * ✅ CORREÇÃO: Contexto de reply otimizado para evitar repetições
+ * ✅ CORREÇÃO: Mensagem citada enviada apenas como METADATA, não como conteúdo
+ * ✅ CORREÇÃO: O modelo agora entende que reply é apenas CONTEXTO, não mensagem atual
+ * ✅ Sistema: Mensagem atual é PRIORIDADE, contexto é APENAS referência
  * ═══════════════════════════════════════════════════════════════════════
  */
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -63,7 +49,7 @@ const TEMP_FOLDER = './temp';
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
 // Configuração Deepgram STT (GRATUITO - 200h/mês)
-const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '2700019dc80925c32932ab0aba44d881d20d39f7'; // Crie conta em deepgram.com
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '2700019dc80925c32932ab0aba44d881d20d39f7';
 const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';
 
 // USUÁRIOS COM PERMISSÃO DE DONO (APENAS ISAAC QUARENTA)
@@ -73,11 +59,11 @@ const DONO_USERS = [
 ];
 
 // Sistema de mute melhorado
-const mutedUsers = new Map(); // Map<groupId_userId, {expires: timestamp, type: string, muteCount: number}>
-const antiLinkGroups = new Set(); // Set<groupId> - grupos com anti-link ativo
+const mutedUsers = new Map();
+const antiLinkGroups = new Set();
 
 // Contador de mutes por dia
-const muteCounts = new Map(); // Map<groupId_userId, {count: number, lastMuteDate: string}>
+const muteCounts = new Map();
 
 // Criar pasta temp se não existir
 if (!fs.existsSync(TEMP_FOLDER)) {
@@ -171,14 +157,11 @@ function incrementMuteCount(groupId, userId) {
 function muteUser(groupId, userId, minutes = 5) {
   const key = `${groupId}_${userId}`;
   
-  // Incrementa contador de mutes no dia
   const muteCount = incrementMuteCount(groupId, userId);
   
-  // Se for mutado mais de uma vez no mesmo dia, multiplica o tempo
   let muteMinutes = minutes;
   if (muteCount > 1) {
-    muteMinutes = minutes * Math.pow(2, muteCount - 1); // 5, 10, 20, 40, etc.
-    console.log(`⚠️ [MUTE INTENSIFICADO] Usuário ${userId} muteado ${muteCount}x hoje. Tempo: ${muteMinutes} minutos`);
+    muteMinutes = minutes * Math.pow(2, muteCount - 1);
   }
   
   const expires = Date.now() + (muteMinutes * 60 * 1000);
@@ -255,14 +238,12 @@ function extrairNumeroReal(m) {
       return String(key.remoteJid).split('@')[0];
     }
     
-    // Usa a mesma lógica dos comandos de grupo
     if (key.participant) {
       const participant = String(key.participant);
       if (participant.includes('@s.whatsapp.net')) {
         return participant.split('@')[0];
       }
       if (participant.includes('@lid')) {
-        // Remove o :11@lid para obter o número
         const limpo = participant.split(':')[0];
         const digitos = limpo.replace(/\D/g, '');
         if (digitos.length >= 9) {
@@ -283,12 +264,10 @@ function obterParticipanteGrupo(m) {
   try {
     const key = m.key || {};
     
-    // Se for mensagem de grupo, retorna o participant
     if (key.participant) {
       return key.participant;
     }
     
-    // Tenta obter do contexto de reply
     const context = m.message?.extendedTextMessage?.contextInfo;
     if (context?.participant) {
       return context.participant;
@@ -372,7 +351,7 @@ function extrairTexto(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO CRÍTICA CORRIGIDA: EXTRAIR REPLY INFO COM CONTEXTO SUPER CLARO
+// FUNÇÃO CRÍTICA CORRIGIDA: EXTRAIR REPLY INFO - CONTEXTO OTIMIZADO
 // ═══════════════════════════════════════════════════════════════════════
 function extrairReplyInfo(m) {
   try {
@@ -382,7 +361,7 @@ function extrairReplyInfo(m) {
     const quoted = context.quotedMessage;
     const tipo = getContentType(quoted);
     
-    // === EXTRAI TEXTO DA MENSAGEM CITADA ===
+    // EXTRAI TEXTO DA MENSAGEM CITADA (RESUMIDO)
     let textoMensagemCitada = '';
     let tipoMidia = 'texto';
     
@@ -409,7 +388,7 @@ function extrairReplyInfo(m) {
       tipoMidia = 'outro';
     }
     
-    // === IDENTIFICA QUEM ESCREVEU A MENSAGEM CITADA ===
+    // IDENTIFICA QUEM ESCREVEU A MENSAGEM CITADA
     const participantJidCitado = context.participant || null;
     const ehRespostaAoBot = ehOBot(participantJidCitado);
     
@@ -427,52 +406,43 @@ function extrairReplyInfo(m) {
       }
     }
     
-    // === IDENTIFICA QUEM ESTÁ FALANDO AGORA (A MENSAGEM ATUAL) ===
+    // IDENTIFICA QUEM ESTÁ FALANDO AGORA (A MENSAGEM ATUAL)
     const quemFalaAgoraJid = m.key.participant || m.key.remoteJid;
     let nomeQuemFalaAgora = m.pushName || 'desconhecido';
     let numeroQuemFalaAgora = extrairNumeroReal(m);
     
-    // === CORREÇÃO CRÍTICA: MARCA EXPLICITAMENTE SE É REPLY À AKIRA ===
-    let contextoClaro = '';
+    // CORREÇÃO CRÍTICA: Contexto formatado de forma que NÃO confunda o modelo
+    let contextoParaAPI = '';
     if (ehRespostaAoBot) {
-      // Se está respondendo ao bot, a mensagem citada é DA AKIRA
-      contextoClaro = `CONTEXTO: ${nomeQuemFalaAgora} está respondendo à mensagem anterior DA AKIRA que dizia: "${textoMensagemCitada}"`;
+      // Se está respondendo ao bot, contexto MÍNIMO
+      contextoParaAPI = `(Resposta à minha mensagem anterior)`;
     } else {
-      // Se está respondendo a outra pessoa
-      contextoClaro = `CONTEXTO: ${nomeQuemFalaAgora} está comentando sobre algo que ${nomeQuemEscreveuCitacao} disse: "${textoMensagemCitada}"`;
+      // Se está respondendo a outra pessoa, contexto claro mas breve
+      contextoParaAPI = `(Comentando sobre mensagem de ${nomeQuemEscreveuCitacao})`;
     }
     
     return {
-      // === QUEM ESTÁ FALANDO AGORA (PRIORIDADE MÁXIMA) ===
+      // QUEM ESTÁ FALANDO AGORA
       quemFalaAgoraJid: quemFalaAgoraJid,
       quemFalaAgoraNome: nomeQuemFalaAgora,
       quemFalaAgoraNumero: numeroQuemFalaAgora,
       
-      // === INFORMAÇÕES DA MENSAGEM CITADA ===
+      // INFORMAÇÕES DA MENSAGEM CITADA (RESUMIDAS)
       textoMensagemCitada: textoMensagemCitada,
       tipoMidiaCitada: tipoMidia,
-      textoCompleto: textoMensagemCitada,
       
-      // === QUEM ESCREVEU A MENSAGEM CITADA (PODE SER AKIRA OU OUTRO) ===
+      // QUEM ESCREVEU A MENSAGEM CITADA
       quemEscreveuCitacaoJid: participantJidCitado,
       quemEscreveuCitacaoNome: nomeQuemEscreveuCitacao,
       quemEscreveuCitacaoNumero: numeroQuemEscreveuCitacao,
-      usuarioCitadoNome: nomeQuemEscreveuCitacao,
-      usuarioCitadoNumero: numeroQuemEscreveuCitacao,
       
-      // === FLAGS IMPORTANTES ===
-      ehRespostaAoBot: ehRespostaAoBot, // TRUE se a mensagem citada é DA AKIRA
+      // FLAGS IMPORTANTES
+      ehRespostaAoBot: ehRespostaAoBot,
       
-      // === CONTEXTO SUPER CLARO PARA API ===
-      contextoClaro: contextoClaro,
+      // CONTEXTO OTIMIZADO (BEM RESUMIDO)
+      contextoParaAPI: contextoParaAPI,
       
-      // === FLAGS DE TIPO ===
-      ehSticker: tipo === 'stickerMessage',
-      ehAudio: tipo === 'audioMessage',
-      ehImagem: tipo === 'imageMessage',
-      ehVideo: tipo === 'videoMessage',
-      
-      // Para compatibilidade com código anterior
+      // Para compatibilidade
       participantJid: participantJidCitado,
       texto: textoMensagemCitada,
       tipoMidia: tipoMidia,
@@ -488,21 +458,19 @@ function extrairReplyInfo(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO PARA VERIFICAR SE DEVE RESPONDER (ÁUDIO OU TEXTO) - CORRIGIDA
+// FUNÇÃO PARA VERIFICAR SE DEVE RESPONDER
 // ═══════════════════════════════════════════════════════════════════════
 async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
   const textoLower = String(texto).toLowerCase();
   const context = m.message?.extendedTextMessage?.contextInfo;
   
-  // === REGRAS PARA ÁUDIO ===
+  // REGRAS PARA ÁUDIO
   if (temAudio) {
-    // Em PV sempre responde a áudio
     if (!ehGrupo) {
       console.log('✅ [ATIVAÇÃO ÁUDIO] PV - Sempre responde');
       return true;
     }
     
-    // Em grupo só responde se for mencionada/reply
     if (replyInfo && replyInfo.ehRespostaAoBot) {
       console.log('✅ [ATIVAÇÃO ÁUDIO] Reply ao bot detectado');
       return true;
@@ -521,19 +489,11 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
       return true;
     }
     
-    if (BOT_JID_ALTERNATIVO) {
-      const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
-      if (textoLower.includes(jidAltNumero)) {
-        console.log('✅ [ATIVAÇÃO ÁUDIO] Menção ao JID alternativo');
-        return true;
-      }
-    }
-    
     console.log('❌ [IGNORADO] Grupo sem menção/reply ao bot em áudio');
     return false;
   }
   
-  // === REGRAS PARA TEXTO ===
+  // REGRAS PARA TEXTO
   if (replyInfo && replyInfo.ehRespostaAoBot) {
     console.log('✅ [ATIVAÇÃO TEXTO] Reply ao bot detectado');
     return true;
@@ -553,14 +513,6 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
       return true;
     }
     
-    if (BOT_JID_ALTERNATIVO) {
-      const jidAltNumero = String(BOT_JID_ALTERNATIVO).split('@')[0].split(':')[0];
-      if (textoLower.includes(jidAltNumero)) {
-        console.log('✅ [ATIVAÇÃO TEXTO] Menção ao JID alternativo');
-        return true;
-      }
-    }
-    
     console.log('❌ [IGNORADO] Grupo sem menção/reply ao bot');
     return false;
   }
@@ -572,34 +524,27 @@ async function deveResponder(m, ehGrupo, texto, replyInfo, temAudio = false) {
 // ═══════════════════════════════════════════════════════════════════════
 // FUNÇÃO PARA MENSAGEM EDITÁVEL
 // ═══════════════════════════════════════════════════════════════════════
-let progressMessages = new Map(); // Map<userId_messageKey, {key: messageKey, timestamp: number}>
+let progressMessages = new Map();
 
 async function sendProgressMessage(sock, jid, text, originalMsg = null, userId = null) {
   try {
-    // Se tiver uma mensagem de progresso anterior, edita
     if (originalMsg && userId) {
       const key = `${userId}_${originalMsg.key.id}`;
       const progressData = progressMessages.get(key);
       
       if (progressData && progressData.key) {
         try {
-          // Tenta editar a mensagem existente
           await sock.sendMessage(jid, {
             text: text,
             edit: progressData.key
           });
-          console.log('✏️ Mensagem de progresso atualizada');
           return progressData.key;
-        } catch (e) {
-          console.log('⚠️ Não foi possível editar mensagem, enviando nova...');
-        }
+        } catch (e) {}
       }
     }
     
-    // Envia nova mensagem
     const sentMsg = await sock.sendMessage(jid, { text: text });
     
-    // Salva referência se tiver userId e originalMsg
     if (originalMsg && userId && sentMsg.key) {
       const key = `${userId}_${originalMsg.key.id}`;
       progressMessages.set(key, {
@@ -607,7 +552,6 @@ async function sendProgressMessage(sock, jid, text, originalMsg = null, userId =
         timestamp: Date.now()
       });
       
-      // Limpa após 10 minutos
       setTimeout(() => {
         progressMessages.delete(key);
       }, 10 * 60 * 1000);
@@ -621,17 +565,15 @@ async function sendProgressMessage(sock, jid, text, originalMsg = null, userId =
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES PARA STT (SPEECH TO TEXT) - DEEPGRAM API (GRATUITO - REAL)
+// FUNÇÕES PARA STT (SPEECH TO TEXT) - DEEPGRAM API
 // ═══════════════════════════════════════════════════════════════════════
 async function transcreverAudioParaTexto(audioBuffer) {
   try {
     console.log('🔊 Iniciando transcrição REAL de áudio (Deepgram)...');
     
-    // Salva o áudio em arquivo temporário
     const audioPath = path.join(TEMP_FOLDER, `audio_${Date.now()}.ogg`);
     fs.writeFileSync(audioPath, audioBuffer);
     
-    // Converte para formato compatível (MP3)
     const convertedPath = path.join(TEMP_FOLDER, `audio_${Date.now()}.mp3`);
     
     await new Promise((resolve, reject) => {
@@ -643,29 +585,23 @@ async function transcreverAudioParaTexto(audioBuffer) {
         .save(convertedPath);
     });
     
-    // Lê o arquivo convertido
     const convertedBuffer = fs.readFileSync(convertedPath);
     
-    // Verifica se tem API key configurada
     if (!DEEPGRAM_API_KEY || DEEPGRAM_API_KEY === 'seu_token_aqui') {
-      console.log('⚠️ API Key do Deepgram não configurada.');
-      
-      // Limpa arquivos
       try {
         fs.unlinkSync(audioPath);
         fs.unlinkSync(convertedPath);
       } catch (e) {}
       
       return { 
-        texto: "Olá! Recebi seu áudio mas preciso que configure o token do Deepgram para transcrição real. Crie conta em deepgram.com (200h/mês grátis).", 
+        texto: "Olá! Recebi seu áudio mas preciso que configure o token do Deepgram para transcrição real.", 
         sucesso: false,
-        nota: "Configure DEEPGRAM_API_KEY no .env ou código"
+        nota: "Configure DEEPGRAM_API_KEY"
       };
     }
     
     console.log('📤 Enviando para Deepgram API...');
     
-    // Faz requisição para Deepgram
     const response = await axios.post(
       DEEPGRAM_API_URL,
       convertedBuffer,
@@ -686,7 +622,6 @@ async function transcreverAudioParaTexto(audioBuffer) {
       }
     );
     
-    // Extrai o texto transcrito
     let textoTranscrito = '';
     if (response.data && response.data.results && response.data.results.channels) {
       const transcription = response.data.results.channels[0].alternatives[0].transcript;
@@ -699,7 +634,6 @@ async function transcreverAudioParaTexto(audioBuffer) {
       textoTranscrito = "[Não consegui entender o áudio claramente]";
     }
     
-    // Limpa arquivos
     try {
       fs.unlinkSync(audioPath);
       fs.unlinkSync(convertedPath);
@@ -718,7 +652,6 @@ async function transcreverAudioParaTexto(audioBuffer) {
   } catch (error) {
     console.error('❌ Erro na transcrição REAL:', error.message);
     
-    // Tenta limpar arquivos em caso de erro
     let audioPath, convertedPath;
     try {
       if (audioPath) fs.unlinkSync(audioPath);
@@ -726,11 +659,6 @@ async function transcreverAudioParaTexto(audioBuffer) {
     } catch (e) {}
     
     if (error.response) {
-      console.error('Detalhes do erro Deepgram:', {
-        status: error.response.status,
-        data: error.response.data
-      });
-      
       if (error.response.status === 401) {
         return { 
           texto: "[Erro: Token do Deepgram inválido]", 
@@ -740,7 +668,6 @@ async function transcreverAudioParaTexto(audioBuffer) {
       }
     }
     
-    // Fallback para texto padrão
     return { 
       texto: "Recebi seu áudio mas houve um erro na transcrição. Pode repetir ou digitar?", 
       sucesso: false,
@@ -750,7 +677,7 @@ async function transcreverAudioParaTexto(audioBuffer) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES PARA COMANDOS EXTRAS (MANTIDAS IGUAIS COM CORREÇÕES)
+// FUNÇÕES PARA COMANDOS EXTRAS
 // ═══════════════════════════════════════════════════════════════════════
 async function downloadMediaMessage(message) {
   try {
@@ -794,22 +721,17 @@ function cleanupFile(filePath) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÕES PARA STICKERS (COMPLETAMENTE MODIFICADAS)
+// FUNÇÕES PARA STICKERS
 // ═══════════════════════════════════════════════════════════════════════
-
-// Função para detectar se um sticker é animado
 function isStickerAnimated(stickerBuffer) {
   try {
-    // Verifica se é WebP animado (RIFF header + ANIM chunk)
     if (stickerBuffer.length < 20) return false;
     
     const header = stickerBuffer.slice(0, 12).toString('hex');
-    // WebP animado tem "RIFF" e depois "WEBPVP8X"
     if (header.includes('52494646') && header.includes('5745425056503858')) {
       return true;
     }
     
-    // Verifica por chunk ANIM no WebP
     const stickerStr = stickerBuffer.toString('binary');
     return stickerStr.includes('ANIM');
   } catch (e) {
@@ -817,7 +739,6 @@ function isStickerAnimated(stickerBuffer) {
   }
 }
 
-// Função para criar sticker normal de imagem COM NOME PERSONALIZADO NO STICKER
 async function createSticker(imageBuffer, quotedMsg, packName = "Angolan Vibes", author = "+244937035662") {
   try {
     const inputPath = generateRandomFilename('jpg');
@@ -825,7 +746,6 @@ async function createSticker(imageBuffer, quotedMsg, packName = "Angolan Vibes",
     
     fs.writeFileSync(inputPath, imageBuffer);
     
-    // Criar watermark com nome do usuário (opcional)
     const usuarioNome = quotedMsg?.pushName || "Usuário";
     
     await new Promise((resolve, reject) => {
@@ -859,7 +779,6 @@ async function createSticker(imageBuffer, quotedMsg, packName = "Angolan Vibes",
   }
 }
 
-// Função para criar sticker animado de vídeo COM NOME PERSONALIZADO
 async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg, duracaoMaxima = 30) {
   try {
     const inputPath = generateRandomFilename('mp4');
@@ -917,11 +836,8 @@ async function createAnimatedStickerFromVideo(videoBuffer, quotedMsg, duracaoMax
   }
 }
 
-// Função para criar sticker de sticker normal
 async function createStickerFromSticker(stickerBuffer, quotedMsg) {
   try {
-    // Se já é um sticker, apenas retorna o buffer
-    // Mas podemos adicionar metadados personalizados
     return stickerBuffer;
   } catch (e) {
     console.error('Erro ao criar sticker de sticker:', e);
@@ -929,10 +845,8 @@ async function createStickerFromSticker(stickerBuffer, quotedMsg) {
   }
 }
 
-// Função para criar sticker animado de sticker animado
 async function createAnimatedStickerFromAnimatedSticker(stickerBuffer, quotedMsg) {
   try {
-    // Se já é um sticker animado, apenas retorna o buffer
     return stickerBuffer;
   } catch (e) {
     console.error('Erro ao criar sticker animado de sticker animado:', e);
@@ -940,7 +854,6 @@ async function createAnimatedStickerFromAnimatedSticker(stickerBuffer, quotedMsg
   }
 }
 
-// Função para converter sticker para imagem
 async function convertStickerToImage(stickerBuffer, quotedMsg) {
   try {
     const inputPath = generateRandomFilename('webp');
@@ -967,13 +880,10 @@ async function convertStickerToImage(stickerBuffer, quotedMsg) {
   }
 }
 
-// Função para enviar sticker SEM THUMBNAIL e com nome no próprio sticker
 async function enviarStickerPersonalizado(sock, jid, stickerBuffer, packName = "Angolan Vibes", author = "+244937035662", quotedMsg = null) {
   try {
     const opcoes = quotedMsg ? { quoted: quotedMsg } : {};
     
-    // Enviar sticker SIMPLES, sem thumbnail, sem preview
-    // O nome já está embutido nos metadados do WebP criado
     await sock.sendMessage(jid, { sticker: stickerBuffer }, opcoes);
     
     console.log(`✅ Sticker enviado para ${packName}`);
@@ -985,13 +895,12 @@ async function enviarStickerPersonalizado(sock, jid, stickerBuffer, packName = "
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO PARA DOWNLOAD DE ÁUDIO DO YOUTUBE - SISTEMA CORRIGIDO
+// FUNÇÃO PARA DOWNLOAD DE ÁUDIO DO YOUTUBE
 // ═══════════════════════════════════════════════════════════════════════
 async function downloadYTAudio(url) {
   try {
     console.log('🎵 Iniciando download de áudio do YouTube...');
     
-    // Extrair ID do vídeo
     let videoId = '';
     if (url.includes('youtube.com/watch?v=')) {
       videoId = url.split('v=')[1]?.split('&')[0];
@@ -1006,11 +915,9 @@ async function downloadYTAudio(url) {
     console.log(`📹 Video ID: ${videoId}`);
     const outputPath = generateRandomFilename('mp3');
     
-    // MÉTODO 1: Usar API externa confiável
     try {
       console.log('🔄 Tentando método 1: API externa confiável...');
       
-      // API confiável de conversão
       const apiUrl = `https://api.download-lagu-mp3.com/@api/json/mp3/${videoId}`;
       
       const response = await axios.get(apiUrl, {
@@ -1059,7 +966,6 @@ async function downloadYTAudio(url) {
         const audioBuffer = fs.readFileSync(outputPath);
         cleanupFile(outputPath);
         
-        // Obter título
         let title = 'Música do YouTube';
         try {
           const search = await yts({ videoId: videoId });
@@ -1074,7 +980,6 @@ async function downloadYTAudio(url) {
       console.log('❌ API falhou:', apiError.message);
     }
     
-    // MÉTODO 2: Usar ytdl-core com configuração atualizada
     try {
       console.log('🔄 Tentando método 2: ytdl-core atualizado...');
       
@@ -1086,7 +991,6 @@ async function downloadYTAudio(url) {
         }
       });
       
-      // Procurar formato de áudio
       let audioFormat = ytdl.chooseFormat(info.formats, { 
         quality: 'highestaudio',
         filter: 'audioonly'
@@ -1098,7 +1002,6 @@ async function downloadYTAudio(url) {
       
       console.log(`✅ Format encontrado: ${audioFormat.container}`);
       
-      // Baixar usando stream
       const writeStream = fs.createWriteStream(outputPath);
       const stream = ytdl.downloadFromInfo(info, { format: audioFormat });
       
@@ -1132,13 +1035,11 @@ async function downloadYTAudio(url) {
       console.log('❌ ytdl-core falhou:', ytdlError.message);
     }
     
-    // Se todos os métodos falharem
     return { error: 'Não foi possível baixar o áudio. Tente outro vídeo.' };
     
   } catch (e) {
     console.error('❌ Erro geral ao baixar áudio:', e);
     
-    // Limpar arquivo temporário se existir
     try {
       cleanupFile(outputPath);
     } catch (cleanError) {}
@@ -1181,51 +1082,39 @@ async function textToSpeech(text, lang = 'pt') {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// DINÂMICA DE LEITURA MELHORADA (✓✓ AZUL/VISTO/REPRODUZIDO) - CORRIGIDA
+// DINÂMICA DE LEITURA MELHORADA
 // ═══════════════════════════════════════════════════════════════════════
 async function marcarMensagem(sock, m, ehGrupo, foiAtivada, temAudio = false) {
   try {
-    // Para áudio: marca como "reproduzido" se foi ativado
     if (temAudio && foiAtivada) {
       try {
-        // Marca como lido/reproduzido
         await sock.readMessages([m.key]);
         console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido');
-      } catch (e) {
-        console.error('Erro ao marcar áudio como reproduzido:', e.message);
-      }
+      } catch (e) {}
       return;
     }
     
-    // === REGRA 1: PV → SEMPRE MARCA COMO LIDO ===
     if (!ehGrupo) {
       await sock.readMessages([m.key]);
       console.log('✓✓ [LIDO] PV - Marcado como lido (azul)');
       return;
     }
     
-    // === REGRA 2: GRUPO → SÓ MARCA SE FOI MENCIONADA/REPLY ===
     if (ehGrupo && foiAtivada) {
       await sock.readMessages([m.key]);
       console.log('✓✓ [LIDO] Grupo - Marcado como lido (Akira foi mencionada)');
       return;
     }
     
-    // === REGRA 3: GRUPO SEM MENÇÃO → APENAS MARCA COMO ENTREGUE (✓) ===
-    // FORÇANDO SEMPRE MARCAR COMO ENTREGUE NOS GRUPOS
     if (ehGrupo && !foiAtivada) {
       try {
-        // FORÇAR marcação como entregue (✓) para todas mensagens em grupo
         await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
         console.log('✓ [ENTREGUE FORÇADO] Grupo - Marcado como entregue (check simples)');
       } catch (e) {
-        // Se falhar, tenta método alternativo
         try {
           await sock.sendReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
           console.log('✓ [ENTREGUE ALT] Grupo - Usando método alternativo');
-        } catch (e2) {
-          console.log('⚠️ Não foi possível marcar como entregue, mas o WhatsApp mostrará automaticamente');
-        }
+        } catch (e2) {}
       }
       return;
     }
@@ -1236,22 +1125,18 @@ async function marcarMensagem(sock, m, ehGrupo, foiAtivada, temAudio = false) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SIMULAÇÃO REALISTA DE DIGITAÇÃO (CORRIGIDA)
+// SIMULAÇÃO REALISTA DE DIGITAÇÃO
 // ═══════════════════════════════════════════════════════════════════════
 async function simularDigitacao(sock, jid, tempoMs) {
   try {
-    // 1. Marca como "online"
     await sock.sendPresenceUpdate('available', jid);
     await delay(500);
     
-    // 2. MOSTRA "digitando..." (VISÍVEL NO WHATSAPP)
     await sock.sendPresenceUpdate('composing', jid);
     console.log(`⌨️ [DIGITANDO] Akira está digitando por ${(tempoMs/1000).toFixed(1)}s...`);
     
-    // 3. AGUARDA o tempo de digitação
     await delay(tempoMs);
     
-    // 4. Para de digitar (muda para "pausado")
     await sock.sendPresenceUpdate('paused', jid);
     await delay(300);
     
@@ -1263,17 +1148,15 @@ async function simularDigitacao(sock, jid, tempoMs) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SIMULAÇÃO DE GRAVAÇÃO DE ÁUDIO (NOVA FUNÇÃO) - CORRIGIDA
+// SIMULAÇÃO DE GRAVAÇÃO DE ÁUDIO
 // ═══════════════════════════════════════════════════════════════════════
 async function simularGravacaoAudio(sock, jid, tempoMs) {
   try {
     console.log(`🎤 [GRAVANDO] Akira está preparando áudio por ${(tempoMs/1000).toFixed(1)}s...`);
     
-    // Mostra que está gravação (status de gravação)
     await sock.sendPresenceUpdate('recording', jid);
     await delay(tempoMs);
     
-    // Volta ao estado normal
     await sock.sendPresenceUpdate('paused', jid);
     
     console.log('✅ [PRONTO] Áudio preparado');
@@ -1306,42 +1189,32 @@ async function obterInfoGrupo(sock, groupId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SIMULAÇÃO DE STATUS DE MENSAGENS (NOVA FUNÇÃO) - CORRIGIDA
+// SIMULAÇÃO DE STATUS DE MENSAGENS
 // ═══════════════════════════════════════════════════════════════════════
 async function simularStatusMensagem(sock, m, foiAtivada, temAudio = false) {
   try {
     const ehGrupo = String(m.key.remoteJid || '').endsWith('@g.us');
     
-    // === REGRA FIXA: SEMPRE MARCA COMO ENTREGUE (✓) NOS GRUPOS ===
-    // Isso força o check simples aparecer para todas mensagens em grupos
     if (ehGrupo) {
       try {
-        // Método principal - força marcação como entregue
         await sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
         console.log('✓ [ENTREGUE FORÇADO] Grupo - Marcado como entregue (check simples)');
       } catch (e) {
-        // Método alternativo se o primeiro falhar
         try {
           await sock.sendReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
           console.log('✓ [ENTREGUE ALT] Grupo - Usando método alternativo');
-        } catch (e2) {
-          console.log('⚠️ Não foi possível marcar como entregue, mas o WhatsApp mostrará automaticamente');
-        }
+        } catch (e2) {}
       }
     }
     
-    // Se não foi ativada (ignorada), apenas o entregue já foi marcado
     if (!foiAtivada) {
       return;
     }
     
-    // Se foi ativada, marca como visto/lido/reproduzido adicionalmente
     if (temAudio && foiAtivada) {
-      // Para áudio ativado: marca como reproduzido (✓✓)
       await sock.readMessages([m.key]);
       console.log('▶️ [REPRODUZIDO] Áudio marcado como reproduzido (✓✓)');
     } else if (foiAtivada) {
-      // Para texto ativado: marca como lido (✓✓)
       await sock.readMessages([m.key]);
       console.log('✓✓ [LIDO] Mensagem marcada como lida (azul)');
     }
@@ -1352,14 +1225,12 @@ async function simularStatusMensagem(sock, m, foiAtivada, temAudio = false) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// HANDLER DE COMANDOS EXTRAS (ATUALIZADO COM CORREÇÕES)
+// HANDLER DE COMANDOS EXTRAS
 // ═══════════════════════════════════════════════════════════════════════
 async function handleComandosExtras(sock, m, texto, ehGrupo) {
   try {
-    // Verifica se é um comando com prefixo
     if (!texto.startsWith(PREFIXO)) return false;
     
-    // Rate limiting
     const sender = m.key.participant || m.key.remoteJid;
     if (!checkRateLimit(sender)) {
       await sock.sendMessage(m.key.remoteJid, { text: '⏰ Você está usando comandos muito rápido. Aguarde um pouco.' });
@@ -1372,10 +1243,8 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
     
     console.log(`🔧 [COMANDO] ${comando} de ${sender}`);
     
-    // COMANDOS DISPONÍVEIS
     switch (comando) {
       
-      // === STICKER (COM NOME PERSONALIZADO) ===
       case 'sticker':
       case 's':
       case 'fig':
@@ -1396,14 +1265,10 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
           let packName = "Angolan Vibes";
           let author = "+244937035662";
           
-          // Adicionar nome do usuário que solicitou
           const usuarioNome = m.pushName || "Usuário";
-          
-          // Personalizar pack com nome do usuário
           packName = `${usuarioNome}'s Pack`;
           
           if (hasImage) {
-            // Criar sticker de imagem
             const mediaMessage = quoted?.imageMessage || m.message.imageMessage;
             const mediaBuffer = await downloadMediaMessage({ imageMessage: mediaMessage });
             
@@ -1416,7 +1281,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             isAnimated = false;
             
           } else if (hasSticker) {
-            // Criar sticker de sticker
             const stickerMessage = quoted.stickerMessage;
             const mediaBuffer = await downloadMediaMessage({ stickerMessage: stickerMessage });
             
@@ -1425,14 +1289,11 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
               return true;
             }
             
-            // Verifica se é sticker animado
             isAnimated = isStickerAnimated(mediaBuffer);
             
             if (isAnimated) {
-              // Sticker animado para sticker animado
               stickerBuffer = await createAnimatedStickerFromAnimatedSticker(mediaBuffer, m);
             } else {
-              // Sticker normal para sticker normal
               stickerBuffer = await createStickerFromSticker(mediaBuffer, m);
             }
           }
@@ -1442,7 +1303,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             return true;
           }
           
-          // Envia sticker SEM THUMBNAIL
           const sucesso = await enviarStickerPersonalizado(sock, m.key.remoteJid, stickerBuffer, packName, author, m);
           
           if (!sucesso) {
@@ -1454,7 +1314,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === STICKER ANIMADO DE VÍDEO (COM NOME PERSONALIZADO) ===
       case 'gif':
         try {
           const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -1474,7 +1333,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
           let author = "+244937035662";
           
           if (hasVideo) {
-            // Criar sticker animado de vídeo
             const mediaMessage = quoted?.videoMessage || m.message.videoMessage;
             const mediaBuffer = await downloadMediaMessage({ videoMessage: mediaMessage });
             
@@ -1483,7 +1341,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
               return true;
             }
             
-            const stickerResult = await createAnimatedStickerFromVideo(mediaBuffer, m, 30); // 30 segundos
+            const stickerResult = await createAnimatedStickerFromVideo(mediaBuffer, m, 30);
             
             if (stickerResult.error) {
               await sock.sendMessage(m.key.remoteJid, { text: `❌ ${stickerResult.error}` }, { quoted: m });
@@ -1493,7 +1351,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             stickerBuffer = stickerResult.buffer;
             
           } else if (hasSticker) {
-            // Criar sticker animado de sticker animado
             const stickerMessage = quoted.stickerMessage;
             const mediaBuffer = await downloadMediaMessage({ stickerMessage: stickerMessage });
             
@@ -1502,7 +1359,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
               return true;
             }
             
-            // Verifica se é sticker animado
             if (!isStickerAnimated(mediaBuffer)) {
               await sock.sendMessage(m.key.remoteJid, { text: '❌ Este sticker não é animado. Use `#sticker` para stickers normais.' }, { quoted: m });
               return true;
@@ -1516,7 +1372,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
             return true;
           }
           
-          // Envia sticker animado SEM THUMBNAIL
           const sucesso = await enviarStickerPersonalizado(sock, m.key.remoteJid, stickerBuffer, packName, author, m);
           
           if (!sucesso) {
@@ -1528,7 +1383,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === CONVERTER STICKER PARA IMAGEM ===
       case 'toimg':
       case 'img':
       case 'unstick':
@@ -1566,7 +1420,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === TTS (TEXT TO SPEECH) ===
       case 'tts':
         if (!textoCompleto) {
           await sock.sendMessage(m.key.remoteJid, { 
@@ -1607,7 +1460,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === PLAY / YOUTUBE MP3 === (SISTEMA CORRIGIDO)
       case 'play':
       case 'tocar':
       case 'music':
@@ -1678,7 +1530,6 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
         }
         return true;
       
-      // === MENU DE AJUDA ATUALIZADO ===
       case 'help':
       case 'menu':
       case 'comandos':
@@ -1691,7 +1542,7 @@ async function handleComandosExtras(sock, m, texto, ehGrupo) {
 \`#gif\` - Criar sticker animado de vídeo OU sticker animado (até 30s, com nome personalizado)
 \`#toimg\` - Converter sticker para imagem
 \`#tts <idioma> <texto>\` - Texto para voz
-\`#play <nome/link>\` - Baixar música do YouTube (sistema corrigido)
+\`#play <nome/link>\` - Baixar música do YouTube
 
 *🎤 ÁUDIO INTELIGENTE:*
 Agora eu posso responder mensagens de voz!
@@ -1712,14 +1563,6 @@ Agora eu posso responder mensagens de voz!
 \`#antilink status\` - Ver status anti-link
 \`#apagar\` - Apagar mensagem (responda a mensagem)
 
-*⚠️ NOVAS FUNCIONALIDADES:*
-- Sticker de sticker (normal e animado)
-- Stickers animados agora aceitam vídeos até 30 segundos
-- Stickers com nome personalizado EMBUTIDO (sem thumbnail)
-- Download YouTube com sistema corrigido
-- Comandos de grupo agora funcionam com reply ou menção
-- Aliases: \`#ban\` para remover
-
 *💬 CONVERSA NORMAL:*
 Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
 
@@ -1728,7 +1571,6 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
         await sock.sendMessage(m.key.remoteJid, { text: helpText }, { quoted: m });
         return true;
       
-      // === PING ===
       case 'ping':
         const startTime = Date.now();
         await sock.sendMessage(m.key.remoteJid, { text: '🏓 Pong!' }, { quoted: m });
@@ -1736,7 +1578,6 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
         await sock.sendMessage(m.key.remoteJid, { text: `📡 Latência: ${latency}ms\n🕐 Uptime: ${Math.floor(process.uptime())}s` });
         return true;
       
-      // === INFO ATUALIZADO ===
       case 'info':
       case 'botinfo':
         const infoText = `🤖 *INFORMAÇÕES DO BOT*
@@ -1752,33 +1593,23 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
 *Recursos:*
 ✅ Digitação realista
 ✅ IA conversacional
-✅ Figurinhas personalizadas EMBUTIDAS (nome no sticker)
-✅ Stickers animados de vídeo (AGORA ATÉ 30s)
-✅ Sticker de sticker (normal e animado)
-✅ Download de áudio do YouTube (sistema corrigido)
+✅ Figurinhas personalizadas
+✅ Stickers animados até 30s
+✅ Sticker de sticker
+✅ Download de áudio do YouTube
 ✅ Texto para voz (TTS)
 ✅ Resposta a mensagens de voz (STT via Deepgram + TTS)
-✅ Dinâmica de leitura inteligente (✓ sempre entregue em grupos)
-✅ Sistema de moderação aprimorado (agora com reply)
+✅ Sistema de moderação aprimorado
 ✅ NUNCA mostra transcrições de áudio no chat
+✅ Contexto de reply otimizado (sem repetições)
 
 *Configuração STT:* ${DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? '✅ Deepgram configurado' : '❌ Configure DEEPGRAM_API_KEY'}
-
-*Novidades:*
-- Stickers animados até 30 segundos
-- Sticker de sticker (reutilizar stickers)
-- Nome personalizado EMBUTIDO nos stickers (sem thumbnail)
-- Download YouTube corrigido
-- Mute/ban por reply (não apenas por menção)
-- Alias #ban para remover
-- Marcação como entregue corrigida
 
 Use \`#help\` para ver todos os comandos.`;
         
         await sock.sendMessage(m.key.remoteJid, { text: infoText }, { quoted: m });
         return true;
       
-      // === ADICIONAR MEMBRO (SÓ ISAAC QUARENTA) ===
       case 'add':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1825,10 +1656,9 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === REMOVER MEMBRO (AGORA SUPORTA REPLY E TEM ALIAS #ban) ===
       case 'remove':
       case 'kick':
-      case 'ban': // ALIAS PARA REMOVER
+      case 'ban':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
           return true;
@@ -1859,7 +1689,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // AGORA SUPORTA REPLY E MENCÃO
           let targetUserIds = [];
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           const replyInfo = extrairReplyInfo(m);
@@ -1883,7 +1712,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === PROMOVER A ADMIN (AGORA SUPORTA REPLY) ===
       case 'promote':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1915,7 +1743,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SUPORTA REPLY
           let targetUserIds = [];
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           const replyInfo = extrairReplyInfo(m);
@@ -1937,7 +1764,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === REMOVER ADMIN (AGORA SUPORTA REPLY) ===
       case 'demote':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -1969,7 +1795,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // SUPORTA REPLY
           let targetUserIds = [];
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           const replyInfo = extrairReplyInfo(m);
@@ -1991,7 +1816,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === MUTE MELHORADO (AGORA SUPORTA REPLY) ===
       case 'mute':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -2023,7 +1847,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // AGORA SUPORTA REPLY E MENCÃO
           let targetUserId = null;
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           const replyInfo = extrairReplyInfo(m);
@@ -2065,7 +1888,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === DESMUTE (AGORA SUPORTA REPLY) ===
       case 'desmute':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -2097,7 +1919,6 @@ Use \`#help\` para ver todos os comandos.`;
             return true;
           }
           
-          // AGORA SUPORTA REPLY E MENCÃO
           let targetUserId = null;
           const mencionados = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
           const replyInfo = extrairReplyInfo(m);
@@ -2132,7 +1953,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === ANTI-LINK (SÓ ISAAC QUARENTA) ===
       case 'antilink':
         if (!ehGrupo) {
           await sock.sendMessage(m.key.remoteJid, { text: '❌ Este comando só funciona em grupos.' }, { quoted: m });
@@ -2197,7 +2017,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === APAGAR MENSAGENS (PARA GRUPOS E PV) ===
       case 'apagar':
       case 'delete':
       case 'del':
@@ -2277,7 +2096,6 @@ Use \`#help\` para ver todos os comandos.`;
         }
         return true;
       
-      // === DONATE ===
       case 'donate':
       case 'doar':
       case 'apoia':
@@ -2361,29 +2179,21 @@ async function conectar() {
         }
         
         console.log('\n' + '═'.repeat(70));
-        console.log('✅ AKIRA BOT V21 ONLINE! (CONTEXTO REPLY SUPER CLARO)');
+        console.log('✅ AKIRA BOT V21 ONLINE! (CONTEXTO OTIMIZADO - SEM REPETIÇÕES)');
         console.log('═'.repeat(70));
         console.log('🤖 Bot JID:', BOT_JID);
         console.log('📱 Número:', BOT_NUMERO_REAL);
         console.log('🔗 API:', API_URL);
         console.log('⚙️ Prefixo comandos:', PREFIXO);
         console.log('🔐 Comandos restritos: Apenas Isaac Quarenta');
-        console.log('✅ CORREÇÃO: Separa claramente QUEM FALA vs QUEM FOI CITADO');
-        console.log('✅ CORREÇÃO: Quando reply à Akira, marca explicitamente que é MENSAGEM DELA');
-        console.log('✅ CORREÇÃO: Payload com contexto super claro para API');
+        console.log('✅ CORREÇÃO: Contexto de reply otimizado para evitar repetições');
+        console.log('✅ CORREÇÃO: Mensagem citada enviada apenas como METADATA');
+        console.log('✅ CORREÇÃO: O modelo entende que reply é CONTEXTO, não mensagem');
         console.log('🎤 STT: Deepgram API (200h/mês GRATUITO)');
         console.log('🎤 TTS: Google TTS (funcional)');
-        console.log('🎤 Resposta a voz: Ativada (STT REAL + TTS)');
-        console.log('🎤 Simulação gravação: Ativada');
-        console.log('🛡️ Sistema de moderação: Ativo (Mute progressivo, Anti-link com apagamento)');
-        console.log('📝 Contexto de mensagens: SUPER CLARO (quem fala vs quem foi citado)');
-        console.log('📱 Status mensagens: ✓ SEMPRE entregue em grupos + ✓✓ quando ativada');
-        console.log('🎨 Stickers: Nome EMBUTIDO no sticker (sem thumbnail)');
-        console.log('🔄 Stickers animados: ATÉ 30 SEGUNDOS');
-        console.log('🔄 Sticker de sticker: Suporte para normais e animados');
-        console.log('🎵 Download YouTube: Sistema corrigido (APIs confiáveis)');
-        console.log('🔄 Comandos de grupo: Agora funcionam com reply ou menção');
-        console.log('🔄 Aliases: #ban para remover');
+        console.log('🎤 Resposta a voz: Ativada');
+        console.log('🛡️ Sistema de moderação: Ativo');
+        console.log('📝 Contexto de mensagens: OTIMIZADO (sem repetições)');
         console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
@@ -2414,12 +2224,11 @@ async function conectar() {
         const nome = m.pushName || numeroReal;
         const texto = extrairTexto(m).trim();
         
-        // === EXTRAI REPLY INFO COM CONTEXTO SUPER CLARO ===
+        // EXTRAI REPLY INFO
         const replyInfo = extrairReplyInfo(m);
         
-        // Log do contexto claro
         if (replyInfo) {
-          console.log('📋 [CONTEXTO CLARO]:', replyInfo.contextoClaro);
+          console.log('📋 [CONTEXTO]:', replyInfo.contextoParaAPI);
         }
         
         const tipo = getContentType(m.message);
@@ -2427,17 +2236,15 @@ async function conectar() {
         let textoAudio = '';
         let processarComoAudio = false;
         
-        // === VERIFICAÇÕES DE MODERAÇÃO MELHORADAS (APENAS PARA GRUPOS) ===
+        // VERIFICAÇÕES DE MODERAÇÃO
         if (ehGrupo && m.key.participant) {
           const groupId = m.key.remoteJid;
           const userId = m.key.participant;
           
-          // 1. VERIFICA SE USUÁRIO ESTÁ MUTADO
           if (isUserMuted(groupId, userId)) {
             console.log(`🔇 [MUTE] Usuário ${nome} tentou falar durante mute. Removendo...`);
             
             try {
-              // Primeiro apaga a mensagem do usuário mutado
               try {
                 await sock.sendMessage(groupId, {
                   delete: {
@@ -2448,34 +2255,27 @@ async function conectar() {
                   }
                 });
                 console.log(`🗑️ Mensagem do usuário mutado apagada`);
-              } catch (deleteError) {
-                console.log(`⚠️ Não foi possível apagar mensagem do usuário mutado`);
-              }
+              } catch (deleteError) {}
               
-              // Remove o usuário do grupo
               await sock.groupParticipantsUpdate(groupId, [userId], 'remove');
               
-              // Avisa no grupo
               await sock.sendMessage(groupId, { 
                 text: `🚫 *${nome} foi removido por enviar mensagem durante período de mute!*` 
               });
               
-              // Remove do sistema de mute
               unmuteUser(groupId, userId);
               
             } catch (e) {
               console.error('Erro ao remover usuário mutado:', e);
             }
             
-            return; // Não processa a mensagem
+            return;
           }
           
-          // 2. VERIFICA ANTI-LINK (apenas para texto)
           if (isAntiLinkActive(groupId) && texto && containsLink(texto)) {
             console.log(`🔗 [ANTI-LINK] Usuário ${nome} enviou link. Banindo...`);
             
             try {
-              // Primeiro apaga a mensagem com link
               try {
                 await sock.sendMessage(groupId, {
                   delete: {
@@ -2486,14 +2286,10 @@ async function conectar() {
                   }
                 });
                 console.log(`🗑️ Mensagem com link apagada`);
-              } catch (deleteError) {
-                console.log(`⚠️ Não foi possível apagar mensagem com link`);
-              }
+              } catch (deleteError) {}
               
-              // Remove o usuário do grupo
               await sock.groupParticipantsUpdate(groupId, [userId], 'remove');
               
-              // Avisa no grupo
               await sock.sendMessage(groupId, { 
                 text: `🚫 *${nome} foi removido por enviar link!*\n🔒 Anti-link está ativado neste grupo.` 
               });
@@ -2502,39 +2298,34 @@ async function conectar() {
               console.error('Erro ao banir usuário por link:', e);
             }
             
-            return; // Não processa a mensagem
+            return;
           }
         }
         
-        // === PRIMEIRO: VERIFICA SE É COMANDO EXTRA ===
+        // PRIMEIRO: VERIFICA SE É COMANDO EXTRA
         if (!temAudio && texto) {
           const isComandoExtra = await handleComandosExtras(sock, m, texto, ehGrupo);
           
           if (isComandoExtra) {
-            // Marca como lido (para comandos sempre marca como lido)
             await simularStatusMensagem(sock, m, true, false);
             return;
           }
         }
         
-        // === SE FOR MENSAGEM DE ÁUDIO: PROCESSA STT REAL ===
+        // SE FOR MENSAGEM DE ÁUDIO: PROCESSA STT
         if (temAudio) {
           console.log(`🎤 [ÁUDIO RECEBIDO] de ${nome}`);
           
-          // Simula que está ouvindo o áudio
           await simularGravacaoAudio(sock, m.key.remoteJid, 1500);
           
-          // Baixa o áudio
           const audioBuffer = await downloadMediaMessage({ audioMessage: m.message.audioMessage });
           
           if (!audioBuffer) {
             console.error('❌ Erro ao baixar áudio');
-            // Ainda marca como entregue/reproduzido
             await simularStatusMensagem(sock, m, false, true);
             return;
           }
           
-          // Transcreve áudio para texto usando Deepgram REAL
           console.log('🔊 Transcrevendo áudio para texto (Deepgram)...');
           const transcricao = await transcreverAudioParaTexto(audioBuffer);
           
@@ -2543,14 +2334,10 @@ async function conectar() {
             console.log(`📝 [TRANSCRIÇÃO INTERNA] ${nome}: ${textoAudio.substring(0, 100)}...`);
             processarComoAudio = true;
             
-            // **NUNCA MOSTRA TRANSCRIÇÃO NO WHATSAPP** - apenas usa internamente
-            
           } else {
-            // Fallback
             textoAudio = transcricao.texto || "[Não foi possível transcrever]";
             console.log('⚠️ Transcrição falhou:', transcricao.erro || 'Erro desconhecido');
             
-            // Em PV, responde mesmo sem transcrição
             if (!ehGrupo) {
               processarComoAudio = true;
               textoAudio = "Olá! Recebi seu áudio mas houve um erro na transcrição.";
@@ -2558,7 +2345,7 @@ async function conectar() {
           }
         }
         
-        // === VERIFICA SE DEVE RESPONDER ===
+        // VERIFICA SE DEVE RESPONDER
         let ativar = false;
         let textoParaAPI = texto;
         
@@ -2569,7 +2356,7 @@ async function conectar() {
           ativar = await deveResponder(m, ehGrupo, texto, replyInfo, false);
         }
         
-        // === SIMULA STATUS DE MENSAGEM (✓ SEMPRE ENTREGUE NOS GRUPOS) ===
+        // SIMULA STATUS DE MENSAGEM
         await simularStatusMensagem(sock, m, ativar, temAudio);
         
         if (!ativar) return;
@@ -2582,51 +2369,45 @@ async function conectar() {
         }
         
         // ═══════════════════════════════════════════════════════════════
-        // PAYLOAD PARA API COM CONTEXTO SUPER CLARO
+        // PAYLOAD PARA API COM CONTEXTO OTIMIZADO (CORREÇÃO CRÍTICA)
         // ═══════════════════════════════════════════════════════════════
         const payloadBase = {
           usuario: nome,
           numero: numeroReal,
-          mensagem: textoParaAPI,
+          mensagem: textoParaAPI, // MENSAGEM ATUAL (PRIORIDADE)
           tipo_conversa: ehGrupo ? 'grupo' : 'pv',
           tipo_mensagem: temAudio ? 'audio' : 'texto'
         };
         
-        // === ADICIONA CONTEXTO DE REPLY SUPER CLARO ===
+        // === CORREÇÃO CRÍTICA: CONTEXTO OTIMIZADO ===
+        // Envia contexto apenas como METADATA, não como parte da mensagem
         if (replyInfo) {
-          // Envia mensagem citada formatada de forma SUPER CLARA
-          if (replyInfo.ehRespostaAoBot) {
-            // CASO 1: Usuário está respondendo à AKIRA
-            payloadBase.mensagem_citada = `[MENSAGEM ANTERIOR DA AKIRA: "${replyInfo.textoMensagemCitada}"]`;
-          } else {
-            // CASO 2: Usuário está comentando sobre mensagem de outra pessoa
-            payloadBase.mensagem_citada = `[MENSAGEM DE ${replyInfo.quemEscreveuCitacaoNome.toUpperCase()}: "${replyInfo.textoMensagemCitada}"]`;
-          }
-          
-          // Envia reply_info detalhado
-          payloadBase.reply_info = {
-            // PRIORIDADE: Quem está falando AGORA
-            quem_fala_agora_nome: replyInfo.quemFalaAgoraNome,
-            quem_fala_agora_numero: replyInfo.quemFalaAgoraNumero,
+          // Informações METADATA sobre o reply (não conteúdo)
+          payloadBase.reply_metadata = {
+            // Informa SE É REPLY (sem repetir conteúdo)
+            is_reply: true,
             
-            // Informações da mensagem citada
-            texto_mensagem_citada: replyInfo.textoMensagemCitada,
-            tipo_midia_citada: replyInfo.tipoMidiaCitada,
-            
-            // Quem escreveu a mensagem citada
-            quem_escreveu_citacao_nome: replyInfo.quemEscreveuCitacaoNome,
-            quem_escreveu_citacao_numero: replyInfo.quemEscreveuCitacaoNumero,
-            
-            // FLAG CRÍTICA: Indica se a mensagem citada é DA AKIRA
+            // Indica se é reply AO BOT (flag simples)
             reply_to_bot: replyInfo.ehRespostaAoBot,
-            mensagem_citada_eh_da_akira: replyInfo.ehRespostaAoBot,
             
-            // Contexto super claro para API
-            contexto_claro: replyInfo.contextoClaro
+            // Informação sobre quem escreveu a mensagem citada
+            quoted_author_name: replyInfo.quemEscreveuCitacaoNome,
+            
+            // TIPO de mídia citada (não o conteúdo)
+            quoted_type: replyInfo.tipoMidiaCitada,
+            
+            // Contexto breve (não o texto completo)
+            context_hint: replyInfo.contextoParaAPI
           };
+          
+          // NÃO ENVIA texto_mensagem_citada completo
+          // Isso evita que o modelo confunda contexto com mensagem atual
+          
         } else {
-          payloadBase.mensagem_citada = '';
-          payloadBase.reply_info = null;
+          payloadBase.reply_metadata = {
+            is_reply: false,
+            reply_to_bot: false
+          };
         }
         
         // Adiciona info de grupo
@@ -2641,10 +2422,7 @@ async function conectar() {
           }
         }
         
-        console.log('📤 Enviando para API com contexto SUPER CLARO...');
-        if (replyInfo) {
-          console.log('📋 Contexto:', payloadBase.mensagem_citada.substring(0, 100));
-        }
+        console.log('📤 Enviando para API com contexto otimizado...');
         
         let resposta = '...';
         try {
@@ -2660,58 +2438,48 @@ async function conectar() {
         
         console.log(`📥 [RESPOSTA] ${resposta.substring(0, 100)}...`);
         
-        // === DECIDE COMO RESPONDER (REGRAS CORRIGIDAS) ===
+        // DECIDE COMO RESPONDER
         let opcoes = {};
         
-        // REGRA: Em grupo, SEMPRE responde com reply à mensagem original
         if (ehGrupo) {
           opcoes = { quoted: m };
           console.log('📎 Reply em grupo (regra fixa)');
         } else {
-          // REGRA: Em PV, se for reply ao bot, responde com reply
           if (replyInfo && replyInfo.ehRespostaAoBot) {
             opcoes = { quoted: m };
             console.log('📎 Reply em PV (usuário respondeu ao bot)');
           } else if (temAudio) {
-            // REGRA: Em PV com áudio (não reply), responde normalmente (sem reply)
             console.log('📩 Mensagem direta em PV (áudio)');
           } else {
-            // REGRA: Em PV com texto (não reply), responde normalmente
             console.log('📩 Mensagem direta em PV (texto)');
           }
         }
         
-        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE APENAS COM ÁUDIO (SEM TEXTO)
+        // SE A MENSAGEM ORIGINAL FOI ÁUDIO, RESPONDE APENAS COM ÁUDIO
         if (temAudio) {
           console.log('🎤 Convertendo resposta para áudio...');
           
-          // Simula gravação de resposta (MAIS LONGA para áudio)
           await simularGravacaoAudio(sock, m.key.remoteJid, 2500);
           
-          // Gera áudio da resposta
           const ttsResult = await textToSpeech(resposta, 'pt');
           
           if (ttsResult.error) {
             console.error('❌ Erro ao gerar áudio TTS:', ttsResult.error);
-            // Fallback: responde com texto se falhar TTS
             await sock.sendMessage(m.key.remoteJid, { 
-              text: resposta  // NÃO ADICIONA "*[Resposta ao seu áudio]*"
+              text: resposta
             }, opcoes);
           } else {
-            // **RESPONDE APENAS COM ÁUDIO** (sem texto extra, sem transcrição)
             await sock.sendMessage(m.key.remoteJid, { 
               audio: ttsResult.buffer,
               mimetype: 'audio/mp4',
               ptt: true
             }, opcoes);
-            console.log('✅ Áudio enviado com sucesso (sem transcrição, sem texto extra)');
+            console.log('✅ Áudio enviado com sucesso');
           }
         } else {
-          // === SIMULAÇÃO DE DIGITAÇÃO PARA TEXTO ===
           let tempoDigitacao = Math.min(Math.max(resposta.length * 50, 3000), 10000);
           await simularDigitacao(sock, m.key.remoteJid, tempoDigitacao);
           
-          // Resposta normal em texto
           try {
             await sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
             console.log('✅ [ENVIADO COM SUCESSO]\n');
@@ -2749,9 +2517,9 @@ app.get('/', (req, res) => res.send(`
   <html><body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding:50px">
     <h1>🤖 AKIRA BOT V21 ONLINE ✅</h1>
     <p>Status: ${BOT_JID ? 'Conectado' : 'Desconectado'}</p>
-    <p>✅ CORREÇÃO: Contexto reply super claro</p>
-    <p>✅ CORREÇÃO: Separa QUEM FALA vs QUEM FOI CITADO</p>
-    <p>✅ CORREÇÃO: Akira não confunde suas mensagens</p>
+    <p>✅ CORREÇÃO: Contexto de reply otimizado</p>
+    <p>✅ CORREÇÃO: Sem repetições nas respostas</p>
+    <p>✅ CORREÇÃO: Modelo entende reply como contexto, não mensagem</p>
     <p>Prefixo: ${PREFIXO}</p>
     <p>🔐 Comandos restritos: Apenas Isaac Quarenta</p>
     <p>🎤 STT: Deepgram API (200h/mês GRATUITO)</p>
@@ -2782,28 +2550,20 @@ app.get('/health', (req, res) => {
     dono_autorizado: 'Isaac Quarenta',
     stt_configurado: DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? 'Deepgram (200h/mês)' : 'Não configurado',
     tts_configurado: 'Google TTS (funcional)',
-    stickers_pack_personalizado: 'Sim (nome EMBUTIDO no sticker)',
+    stickers_pack_personalizado: 'Sim',
     stickers_animados_max: '30 segundos',
-    sticker_de_sticker: 'Suportado (normal e animado)',
+    sticker_de_sticker: 'Suportado',
     youtube_download_methods: 'APIs confiáveis + ytdl-core',
-    comandos_grupo_reply: 'Suportado (reply ou menção)',
-    aliases: '#ban para remover',
     grupos_com_antilink: Array.from(antiLinkGroups).length,
     usuarios_mutados: mutedUsers.size,
     progress_messages: progressMessages.size,
     uptime: process.uptime(),
-    version: 'v21_contexto_super_claro',
+    version: 'v21_contexto_otimizado',
     correcoes_aplicadas: [
-      'Contexto reply super claro (quem fala vs quem foi citado)',
-      'Marca explicitamente quando reply é à Akira',
-      'Stickers com nome EMBUTIDO (sem thumbnail)',
-      'Stickers animados até 30 segundos',
-      'Download YouTube com APIs confiáveis',
-      'Comandos de grupo funcionam com reply ou menção',
-      'Alias #ban para remover',
-      'Marcação como entregue sempre em grupos',
-      'NUNCA mostra transcrições de áudio',
-      'Payload com contexto super claro para API'
+      'Contexto de reply otimizado para evitar repetições',
+      'Mensagem citada enviada apenas como METADATA',
+      'Modelo entende que reply é CONTEXTO, não mensagem atual',
+      'Payload com reply_metadata ao invés de mensagem_citada completa'
     ]
   });
 });
