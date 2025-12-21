@@ -1,11 +1,11 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════
- * AKIRA BOT V21 — CONTEXTO DE REPLY CORRIGIDO (SEM REPETIÇÃO)
+ * AKIRA BOT V21 — CONTEXTO DE REPLY CORRIGIDO (COM CONTEÚDO DA MENSAGEM CITADA)
  * ═══════════════════════════════════════════════════════════════════════
- * ✅ CORREÇÃO: Contexto de reply otimizado para evitar repetições
- * ✅ CORREÇÃO: Mensagem citada enviada apenas como METADATA, não como conteúdo
- * ✅ CORREÇÃO: O modelo agora entende que reply é apenas CONTEXTO, não mensagem atual
- * ✅ Sistema: Mensagem atual é PRIORIDADE, contexto é APENAS referência
+ * ✅ CORREÇÃO: Contexto de reply otimizado SEM PERDER O CONTEÚDO DA MENSAGEM CITADA
+ * ✅ CORREÇÃO: Mensagem citada enviada COMPLETA para a API entender o contexto
+ * ✅ CORREÇÃO: O modelo agora recebe tanto a mensagem atual quanto a mensagem citada
+ * ✅ Sistema: Mensagem atual é PRIORIDADE, mas mensagem citada é ENVIADA COMPLETA
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -351,7 +351,7 @@ function extrairTexto(m) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FUNÇÃO CRÍTICA CORRIGIDA: EXTRAIR REPLY INFO - CONTEXTO OTIMIZADO
+// FUNÇÃO CRÍTICA CORRIGIDA: EXTRAIR REPLY INFO - INCLUINDO TEXTO COMPLETO
 // ═══════════════════════════════════════════════════════════════════════
 function extrairReplyInfo(m) {
   try {
@@ -361,30 +361,38 @@ function extrairReplyInfo(m) {
     const quoted = context.quotedMessage;
     const tipo = getContentType(quoted);
     
-    // EXTRAI TEXTO DA MENSAGEM CITADA (RESUMIDO)
+    // EXTRAI TEXTO DA MENSAGEM CITADA (COMPLETO - CORRIGIDO)
     let textoMensagemCitada = '';
     let tipoMidia = 'texto';
+    let textoCompletoCitado = ''; // Nova variável para texto COMPLETO
     
     if (tipo === 'conversation') {
       textoMensagemCitada = quoted.conversation || '';
+      textoCompletoCitado = textoMensagemCitada;
       tipoMidia = 'texto';
     } else if (tipo === 'extendedTextMessage') {
       textoMensagemCitada = quoted.extendedTextMessage?.text || '';
+      textoCompletoCitado = textoMensagemCitada;
       tipoMidia = 'texto';
     } else if (tipo === 'imageMessage') {
       textoMensagemCitada = quoted.imageMessage?.caption || '[imagem]';
+      textoCompletoCitado = textoMensagemCitada + ' [imagem enviada]';
       tipoMidia = 'imagem';
     } else if (tipo === 'videoMessage') {
       textoMensagemCitada = quoted.videoMessage?.caption || '[vídeo]';
+      textoCompletoCitado = textoMensagemCitada + ' [vídeo enviado]';
       tipoMidia = 'video';
     } else if (tipo === 'audioMessage') {
       textoMensagemCitada = '[áudio]';
+      textoCompletoCitado = '[mensagem de áudio]';
       tipoMidia = 'audio';
     } else if (tipo === 'stickerMessage') {
       textoMensagemCitada = '[figurinha]';
+      textoCompletoCitado = '[figurinha enviada]';
       tipoMidia = 'sticker';
     } else {
       textoMensagemCitada = '[conteúdo]';
+      textoCompletoCitado = '[conteúdo de mídia]';
       tipoMidia = 'outro';
     }
     
@@ -411,14 +419,12 @@ function extrairReplyInfo(m) {
     let nomeQuemFalaAgora = m.pushName || 'desconhecido';
     let numeroQuemFalaAgora = extrairNumeroReal(m);
     
-    // CORREÇÃO CRÍTICA: Contexto formatado de forma que NÃO confunda o modelo
+    // CORREÇÃO: Garantir que o contexto inclua a mensagem citada COMPLETA
     let contextoParaAPI = '';
     if (ehRespostaAoBot) {
-      // Se está respondendo ao bot, contexto MÍNIMO
-      contextoParaAPI = `(Resposta à minha mensagem anterior)`;
+      contextoParaAPI = `(Usuário está respondendo à MINHA mensagem anterior: "${textoCompletoCitado.substring(0, 100)}")`;
     } else {
-      // Se está respondendo a outra pessoa, contexto claro mas breve
-      contextoParaAPI = `(Comentando sobre mensagem de ${nomeQuemEscreveuCitacao})`;
+      contextoParaAPI = `(Usuário está comentando sobre mensagem de ${nomeQuemEscreveuCitacao}: "${textoCompletoCitado.substring(0, 100)}")`;
     }
     
     return {
@@ -427,9 +433,10 @@ function extrairReplyInfo(m) {
       quemFalaAgoraNome: nomeQuemFalaAgora,
       quemFalaAgoraNumero: numeroQuemFalaAgora,
       
-      // INFORMAÇÕES DA MENSAGEM CITADA (RESUMIDAS)
-      textoMensagemCitada: textoMensagemCitada,
+      // INFORMAÇÕES DA MENSAGEM CITADA (COMPLETAS - CORRIGIDO)
+      textoMensagemCitada: textoCompletoCitado, // USAR TEXTO COMPLETO
       tipoMidiaCitada: tipoMidia,
+      textoCitadoResumido: textoMensagemCitada, // Mantém resumo também
       
       // QUEM ESCREVEU A MENSAGEM CITADA
       quemEscreveuCitacaoJid: participantJidCitado,
@@ -439,12 +446,12 @@ function extrairReplyInfo(m) {
       // FLAGS IMPORTANTES
       ehRespostaAoBot: ehRespostaAoBot,
       
-      // CONTEXTO OTIMIZADO (BEM RESUMIDO)
+      // CONTEXTO OTIMIZADO
       contextoParaAPI: contextoParaAPI,
       
       // Para compatibilidade
       participantJid: participantJidCitado,
-      texto: textoMensagemCitada,
+      texto: textoCompletoCitado,
       tipoMidia: tipoMidia,
       quemFalaJid: quemFalaAgoraJid,
       quemFalaNome: nomeQuemFalaAgora,
@@ -1601,7 +1608,7 @@ Apenas mencione "Akira" ou responda minhas mensagens para conversar normalmente!
 ✅ Resposta a mensagens de voz (STT via Deepgram + TTS)
 ✅ Sistema de moderação aprimorado
 ✅ NUNCA mostra transcrições de áudio no chat
-✅ Contexto de reply otimizado (sem repetições)
+✅ Contexto de reply otimizado (SEM REPETIÇÕES mas COM CONTEÚDO DA MENSAGEM CITADA)
 
 *Configuração STT:* ${DEEPGRAM_API_KEY && DEEPGRAM_API_KEY !== 'seu_token_aqui' ? '✅ Deepgram configurado' : '❌ Configure DEEPGRAM_API_KEY'}
 
@@ -2179,21 +2186,21 @@ async function conectar() {
         }
         
         console.log('\n' + '═'.repeat(70));
-        console.log('✅ AKIRA BOT V21 ONLINE! (CONTEXTO OTIMIZADO - SEM REPETIÇÕES)');
+        console.log('✅ AKIRA BOT V21 ONLINE! (CONTEXTO OTIMIZADO - COM CONTEÚDO DA MENSAGEM CITADA)');
         console.log('═'.repeat(70));
         console.log('🤖 Bot JID:', BOT_JID);
         console.log('📱 Número:', BOT_NUMERO_REAL);
         console.log('🔗 API:', API_URL);
         console.log('⚙️ Prefixo comandos:', PREFIXO);
         console.log('🔐 Comandos restritos: Apenas Isaac Quarenta');
-        console.log('✅ CORREÇÃO: Contexto de reply otimizado para evitar repetições');
-        console.log('✅ CORREÇÃO: Mensagem citada enviada apenas como METADATA');
-        console.log('✅ CORREÇÃO: O modelo entende que reply é CONTEXTO, não mensagem');
+        console.log('✅ CORREÇÃO: Contexto de reply otimizado SEM PERDER CONTEÚDO');
+        console.log('✅ CORREÇÃO: Mensagem citada enviada COMPLETA para API');
+        console.log('✅ CORREÇÃO: O modelo agora recebe tanto mensagem atual quanto citada');
         console.log('🎤 STT: Deepgram API (200h/mês GRATUITO)');
         console.log('🎤 TTS: Google TTS (funcional)');
         console.log('🎤 Resposta a voz: Ativada');
         console.log('🛡️ Sistema de moderação: Ativo');
-        console.log('📝 Contexto de mensagens: OTIMIZADO (sem repetições)');
+        console.log('📝 Contexto de mensagens: OTIMIZADO (com conteúdo da mensagem citada)');
         console.log('═'.repeat(70) + '\n');
         
         currentQR = null;
@@ -2229,6 +2236,7 @@ async function conectar() {
         
         if (replyInfo) {
           console.log('📋 [CONTEXTO]:', replyInfo.contextoParaAPI);
+          console.log('📝 [MENSAGEM CITADA]:', replyInfo.textoMensagemCitada.substring(0, 100) + '...');
         }
         
         const tipo = getContentType(m.message);
@@ -2369,7 +2377,7 @@ async function conectar() {
         }
         
         // ═══════════════════════════════════════════════════════════════
-        // PAYLOAD PARA API COM CONTEXTO OTIMIZADO (CORREÇÃO CRÍTICA)
+        // PAYLOAD PARA API CORRIGIDO - INCLUI MENSAGEM CITADA COMPLETA
         // ═══════════════════════════════════════════════════════════════
         const payloadBase = {
           usuario: nome,
@@ -2379,12 +2387,14 @@ async function conectar() {
           tipo_mensagem: temAudio ? 'audio' : 'texto'
         };
         
-        // === CORREÇÃO CRÍTICA: CONTEXTO OTIMIZADO ===
-        // Envia contexto apenas como METADATA, não como parte da mensagem
+        // === CORREÇÃO CRÍTICA: INCLUIR MENSAGEM CITADA COMPLETA ===
         if (replyInfo) {
-          // Informações METADATA sobre o reply (não conteúdo)
+          // ADICIONA A MENSAGEM CITADA COMPLETA NO PAYLOAD
+          payloadBase.mensagem_citada = replyInfo.textoMensagemCitada;
+          
+          // Informações METADATA sobre o reply
           payloadBase.reply_metadata = {
-            // Informa SE É REPLY (sem repetir conteúdo)
+            // Informa SE É REPLY
             is_reply: true,
             
             // Indica se é reply AO BOT (flag simples)
@@ -2393,17 +2403,15 @@ async function conectar() {
             // Informação sobre quem escreveu a mensagem citada
             quoted_author_name: replyInfo.quemEscreveuCitacaoNome,
             
-            // TIPO de mídia citada (não o conteúdo)
+            // TIPO de mídia citada
             quoted_type: replyInfo.tipoMidiaCitada,
             
-            // Contexto breve (não o texto completo)
+            // Contexto breve
             context_hint: replyInfo.contextoParaAPI
           };
           
-          // NÃO ENVIA texto_mensagem_citada completo
-          // Isso evita que o modelo confunda contexto com mensagem atual
-          
         } else {
+          payloadBase.mensagem_citada = '';
           payloadBase.reply_metadata = {
             is_reply: false,
             reply_to_bot: false
@@ -2422,7 +2430,9 @@ async function conectar() {
           }
         }
         
-        console.log('📤 Enviando para API com contexto otimizado...');
+        console.log('📤 Enviando para API com contexto COMPLETO...');
+        console.log(`📝 Mensagem atual: ${textoParaAPI.substring(0, 80)}...`);
+        console.log(`📝 Mensagem citada: ${payloadBase.mensagem_citada.substring(0, 80)}...`);
         
         let resposta = '...';
         try {
@@ -2518,8 +2528,8 @@ app.get('/', (req, res) => res.send(`
     <h1>🤖 AKIRA BOT V21 ONLINE ✅</h1>
     <p>Status: ${BOT_JID ? 'Conectado' : 'Desconectado'}</p>
     <p>✅ CORREÇÃO: Contexto de reply otimizado</p>
-    <p>✅ CORREÇÃO: Sem repetições nas respostas</p>
-    <p>✅ CORREÇÃO: Modelo entende reply como contexto, não mensagem</p>
+    <p>✅ CORREÇÃO: Mensagem citada enviada COMPLETA para API</p>
+    <p>✅ CORREÇÃO: Modelo recebe tanto mensagem atual quanto mensagem citada</p>
     <p>Prefixo: ${PREFIXO}</p>
     <p>🔐 Comandos restritos: Apenas Isaac Quarenta</p>
     <p>🎤 STT: Deepgram API (200h/mês GRATUITO)</p>
@@ -2558,12 +2568,12 @@ app.get('/health', (req, res) => {
     usuarios_mutados: mutedUsers.size,
     progress_messages: progressMessages.size,
     uptime: process.uptime(),
-    version: 'v21_contexto_otimizado',
+    version: 'v21_contexto_completo',
     correcoes_aplicadas: [
-      'Contexto de reply otimizado para evitar repetições',
-      'Mensagem citada enviada apenas como METADATA',
-      'Modelo entende que reply é CONTEXTO, não mensagem atual',
-      'Payload com reply_metadata ao invés de mensagem_citada completa'
+      'Contexto de reply otimizado SEM PERDER CONTEÚDO',
+      'Mensagem citada enviada COMPLETA para API',
+      'Modelo agora recebe tanto mensagem atual quanto mensagem citada',
+      'Payload inclui mensagem_citada e reply_metadata'
     ]
   });
 });
