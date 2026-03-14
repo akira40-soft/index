@@ -1,41 +1,117 @@
-# Dockerfile — AKIRA BOT RAILWAY (Dezembro 2025)
+# Dockerfile — AKIRA BOT RAILWAY (Otimizado Janeiro 2026)
+# ✅ Configurado especificamente para Railway
+# ✅ Pino logging compatível com Railway
+# ✅ Sem pino-pretty transport para evitar erros
+# ✅ Configurações otimizadas para Railway
+
 FROM node:20-alpine
-# Variáveis de ambiente
+
+# ═══════════════════════════════════════════════════════════════════
+# VARIÁVEIS DE AMBIENTE PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
 ENV NODE_ENV=production \
-    PORT=3000
-# Instala dependências do sistema
+    RAILWAY_ENVIRONMENT=true \
+    # Pino sem transport para evitar erros no Railway
+    PINO_NO_PRETTY=true \
+    # Configurações de rede
+    NODE_OPTIONS="--dns-result-order=ipv4first --no-warnings" \
+    UV_THREADPOOL_SIZE=128 \
+    LANG=C.UTF-8
+
+# ═══════════════════════════════════════════════════════════════════
+# INSTALAR DEPENDÊNCIAS DO SISTEMA ESSENCIAIS PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+
 RUN apk add --no-cache \
     git \
+    curl \
+    wget \
     python3 \
+    py3-pip \
     make \
     g++ \
     cairo-dev \
     pango-dev \
     jpeg-dev \
-    giflib-dev
-# Cria usuário não-root
-RUN addgroup -S app && adduser -S app -G app
-# Define diretório de trabalho
+    giflib-dev \
+    ffmpeg \
+    yt-dlp \
+    ca-certificates \
+    openssl \
+    openssl-dev \
+    zlib-dev \
+    bash \
+    # Cybersecurity tools
+    nmap \
+    hydra \
+    nikto \
+    unzip \
+    perl
+
+# ═══════════════════════════════════════════════════════════════════
+# CONFIGURAÇÃO DE DIRETÓRIOS PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+
+RUN mkdir -p /app/data && \
+    mkdir -p /app/data/auth_info_baileys && \
+    mkdir -p /app/data/database && \
+    mkdir -p /app/data/logs && \
+    mkdir -p /app/data/temp && \
+    chmod -R 755 /app/data
+
+# ═══════════════════════════════════════════════════════════════════
+# DIRETÓRIO DE TRABALHO
+# ═══════════════════════════════════════════════════════════════════
+
 WORKDIR /app
-# Copia package files
+
+# ═══════════════════════════════════════════════════════════════════
+# INSTALAÇÃO DE DEPENDÊNCIAS NODE.JS PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+
 COPY package*.json ./
-# Atualiza npm e instala dependências (mudado de 'npm ci' para 'npm install' para gerar package-lock.json se necessário)
-RUN npm install -g npm@latest && \
-    npm install --omit=dev --prefer-offline --no-audit
-# Copia código da aplicação
-COPY index.js ./
-# Ajusta permissões
-RUN chown -R app:app /app && \
-    mkdir -p /app/auth_info_baileys && \
-    chown -R app:app /app/auth_info_baileys
-# Muda para usuário não-root
-USER app
-# Expõe porta
-EXPOSE 3000
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
-# Comando de inicialização
+
+# Instalação otimizada para Railway
+RUN npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm install --omit=dev --no-audit --progress=false --fetch-retries=5 --legacy-peer-deps
+
+# ═══════════════════════════════════════════════════════════════════
+# COPIAR CÓDIGO DA APLICAÇÃO
+# ═══════════════════════════════════════════════════════════════════
+
+COPY . .
+
+# ═══════════════════════════════════════════════════════════════════
+# VERIFICAÇÃO FINAL PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+
+RUN echo "🔍 Verificando instalação para Railway..." && \
+    node -v && \
+    npm -v && \
+    python3 --version && \
+    ffmpeg -version | head -1 && \
+    echo "✅ Build verificado com sucesso" && \
+    echo "✅ Dockerfile construído com sucesso para Railway"
+
+# Limpar cache para reduzir tamanho da imagem
+RUN npm cache clean --force 2>/dev/null || true
+
+# ═══════════════════════════════════════════════════════════════════
+# EXPOR PORTA PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+# Railway usa $PORT automaticamente
+EXPOSE $PORT
+
+# ═══════════════════════════════════════════════════════════════════
+# HEALTHCHECK PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:$PORT/health 2>/dev/null || exit 1
+
+# ═══════════════════════════════════════════════════════════════════
+# COMANDO DE INICIALIZAÇÃO PARA RAILWAY
+# ═══════════════════════════════════════════════════════════════════
+
 CMD ["node", "index.js"]
-
-
