@@ -1,0 +1,25 @@
+<<<<<<< HEAD
+# ... (após as instalações do apk)
+
+# ═══════════════════════════════════════════════════════════════════
+# INSTALAÇÃO MANUAL DO YT-DLP (LATEST)
+# ═══════════════════════════════════════════════════════════════════
+# Garante a versão mais recente para evitar erros de extração do YouTube
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && \
+    echo "✅ yt-dlp instalado manualmente: $(yt-dlp --version)"
+
+# ═══════════════════════════════════════════════════════════════════
+=======
+# ... (após as instalações do apk)
+
+# ═══════════════════════════════════════════════════════════════════
+# INSTALAÇÃO MANUAL DO YT-DLP (LATEST)
+# ═══════════════════════════════════════════════════════════════════
+# Garante a versão mais recente para evitar erros de extração do YouTube
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && \
+    echo "✅ yt-dlp instalado manualmente: $(yt-dlp --version)"
+
+# ═══════════════════════════════════════════════════════════════════
+>>>>>>> bca33df3e80ad01e3a871bb67a7d0a8ff9a621a3
