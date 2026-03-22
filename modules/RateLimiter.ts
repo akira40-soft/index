@@ -11,6 +11,7 @@
  */
 
 import fs from 'fs';
+import { promises as fsPromises } from 'fs';
 import path from 'path';
 
 class RateLimiter {
@@ -28,56 +29,73 @@ class RateLimiter {
         this.HOURLY_LIMIT = config.hourlyLimit || 100; // 100 msgs/hora
         this.HOURLY_WINDOW = config.hourlyWindow || (60 * 60 * 1000); // 1 hora
         this.MAX_VIOLATIONS = config.maxViolations || 3; // Max violações antes do ban
-        this.LOG_FILE = config.logFile || path.join('temp', 'security_log.txt');
-        this.BLACKLIST_FILE = config.blacklistFile || path.join('temp', 'blacklist.json');
+        const basePath = process.env.DATA_DIR || '/tmp/akira_data';
+        this.LOG_FILE = config.logFile || path.join(basePath, 'security_log.txt');
+        this.BLACKLIST_FILE = config.blacklistFile || path.join(basePath, 'blacklist.json');
 
         // Cache em memória
         this.usage = new Map();
         this.violations = new Map();
         this.blacklist = new Set();
 
-        this._ensureFiles();
-        this._loadBlacklist();
+        // Inicialização assíncrona disparada no construtor (fire and forget inicial)
+        this.init().catch(err => console.error('Erro na inicialização do RateLimiter:', err));
 
         // Limpeza periódica (a cada 10 min)
         setInterval(() => this._cleanup(), 10 * 60 * 1000);
     }
 
-    _ensureFiles() {
-        const dir = path.dirname(this.LOG_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        if (!fs.existsSync(this.BLACKLIST_FILE)) fs.writeFileSync(this.BLACKLIST_FILE, JSON.stringify([]));
+    async init() {
+        await this._ensureFiles();
+        await this._loadBlacklist();
     }
 
-    _loadBlacklist() {
+    private async _ensureFiles() {
+        try {
+            const dir = path.dirname(this.LOG_FILE);
+            if (!fs.existsSync(dir)) {
+                await fsPromises.mkdir(dir, { recursive: true });
+            }
+            if (!fs.existsSync(this.BLACKLIST_FILE)) {
+                await fsPromises.writeFile(this.BLACKLIST_FILE, JSON.stringify([]));
+            }
+        } catch (e: any) {
+            console.error('Erro ao garantir arquivos:', e.message);
+        }
+    }
+
+    private async _loadBlacklist() {
         try {
             if (fs.existsSync(this.BLACKLIST_FILE)) {
-                const data = JSON.parse(fs.readFileSync(this.BLACKLIST_FILE, 'utf8'));
+                const content = await fsPromises.readFile(this.BLACKLIST_FILE, 'utf8');
+                const data = JSON.parse(content);
+                this.blacklist.clear();
                 data.forEach((id: string) => this.blacklist.add(id));
             }
         } catch (e: any) {
-            console.error('Erro ao carregar blacklist:', e);
+            console.error('Erro ao carregar blacklist:', e.message);
         }
     }
 
-    _saveBlacklist() {
+    private async _saveBlacklist() {
         try {
-            fs.writeFileSync(this.BLACKLIST_FILE, JSON.stringify([...this.blacklist]));
+            await fsPromises.writeFile(this.BLACKLIST_FILE, JSON.stringify([...this.blacklist]));
         } catch (e: any) {
-            console.error('Erro ao salvar blacklist:', e);
+            console.error('Erro ao salvar blacklist:', e.message);
         }
     }
 
-    private _log(type: string, userId: string, details: string): void {
+    private async _log(type: string, userId: string, details: string): Promise<void> {
         const timestamp = new Date().toISOString();
         const icon = type === 'BAN' ? '🚫' : (type === 'WARN' ? '⚠️' : 'ℹ️');
         const logLine = `[${timestamp}] ${icon} ${type} | User: ${userId} | ${details}\n`;
 
         try {
-            fs.appendFileSync(this.LOG_FILE, logLine);
+            // Usa append assíncrono para não travar o loop
+            await fsPromises.appendFile(this.LOG_FILE, logLine);
             console.log(logLine.trim());
         } catch (e: any) {
-            console.error('Erro ao escrever log:', e);
+            console.error('Erro ao escrever log:', e.message);
         }
     }
 
@@ -85,6 +103,10 @@ class RateLimiter {
         return this.blacklist.has(userId);
     }
 
+    /**
+     * Verifica o limite de mensagens. 
+     * Mantido síncrono para ser chamado no pipeline crítico, mas dispara logs/save assovios em background.
+     */
     public check(userId: string, isOwner: boolean = false): { allowed: boolean, reason?: string, wait?: number, remaining?: number } {
         if (isOwner) return { allowed: true }; // Dono imune
         if (this.blacklist.has(userId)) return { allowed: false, reason: 'BLACKLISTED' };
@@ -124,12 +146,13 @@ class RateLimiter {
         const violations = (this.violations.get(userId) || 0) + 1;
         this.violations.set(userId, violations);
 
+        // Dispara log assíncrono sem await (fire and forget)
         this._log('WARN', userId, `Violação de rate limit (${violations}/${this.MAX_VIOLATIONS})`);
 
         if (violations >= this.MAX_VIOLATIONS) {
             this.blacklist.add(userId);
-            this._saveBlacklist();
-            this._log('BAN', userId, 'Adicionado à blacklist por excesso de violações');
+            this._saveBlacklist().catch(() => { });
+            this._log('BAN', userId, 'Adicionado à blacklist por excesso de violações').catch(() => { });
         }
     }
 
@@ -144,18 +167,18 @@ class RateLimiter {
     }
 
     // Comandos manuais para admins
-    public banUser(userId: string, adminId: string): boolean {
+    public async banUser(userId: string, adminId: string): Promise<boolean> {
         this.blacklist.add(userId);
-        this._saveBlacklist();
-        this._log('BAN', userId, `Banido manualmente por admin ${adminId}`);
+        await this._saveBlacklist();
+        await this._log('BAN', userId, `Banido manualmente por admin ${adminId}`);
         return true;
     }
 
-    public unbanUser(userId: string, adminId: string): boolean {
+    public async unbanUser(userId: string, adminId: string): Promise<boolean> {
         if (this.blacklist.delete(userId)) {
-            this._saveBlacklist();
+            await this._saveBlacklist();
             this.violations.delete(userId); // Reseta violações
-            this._log('UNBAN', userId, `Desbanido manualmente por admin ${adminId}`);
+            await this._log('UNBAN', userId, `Desbanido manualmente por admin ${adminId}`);
             return true;
         }
         return false;

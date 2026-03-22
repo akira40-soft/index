@@ -12,12 +12,13 @@ interface RegisteredUser {
 }
 
 class RegistrationSystem {
+    private static instance: RegistrationSystem;
     private config: any;
     private logger: any;
     private dbPath: string;
     private users: RegisteredUser[];
 
-    constructor(logger = console) {
+    private constructor(logger = console) {
         this.config = ConfigManager.getInstance();
         this.logger = logger;
 
@@ -27,6 +28,13 @@ class RegistrationSystem {
 
         this._ensureFiles();
         this.users = this._load(this.dbPath, []);
+    }
+
+    public static getInstance(logger = console): RegistrationSystem {
+        if (!RegistrationSystem.instance) {
+            RegistrationSystem.instance = new RegistrationSystem(logger);
+        }
+        return RegistrationSystem.instance;
     }
 
     private _ensureFiles(): void {

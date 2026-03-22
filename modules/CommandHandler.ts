@@ -76,16 +76,15 @@ class CommandHandler {
 
         // Inicializa sistemas - prefere injeção do BotCore
         this.permissionManager = bot?.permissionManager || new PermissionManager();
-        this.registrationSystem = bot?.registrationSystem || new RegistrationSystem();
-        this.levelSystem = bot?.levelSystem || new LevelSystem();
-        this.economySystem = bot?.economySystem || new EconomySystem(bot?.logger);
+        this.registrationSystem = bot?.registrationSystem || RegistrationSystem.getInstance();
+        this.economySystem = bot?.economySystem || EconomySystem.getInstance(bot?.logger);
 
         // Handlers de mídia
         this.mediaProcessor = bot?.mediaProcessor || new MediaProcessor();
 
         // Ferramentas Enterprise
         this.subscriptionManager = bot?.subscriptionManager || new SubscriptionManager(this.config);
-        this.moderationSystem = bot?.moderationSystem || new ModerationSystem();
+        this.moderationSystem = bot?.moderationSystem || ModerationSystem.getInstance();
         this.gameSystem = GameSystem; // Usa a instância singleton importada
 
         // Inicializa módulos dependentes de sock
@@ -99,6 +98,7 @@ class CommandHandler {
         }
 
         this.gridTacticsGame = GridTacticsGame;
+        this.levelSystem = bot?.levelSystem || LevelSystem.getInstance(this.bot?.logger || console);
         this.logger = config?.logger || bot?.logger || console;
     }
 
@@ -181,13 +181,7 @@ class CommandHandler {
             // Log de comando
             // this.logger?.debug(`[CMD] ${command} por ${nome} em ${chatJid}`);
 
-            // Simulador de presença (digitação) - PULA o comando PING para latência instantânea
-            const simulator = this.presenceSimulator || (this.bot && this.bot.presenceSimulator);
-            if (simulator && command !== 'ping') {
-                // Calcula duração realista baseada no comando ou usa padrão
-                const duration = simulator.calculateTypingDuration(command);
-                await simulator.simulateTyping(chatJid, duration);
-            }
+            // Simulador de presença (digitação) removido dos comandos para garantir latência instantânea (< 1s)
 
             // ═══════════════════════════════════════════════════════════════════════
             // DETECÇÃO DE JOGADAS VIA REPLY
@@ -595,321 +589,226 @@ class CommandHandler {
 
                 case 'perfil':
                 case 'profile':
-                case 'info':
-                    return await this._handleProfile(m, meta);
-
-                case 'del':
-                case 'apagar':
-                case 'delete':
-                    return await this._handleDelete(m, isOwner || isAdminUsers);
-
-                case 'dono':
-                case 'owner':
-                case 'criador':
-                case 'creator':
-                    return await this._handleDono(m);
-
-                case 'report':
-                case 'bug':
-                case 'reportar':
-                    return await this._handleReport(m, fullArgs, nome, senderId, ehGrupo);
-
-                case 'premium':
-                case 'vip':
-                    return await this._handlePremiumInfo(m, senderId);
-
-                case 'addpremium':
-                case 'addvip':
-                    if (!isOwner) return false;
-                    return await this._handleAddPremium(m, args);
-
-                case 'delpremium':
-                case 'delvip':
-                    if (!isOwner) return false;
-                    return await this._handleDelPremium(m, args);
-
-                case 'donate':
-                case 'doar':
-                case 'buy':
-                case 'comprar':
-                    return await this._handlePaymentCommand(m, args);
-
-                case 'shodan':
-                case 'cve':
-                case 'nmap':
-                case 'sqlmap':
-                case 'hydra':
-                case 'nuclei':
-                case 'nikto':
-                case 'masscan':
-                case 'whois':
-                case 'dns':
-                case 'geo':
-                case 'commix':
-                case 'searchsploit':
-                case 'socialfish':
-                case 'blackeye':
-                case 'theharvester':
-                case 'sherlock':
-                case 'holehe':
-                case 'netexec':
-                case 'winrm':
-                case 'impacket':
-                case 'setoolkit':
-                case 'metasploit':
-                case 'dork':
-                case 'email':
-                case 'phone':
-                case 'username':
-                    if (!isOwner) {
-                        await this.bot.reply(m, '🚫 Este comando requer privilégios de administrador.');
+                case 'info': {
+                    const target = this.userProfile.extractUserJidFromMessage(m.message, m) || m.key.participant || m.key.remoteJid;
+                    const info = await this.userProfile.getUserInfo(target);
+                    if (!info.success) {
+                        await this.bot.reply(m, '❌ Não foi possível obter o perfil.');
                         return true;
                     }
-                    await this._reply(m, '🛡️ *SISTEMA DE PENTESTING APARTADO*\n\nAs ferramentas de cibersegurança foram movidas para um servidor dedicado (@ferramentas-pentsting) para reduzir a latência do bot principal.\n\n_Acesse o painel de ferramentas para executar testes de segurança._');
+                    const caption = `*Perfil de* @${target.split('@')[0]}\n📸 Foto: ${info.photoUrl ? '✔️' : '❌'}\n📝 Status: ${info.status || 'Sem status'}`;
+                    if (info.photoUrl) {
+                        await this.sock.sendMessage(m.key.remoteJid, { image: { url: info.photoUrl }, caption, mentions: [target] }, { quoted: m });
+                    } else {
+                        await this.bot.reply(m, caption, { mentions: [target] });
+                    }
                     return true;
+                }
 
-                case 'mute':
-                case 'desmute':
-                case 'unmute':
-                case 'kick':
-                case 'ban':
+                // MINI-GAMES
+                case 'dado':
+                case 'moeda':
+                case 'caracoroa':
+                case 'slot':
+                case 'chance':
+                case 'gay':
+                case 'ship':
+                    // gay command is overloaded for image effect and game
+                    if (command === 'gay' && this.messageProcessor.hasImage(m)) {
+                        return await this._handleImageEffect(m, command, args);
+                    }
+                    if (command === 'ship') {
+                        return await this._handleShip(m);
+                    }
+                    return await this._handleGames(m, command, args);
+
+                // ═══════════════════════════════════════════════════════════════════════
+                // GRUPOS & MODERAÇÃO - SISTEMA CENTRALIZADO (AKIRA-SOFTEDGE)
+                // ═══════════════════════════════════════════════════════════════════════
                 case 'add':
+                case 'kick': case 'remove':
+                case 'ban':
                 case 'promote':
-                case 'demote': {
-                    // SEGURANÇA: Apenas o DONO ou ADMINS do grupo podem usar comandos de gerenciamento
-                    if (!isOwner && !isAdminUsers) {
-                        await this.bot.reply(m, '🚫 *ACESSO NEGADO!*\n\nVocê precisa ser um administrador do grupo ou proprietário do bot para usar este comando.');
+                case 'demote':
+                case 'mute': case 'unmute': case 'desmute':
+                case 'apagar': case 'del': case 'delete':
+                case 'abrir': case 'open':
+                case 'fechar': case 'close':
+                case 'link': case 'revlink': case 'revogar':
+                case 'desc': case 'setdesc': case 'descricao':
+                case 'foto': case 'setfoto': case 'fotodogrupo':
+                case 'setname': case 'setnome':
+                case 'pin': case 'fixar':
+                case 'unpin': case 'desafixar':
+                case 'welcome': case 'bemvindo': case 'setwelcome':
+                case 'goodbye': case 'setgoodbye':
+                case 'tagall': case 'hidetag': case 'totag':
+                case 'listar': case 'membros':
+                case 'sortear': case 'raffle': case 'sorteio':
+                case 'warn': case 'unwarn': case 'resetwarns':
+                case 'mutelist': case 'silenciados':
+                case 'antispam':
+                case 'antiimage':
+                case 'antivideo':
+                case 'antisticker':
+                case 'antiaudio': case 'antivoz':
+                case 'antidoc': case 'antidocumento':
+                case 'reagir': case 'react': {
+                    if (!ehGrupo) {
+                        await this.bot.reply(m, '❌ Este comando só funciona em grupos.');
                         return true;
                     }
 
-                    // Verifica se groupManagement está disponível
+                    // Normalização de Comandos Internos
+                    let finalCmd = command;
+                    if (['unmute', 'desmute'].includes(command)) finalCmd = 'unmute';
+                    if (['del', 'delete'].includes(command)) finalCmd = 'apagar';
+                    if (command === 'remove') finalCmd = 'kick';
+                    if (command === 'abrir') finalCmd = 'open';
+                    if (command === 'fechar') finalCmd = 'close';
+                    if (['fixar', 'pin'].includes(command)) finalCmd = 'pin';
+                    if (['desafixar', 'unpin'].includes(command)) finalCmd = 'unpin';
+                    if (command === 'revlink') finalCmd = 'revlink';
+                    if (['desc', 'descricao'].includes(command)) finalCmd = 'setdesc';
+                    if (['fotodogrupo', 'foto', 'setfoto'].includes(command)) finalCmd = 'setfoto';
+                    if (['setnome', 'setname'].includes(command)) finalCmd = 'setname';
+                    if (['bemvindo'].includes(command)) finalCmd = 'welcome';
+                    if (['sortear', 'raffle', 'sorteio'].includes(command)) finalCmd = 'sortear';
+
+                    // Requisitos de Permissão: ADMIN do Grupo ou DONO do Bot
+                    // Comandos ultra-sensíveis (antispam, blacklist) podem ser restritos apenas ao dono no futuro
+                    const isAdminRequired = true;
+                    const autorizado = await this.verificarPermissaoDono(m, command, isAdminRequired, meta);
+                    if (!autorizado) return true;
+
                     if (!this.groupManagement) {
-                        console.error('[CommandHandler] GroupManagement não inicializado');
-                        await this._reply(m, '❌ Sistema de gerenciamento de grupo não disponível.');
+                        await this.bot.reply(m, '❌ O sistema de gerenciamento de grupos não está ativo.');
                         return true;
                     }
-
 
                     try {
-                        return await this.groupManagement.handleCommand(m, command, args);
+                        // Casos especiais que podem usar ModerationSystem diretamente
+                        if (['mutelist', 'silenciados'].includes(finalCmd)) {
+                            const report = this.moderationSystem.getMutedReport(chatJid);
+                            await this._reply(m, report);
+                            return true;
+                        }
+
+                        return await this.groupManagement.handleCommand(m, finalCmd, args);
                     } catch (e: any) {
-                        console.error(`[CommandHandler] Erro no comando ${command}:`, e.message);
-                        // Não mostra mensagem de erro técnica para o usuário
+                        this.logger.error(`❌ Erro executando #${command}: ${e.message}`);
                         return true;
                     }
                 }
 
-                // COMANDOS DE GRUPO — APENAS O DONO PODE USAR
-                case 'fechar':
-                case 'close':
-                case 'abrir':
-                case 'open':
-                case 'fixar':
-                case 'pin':
-                case 'desafixar':
-                case 'unpin':
-                case 'reagir':
-                case 'react':
-                case 'link':
-                case 'revlink':
-                case 'revogar':
-                case 'setdesc':
-                case 'descricao':
-                case 'setfoto':
-                case 'fotodogrupo':
-                case 'welcome':
-                case 'bemvindo':
-                case 'setwelcome':
-                case 'setgoodbye':
-                case 'goodbye':
-                case 'tagall':
-                case 'hidetag':
-                case 'totag':
-                case 'listar':
-                case 'membros':
-                case 'sortear':
-                case 'raffle':
-                case 'sorteio':
-                case 'warn':
-                case 'unwarn':
-                case 'resetwarns':
-                case 'mutelist':
-                case 'silenciados':
-                    // SEGURANÇA: Apenas o DONO pode usar todos os comandos de gerenciamento de grupo
+                case 'blacklist': {
+                    if (ehGrupo && this.groupManagement) {
+                        const autorizado = await this.verificarPermissaoDono(m, command, true, meta);
+                        if (!autorizado) return true;
+                        return await this.groupManagement.handleCommand(m, command, args);
+                    }
                     if (!isOwner) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                        await this.verificarPermissaoDono(m, 'blacklist', false, meta);
                         return true;
                     }
-                    if (!this.groupManagement) {
-                        console.error('[CommandHandler] GroupManagement não inicializado');
-                        await this._reply(m, '❌ Sistema não disponível.');
-                        return true;
-                    }
-                    try {
-                        return await this.groupManagement.handleCommand(m, 'setfoto', args);
-                    } catch (e: any) {
-                        console.error(`[CommandHandler] Erro no comando setfoto:`, e.message);
-                        return true;
-                    }
-
-                case 'blacklist':
-                    if (!isOwner) return false;
                     const blReport = this.moderationSystem.getBlacklistReport();
                     return await this._reply(m, blReport);
+                }
 
-                case 'mutelist':
-                case 'silenciados':
-                    if (!isOwner && !isAdminUsers) return false;
-                    const mlReport = this.moderationSystem.getMutedReport(chatJid);
-                    return await this._reply(m, mlReport);
 
-                case 'antispam':
-                    // SEGURANÇA: Apenas o DONO pode usar comandos de moderação
-                    if (!isOwner) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
-                        return true;
-                    }
-                    if (!this.groupManagement) {
-                        console.error('[CommandHandler] GroupManagement não inicializado');
-                        await this._reply(m, '❌ Sistema não disponível.');
-                        return true;
-                    }
-                    try {
-                        return await this.groupManagement.handleCommand(m, 'antispam', args);
-                    } catch (e: any) {
-                        console.error(`[CommandHandler] Erro no comando antispam:`, e.message);
-                        return true;
-                    }
-
-                // INFO DO GRUPO — QUALQUER MEMBRO REGISTRADO
+                // INFO DO GRUPO & UTILITÁRIOS — PRIVILEGIADOS
                 case 'groupinfo':
                 case 'infogrupo':
-                case 'ginfo': {
-                    if (!ehGrupo) { await this.bot.reply(m, '❌ Este comando só funciona em grupos.'); return true; }
-                    const isReg3 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg3 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this.groupManagement.handleCommand(m, 'groupinfo', args);
-                }
-
-                case 'listar':
-                case 'membros': {
-                    if (!ehGrupo) { await this.bot.reply(m, '❌ Este comando só funciona em grupos.'); return true; }
-                    if (!isOwner && !isAdminUsers) { await this.bot.reply(m, '🚫 Apenas admins podem listar membros.'); return true; }
-                    return await this.groupManagement.handleCommand(m, 'listar', args);
-                }
-
+                case 'ginfo':
                 case 'admins':
-                case 'listadmins': {
-                    if (!ehGrupo) { await this.bot.reply(m, '❌ Este comando só funciona em grupos.'); return true; }
-                    const isReg4 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg4 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this.groupManagement.handleCommand(m, 'admins', args);
-                }
-
-                // DIVERSÃO & UTILIDADES — REQUER REGISTRO
-                case 'enquete':
-                case 'poll': {
-                    const isReg5 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg5 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this._handlePoll(m, fullArgs);
-                }
-
-                case 'sortear':
-                case 'raffle':
-                case 'sorteio': {
-                    if (!ehGrupo) { await this.bot.reply(m, '❌ Este comando só funciona em grupos.'); return true; }
-                    if (!isOwner && !isAdminUsers) { await this.bot.reply(m, '🚫 Apenas admins podem fazer sorteios.'); return true; }
-                    return await this._handleRaffle(m, chatJid, args);
-                }
-
-                case 'tts': {
-                    const isReg6 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg6 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this._handleTTSCommand(m, args, fullArgs);
-                }
-
-                case 'piada':
-                case 'joke': {
-                    const isReg7 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg7 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this._handleFun(m, 'piada');
-                }
-
-                case 'frases':
-                case 'quote':
-                case 'motivar': {
-                    const isReg8 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg8 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this._handleFun(m, 'frase');
-                }
-
-                case 'fatos':
-                case 'curiosidade': {
-                    const isReg9 = this.registrationSystem?.isRegistered?.(userId);
-                    if (!isReg9 && !isOwner) { await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!'); return true; }
-                    return await this._handleFun(m, 'fato');
-                }
-
-                case 'setbotphoto':
-                case 'setbotpic':
-                case 'setphoto':
-                    if (!isOwner) return false;
-                    return await this._handleSetBotPhoto(m);
-
-                case 'setbotname':
-                case 'setname':
-                    if (!isOwner) return false;
-                    return await this._handleSetBotName(m, fullArgs);
-
-                case 'setbotstatus':
-                case 'setbio':
-                    if (!isOwner) return false;
-                    return await this._handleSetBotStatus(m, fullArgs);
-
-                case 'getprofile':
-                case 'getuser':
-                    if (!isOwner) return false;
-                    return await this._handleGetProfileAdmin(m, args);
-
+                case 'listadmins':
                 case 'antilink':
                 case 'antifake':
                 case 'antiimage':
                 case 'antisticker':
-                    // SEGURANÇA: Apenas o DONO pode usar comandos de moderação
-                    if (!isOwner) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                case 'antivideo': {
+                    if (!ehGrupo) {
+                        await this.bot.reply(m, '❌ Este comando só funciona em grupos.');
                         return true;
                     }
-                    if (!this.moderationSystem) {
-                        console.error('[CommandHandler] ModerationSystem não inicializado');
-                        await this._reply(m, '❌ Sistema de moderação não disponível.');
-                        return true;
-                    }
+
+                    // Se for um toggle de moderação (anti-x), requer ser DONO
+                    const isToggle = command.startsWith('anti') && command !== 'admins';
+                    const autorizado = await this.verificarPermissaoDono(m, command, !isToggle, meta);
+                    if (!autorizado) return true;
+
                     try {
-                        return await this._handleToggleModeration(m, command, args);
+                        if (isToggle) return await this._handleToggleModeration(m, command, args);
+                        return await this.groupManagement.handleCommand(m, command, args);
                     } catch (e: any) {
-                        console.error(`[CommandHandler] Erro no comando ${command}:`, e.message);
+                        this.logger.error(`❌ Erro em #${command}: ${e.message}`);
                         return true;
                     }
+                }
 
-                case 'warn':
-                    if (!isOwner && !isAdminUsers) return false;
-                    return await this._handleManualWarn(m, args);
+                // DIVERSÃO & UTILIDADES — REQUER REGISTRO
+                case 'enquete':
+                case 'poll':
+                    if (!(this.registrationSystem?.isRegistered?.(userId) || isOwner)) {
+                        await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!');
+                        return true;
+                    }
+                    return await this._handlePoll(m, fullArgs);
 
-                case 'unwarn':
-                case 'resetwarns':
-                    if (!isOwner && !isAdminUsers) return false;
-                    return await this._handleResetWarns(m, args);
+                case 'tts':
+                    if (!(this.registrationSystem?.isRegistered?.(userId) || isOwner)) {
+                        await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!');
+                        return true;
+                    }
+                    return await this._handleTTSCommand(m, args, fullArgs);
 
-                case 'restart':
-                    if (!isOwner) return false;
-                    await this.bot.reply(m, '🔄 Reiniciando sistemas Akira...');
-                    process.exit(0);
+                case 'piada': case 'joke':
+                case 'frases': case 'quote': case 'motivar':
+                case 'fatos': case 'curiosidade':
+                    if (!(this.registrationSystem?.isRegistered?.(userId) || isOwner)) {
+                        await this.bot.reply(m, '❌ Use *#registrar Nome|Idade* primeiro!');
+                        return true;
+                    }
+                    const funType = ['piada', 'joke'].includes(command) ? 'piada' : (['frases', 'quote', 'motivar'].includes(command) ? 'frase' : 'fato');
+                    return await this._handleFun(m, funType);
+
+                // CONFIGURAÇÕES DO BOT (APENAS DONO)
+                case 'setbotphoto': case 'setbotpic': case 'setphoto':
+                case 'setbotname': case 'setname':
+                case 'setbotstatus': case 'setbio':
+                case 'getprofile': case 'getuser':
+                case 'restart': {
+                    if (!isOwner) {
+                        await this.verificarPermissaoDono(m, command, false, meta);
+                        return true;
+                    }
+                    if (command === 'restart') {
+                        await this.bot.reply(m, '🔄 Reiniciando sistemas Akira...');
+                        process.exit(0);
+                    }
+                    if (command.includes('photo') || command.includes('pic')) return await this._handleSetBotPhoto(m);
+                    if (command.includes('name')) return await this._handleSetBotName(m, fullArgs);
+                    if (command.includes('status') || command.includes('bio')) return await this._handleSetBotStatus(m, fullArgs);
+                    return await this._handleGetProfileAdmin(m, args);
+                }
+
+                // COMANDOS FANTASMAS (CYBER/OSINT DELEGADOS A OUTRO BOT/SERVIDOR)
+                case 'nmap': case 'sqlmap': case 'dork': case 'email': case 'phone': case 'username':
+                case 'sherlock': case 'holehe': case 'theharvester': case 'shodan': case 'cve':
+                case 'whois': case 'dns': case 'geo': case 'pass': case 'hash': case 'blackeye':
+                case 'socialfish': case 'winrm': case 'impacket':
+                    // Retorna `true` silenciosamente para indicar que processamos a mensagem com sucesso,
+                    // mas na verdade deixamos para outro back-end tratar, sem soltar mensagem de erro.
+                    this.logger.debug(`[SILENCIADO] Comando OSINT/CYBER externalizado: #${command}`);
                     return true;
 
-                default: {
+                case 'report':
+                case 'reportar':
+                case 'bug':
+                    return await this._handleReport(m, fullArgs, nome, senderId, ehGrupo);
+
+                default:
                     return false;
-                }
             }
 
         } catch (error) {
@@ -921,6 +820,56 @@ class CommandHandler {
     // ═══════════════════════════════════════════════════════════════════════
     // MÉTODOS AUXILIARES DE COMANDO
     // ═══════════════════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // MÉTODOS AUXILIARES DE SEGURANÇA E PERMISSÃO
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Helper centralizado para verificar permissões de dono ou admin
+     * Implementa punições rigorosas para uso não autorizado de comandos VIP
+     */
+    private async verificarPermissaoDono(m: any, command: string, isAdminRequired: boolean = false, meta: any): Promise<boolean> {
+        const { nome, numeroReal, ehGrupo } = meta;
+        const senderId = numeroReal;
+        const chatJid = m.key.remoteJid;
+        const userId = m.key.participant || senderId;
+
+        const isOwner = this.config.isDono(senderId, nome);
+        let isAdmin = isOwner;
+
+        if (!isAdmin && ehGrupo && this.groupManagement) {
+            isAdmin = await this.groupManagement.isUserAdmin(chatJid, userId);
+        }
+
+        const temPermissao = isAdminRequired ? isAdmin : isOwner;
+
+        if (!temPermissao) {
+            // REGRA: Apenas o dono pode usar toggles de moderação e comandos VIP
+            // Se um estranho tenta, aplicamos punição progressiva via ModerationSystem
+            if (this.moderationSystem) {
+                const punishment = this.moderationSystem.recordUnauthorizedCommandAttempt(userId, nome, senderId, command, ehGrupo);
+
+                if (punishment?.action === 'KICK_SILENT' && ehGrupo) {
+                    try {
+                        this.logger.warn(`🚨 [KICK] Usuário ${userId} tentando burlar segurança com #${command}`);
+                        await this.sock.groupParticipantsUpdate(chatJid, [userId], 'remove');
+                    } catch (e: any) {
+                        this.logger.error(`❌ Erro ao expulsar engraçadinho: ${e.message}`);
+                    }
+                }
+            }
+
+            const msg = isAdminRequired
+                ? '🚫 *ACESSO NEGADO!*\n\nVocê precisa ser um administrador do grupo ou proprietário do bot para usar este comando.'
+                : '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot (Isaac Quarenta) pode usar este comando.';
+
+            await this.bot.reply(m, msg);
+            return false;
+        }
+
+        return true;
+    }
 
     public async _reply(m: any, text: string, options: any = {}): Promise<any> {
         const jid = m.key?.remoteJid;
@@ -965,6 +914,49 @@ class CommandHandler {
             console.error(`${errorPrefix} Exceção não tratada:`, error.message);
             throw error; // Re-lança para que o caller saiba que falhou
         }
+    }
+
+    private async _handleToggleModeration(m: any, command: string, args: string[]): Promise<boolean> {
+        if (!this.moderationSystem) return false;
+
+        const chatJid = m.key.remoteJid;
+        const arg = (args[0] || '').toLowerCase();
+
+        if (arg !== 'on' && arg !== 'off') {
+            await this.bot.reply(m, `⚠️ Uso: *#${command} on/off*`);
+            return true;
+        }
+
+        const enable = arg === 'on';
+        let res = false;
+        let featureName = '';
+
+        switch (command) {
+            case 'antilink':
+                res = this.moderationSystem.toggleAntiLink(chatJid, enable);
+                featureName = 'Anti-Link';
+                break;
+            case 'antifake':
+                res = this.moderationSystem.toggleAntiFake(chatJid, enable);
+                featureName = 'Anti-Fake (+244)';
+                break;
+            case 'antiimage':
+                res = this.moderationSystem.toggleAntiImage(chatJid, enable);
+                featureName = 'Anti-Imagem';
+                break;
+            case 'antisticker':
+                res = this.moderationSystem.toggleAntiSticker(chatJid, enable);
+                featureName = 'Anti-Sticker';
+                break;
+            case 'antivideo':
+                res = this.moderationSystem.toggleAntiVideo(chatJid, enable);
+                featureName = 'Anti-Vídeo';
+                break;
+        }
+
+        const statusText = enable ? 'ATIVADO ✅' : 'DESATIVADO ❌';
+        await this.bot.reply(m, `🛡️ *MODERAÇÃO*\n\nO recurso *${featureName}* foi ${statusText} neste grupo.`);
+        return true;
     }
 
     public async _showMenu(m: any, subArg?: string): Promise<boolean> {
@@ -1735,7 +1727,6 @@ ${P}menu osint — Comandos OSINT avançados`,
         return true;
     }
 
-
     public async _handlePaymentCommand(m: any, args: string[]): Promise<boolean> {
         // Se usuario quer ver info
         if (args.length === 0) {
@@ -1781,6 +1772,8 @@ ${P}menu osint — Comandos OSINT avançados`,
         }
         return true;
     }
+
+
 
     public async _handleVideoToAudio(m: any): Promise<boolean> {
         const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -1992,10 +1985,14 @@ ${P}menu osint — Comandos OSINT avançados`,
 
     public async _handleGames(m: any, command: string, args: string[]): Promise<boolean> {
         try {
+            const chatJid = m.key.remoteJid;
+            const userId = m.key.participant || m.key.remoteJid;
+
             switch (command) {
                 case 'dado': {
-                    const dado = Math.floor(Math.random() * 6) + 1;
-                    await this._reply(m, `🎲 Você tirou: *${dado}*`);
+                    const lances = parseInt(args[0]) || 6;
+                    const dado = Math.floor(Math.random() * lances) + 1;
+                    await this._reply(m, `🎲 Você tirou: *${dado}*${lances !== 6 ? ` (em um dado de ${lances} faces)` : ''}`);
                     break;
                 }
                 case 'moeda':
@@ -2024,8 +2021,12 @@ ${P}menu osint — Comandos OSINT avançados`,
                     break;
                 }
                 case 'gay': {
+                    const mentions = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                    const target = mentions.length > 0 ? mentions[0] : userId;
+                    const name = mentions.length > 0 ? `@${target.split('@')[0]}` : 'Você';
                     const gayPercent = Math.floor(Math.random() * 101);
-                    await this._reply(m, `🏳️🌈 Você é *${gayPercent}%* gay`);
+                    const msg = `🏳️🌈 ${name} é *${gayPercent}%* gay!`;
+                    await this.sock.sendMessage(chatJid, { text: msg, mentions: [target] }, { quoted: m });
                     break;
                 }
             }
@@ -2582,33 +2583,6 @@ ${P}menu osint — Comandos OSINT avançados`,
         return true;
     }
 
-    public async _handleToggleModeration(m: any, command: string, args: string[]): Promise<boolean> {
-        const jid = m.key.remoteJid;
-        const enable = args[0] === 'on' || args[0] === '1';
-        const actionStr = enable ? 'ATIVADO' : 'DESATIVADO';
-
-        if (!this.moderationSystem) return true;
-
-        switch (command) {
-            case 'antilink':
-                this.moderationSystem.toggleAntiLink(jid, enable);
-                await this._reply(m, `✅ Anti-Link ${actionStr} para este grupo.`);
-                break;
-            case 'antifake':
-                this.moderationSystem.toggleAntiFake(jid, enable);
-                await this._reply(m, `✅ Anti-Fake (+244) ${actionStr} para este grupo.`);
-                break;
-            case 'antiimage':
-                this.moderationSystem.toggleAntiImage(jid, enable);
-                await this._reply(m, `✅ Anti-Imagem ${actionStr} para este grupo.`);
-                break;
-            case 'antisticker':
-                this.moderationSystem.toggleAntiSticker(jid, enable);
-                await this._reply(m, `✅ Anti-Sticker ${actionStr} para este grupo.`);
-                break;
-        }
-        return true;
-    }
 
     public async _handleManualWarn(m: any, args: string[]): Promise<boolean> {
         const target = this.userProfile.extractUserJidFromMessage(m.message, m);
@@ -2686,67 +2660,68 @@ ${P}menu osint — Comandos OSINT avançados`,
 
         const groupJid = m.key.remoteJid;
         const subCommand = command.toLowerCase();
+        const arg0 = (args[0] || '').toLowerCase();
+        const P = this.config.PREFIXO;
 
-        switch (subCommand) {
-            case 'welcome':
-            case 'bemvindo':
-                // Check for status command
-                if (args[0] === 'status') {
+        try {
+            switch (subCommand) {
+                case 'welcome':
+                case 'bemvindo': {
+                    if (arg0 === 'on' || arg0 === 'off') {
+                        await this.groupManagement.toggleSetting(m, 'welcome', arg0);
+                        return true;
+                    }
+                    // Sem argumento: mostra status
                     const welcomeOn = this.groupManagement.getWelcomeStatus(groupJid);
                     const welcomeMsg = this.groupManagement.getCustomMessage(groupJid, 'welcome');
                     await this._reply(m,
-                        `📝 *STATUS - BOAS-VINDAS*\n\n` +
-                        `✅ Status: ${welcomeOn ? 'ATIVADO' : 'DESATIVADO'}\n` +
-                        `💬 Mensagem: ${welcomeMsg || 'Padrão do sistema'}\n\n` +
+                        `👋 *BOAS-VINDAS*\n\n` +
+                        `Status: ${welcomeOn ? '✅ ATIVADO' : '❌ DESATIVADO'}\n` +
+                        `Mensagem: ${welcomeMsg || '_(padrão)_'}\n\n` +
                         `⚙️ *Comandos:*\n` +
-                        `• #welcome on - Ativar\n` +
-                        `• #welcome off - Desativar\n` +
-                        `• #welcome status - Ver status\n` +
-                        `• #setwelcome [texto] - Personalizar mensagem`
+                        `• *${P}welcome on* - Ativar\n` +
+                        `• *${P}welcome off* - Desativar\n` +
+                        `• *${P}setwelcome [texto]* - Personalizar mensagem`
                     );
                     return true;
                 }
-                if (args[0] === 'on' || args[0] === 'off') {
-                    await this.groupManagement.toggleSetting(m, 'welcome', args[0]);
-                } else {
-                    await this._reply(m, `💡 Use *#welcome on/off* para ligar/desligar ou *#setwelcome Texto* para configurar.`);
-                }
-                break;
-            case 'setwelcome':
-                if (!fullArgs) return await this._reply(m, '❌ Informe o texto de boas-vindas.');
-                await this.groupManagement.setCustomMessage(groupJid, 'welcome', fullArgs);
-                await this._reply(m, '✅ Mensagem de boas-vindas personalizada salva!');
-                break;
-            case 'setgoodbye':
-                if (!fullArgs) return await this._reply(m, '❌ Informe o texto de saída.');
-                await this.groupManagement.setCustomMessage(groupJid, 'goodbye', fullArgs);
-                await this._reply(m, '✅ Mensagem de saída personalizada salva!');
-                break;
-            case 'goodbye':
-                // Check for status command
-                if (args[0] === 'status') {
+                case 'setwelcome':
+                    if (!fullArgs) return await this._reply(m, `❌ Uso: *${P}setwelcome <texto>*\nPlaceholders: @user, @group, @desc`);
+                    await this.groupManagement.setCustomMessage(groupJid, 'welcome', fullArgs);
+                    await this._reply(m, `✅ Mensagem de boas-vindas definida:\n_${fullArgs}_`);
+                    return true;
+                case 'setgoodbye':
+                    if (!fullArgs) return await this._reply(m, `❌ Uso: *${P}setgoodbye <texto>*\nPlaceholders: @user, @group, @desc`);
+                    await this.groupManagement.setCustomMessage(groupJid, 'goodbye', fullArgs);
+                    await this._reply(m, `✅ Mensagem de saída definida:\n_${fullArgs}_`);
+                    return true;
+                case 'goodbye': {
+                    if (arg0 === 'on' || arg0 === 'off') {
+                        await this.groupManagement.toggleSetting(m, 'goodbye', arg0);
+                        return true;
+                    }
+                    // Sem argumento: mostra status
                     const goodbyeOn = this.groupManagement.getGoodbyeStatus(groupJid);
                     const goodbyeMsg = this.groupManagement.getCustomMessage(groupJid, 'goodbye');
                     await this._reply(m,
-                        `📝 *STATUS - DESPEDIDA*\n\n` +
-                        `✅ Status: ${goodbyeOn ? 'ATIVADO' : 'DESATIVADO'}\n` +
-                        `💬 Mensagem: ${goodbyeMsg || 'Padrão do sistema'}\n\n` +
+                        `👋 *DESPEDIDA*\n\n` +
+                        `Status: ${goodbyeOn ? '✅ ATIVADO' : '❌ DESATIVADO'}\n` +
+                        `Mensagem: ${goodbyeMsg || '_(padrão)_'}\n\n` +
                         `⚙️ *Comandos:*\n` +
-                        `• #goodbye on - Ativar\n` +
-                        `• #goodbye off - Desativar\n` +
-                        `• #goodbye status - Ver status\n` +
-                        `• #setgoodbye [texto] - Personalizar mensagem`
+                        `• *${P}goodbye on* - Ativar\n` +
+                        `• *${P}goodbye off* - Desativar\n` +
+                        `• *${P}setgoodbye [texto]* - Personalizar mensagem`
                     );
                     return true;
                 }
-                if (args[0] === 'on' || args[0] === 'off') {
-                    await this.groupManagement.toggleSetting(m, 'goodbye', args[0]);
-                } else {
-                    await this._reply(m, `💡 Use *#goodbye on/off* para ligar/desligar ou *#setgoodbye Texto* para configurar.`);
-                }
-                break;
+                default:
+                    return true;
+            }
+        } catch (e: any) {
+            this.logger.error(`❌ Erro em _handleWelcome: ${e.message}`);
+            await this._reply(m, `❌ Erro: ${e.message}`);
+            return true;
         }
-        return true;
     }
 
 
@@ -3076,5 +3051,7 @@ ${P}menu osint — Comandos OSINT avançados`,
             return true;
         }
     }
+
 }
 export default CommandHandler;
+

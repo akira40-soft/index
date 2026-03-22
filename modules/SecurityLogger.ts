@@ -29,8 +29,9 @@ class SecurityLogger {
         // O HF Spaces tem sistema de arquivos somente-leitura em /
         // ═══════════════════════════════════════════════════════════════════
 
-        // Forçar uso de /tmp no HF Spaces (sistema read-only)
-        this.logsPath = '/tmp/akira_data/security_logs';
+        // Forçar persistência real no Railway, fallback para /tmp
+        const basePath = process.env.DATA_DIR || '/tmp/akira_data';
+        this.logsPath = path.join(basePath, 'security_logs');
         this.alertsPath = path.join(this.logsPath, 'alerts.json');
         this.opsPath = path.join(this.logsPath, 'operations.json');
 

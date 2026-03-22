@@ -244,11 +244,9 @@ class PresenceSimulator {
             const jid = m.key.remoteJid;
             const isGroup = String(jid || '').endsWith('@g.us');
 
-            // Step 1: Marcar como entregue (em grupos)
-            if (isGroup) {
-                await this.simulateTicks(m, false, false);
-                await delay(300);
-            }
+            // Step 1: Marcar como entregue (PV e Grupos)
+            await this.simulateTicks(m, false, false);
+            await delay(300);
 
             // Step 2: Simular digitação ou gravação
             if (isAudio) {

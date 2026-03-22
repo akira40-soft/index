@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════
  * CLASSE: AudioProcessor
  * ═══════════════════════════════════════════════════════════════════════
@@ -7,12 +7,13 @@
  * ═══════════════════════════════════════════════════════════════════════
  */
 
+/// <reference path="./declarations.d.ts" />
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import googleTTS from 'google-tts-api';
-import ConfigManager from './ConfigManager.js';
+import ConfigManager from './ConfigManager';
 
 class AudioProcessor {
     private config: any;

@@ -3,6 +3,7 @@ import path from 'path';
 import ConfigManager from './ConfigManager.js';
 
 class LevelSystem {
+    private static instance: LevelSystem;
     public config: any;
     public logger: any;
     public dbPath: string;
@@ -14,17 +15,11 @@ class LevelSystem {
     public topForAdm: number;
     public enableDetailedLogging: boolean;
 
-    constructor(logger: any = console) {
+    private constructor(logger: any = console) {
         this.config = ConfigManager.getInstance();
         this.logger = logger;
 
-        // ═══════════════════════════════════════════════════════════════════
-        // HF SPACES: Usar /tmp para garantir permissões de escrita
-        // O HF Spaces tem sistema de arquivos somente-leitura em /
-        // ═══════════════════════════════════════════════════════════════════
-
-        // Forçar uso de /tmp no HF Spaces (sistema read-only)
-        const basePath = '/tmp/akira_data';
+        const basePath = process.env.DATA_DIR || this.config.DATABASE_FOLDER || './database';
         this.dbPath = path.join(basePath, 'data', 'group_levels.json');
         this.promoPath = path.join(basePath, 'datauser', 'level_adm_promotion.json');
 
@@ -35,6 +30,13 @@ class LevelSystem {
         this.maxLevel = this.config.LEVEL_MAX || 60;
         this.topForAdm = this.config.LEVEL_TOP_FOR_ADM || 3;
         this.enableDetailedLogging = true;
+    }
+
+    public static getInstance(logger: any = console): LevelSystem {
+        if (!LevelSystem.instance) {
+            LevelSystem.instance = new LevelSystem(logger);
+        }
+        return LevelSystem.instance;
     }
 
     _ensureFiles() {
@@ -87,8 +89,8 @@ class LevelSystem {
         const base = this.config.LEVEL_BASE_XP || 100;
         const multiplier = this.config.LEVEL_XP_MULTIPLIER || 10;
         if (level >= this.maxLevel) return Infinity;
-        // Nova fórmula polinomial: level * base + level^2 * multiplier
-        return Math.floor((level * base) + (level * level * multiplier));
+        // Fórmula polinomial otimizada: (level * base) + (level^2 * multiplier)
+        return Math.floor((level * base) + (Math.pow(level, 2) * multiplier));
     }
 
     awardXp(gid: string, uid: string, xpAmount: number = 10) {

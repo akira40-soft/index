@@ -3,6 +3,7 @@ import path from 'path';
 import ConfigManager from './ConfigManager.js';
 
 class EconomySystem {
+    private static instance: EconomySystem;
     public config: any;
     public logger: any;
     public dbPath: string;
@@ -10,12 +11,12 @@ class EconomySystem {
     public dailyAmount: number;
     public dailyCooldown: number;
 
-    constructor(logger: any = console) {
+    private constructor(logger: any = console) {
         this.config = ConfigManager.getInstance();
         this.logger = logger;
 
-        // HF SPACES: Usar /tmp para garantir permissões de escrita
-        const basePath = '/tmp/akira_data';
+        // Configurar persistência com process.env.DATA_DIR para Railway
+        const basePath = process.env.DATA_DIR || '/tmp/akira_data';
         this.dbPath = path.join(basePath, 'economy', 'economy.json');
 
         this._ensureFiles();
@@ -24,6 +25,13 @@ class EconomySystem {
         // Configurações
         this.dailyAmount = 500; // Moedas por daily
         this.dailyCooldown = 24 * 60 * 60 * 1000; // 24 horas
+    }
+
+    public static getInstance(logger: any = console): EconomySystem {
+        if (!EconomySystem.instance) {
+            EconomySystem.instance = new EconomySystem(logger);
+        }
+        return EconomySystem.instance;
     }
 
     _ensureFiles() {

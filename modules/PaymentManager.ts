@@ -15,8 +15,8 @@ class PaymentManager {
         this.subscriptionManager = subscriptionManager;
         this.config = ConfigManager.getInstance();
 
-        // HF SPACES: Usar /tmp para garantir permissões de escrita
-        const basePath = '/tmp/akira_data';
+        // Configurar persistência com process.env.DATA_DIR para Railway
+        const basePath = process.env.DATA_DIR || '/tmp/akira_data';
         this.dbPath = path.join(basePath, 'payments');
         this.configPath = path.join(basePath, 'payplay_config.json');
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════
  * CLASSE: APIClient
  * ═══════════════════════════════════════════════════════════════════════
@@ -8,19 +8,22 @@
  */
 
 import axios from 'axios';
-import ConfigManager from './ConfigManager.js';
+import ConfigManager from './ConfigManager';
+import MediaProcessor from './MediaProcessor';
 
 class APIClient {
     private config: any;
     private logger: any;
     private requestCount: number;
     private errorCount: number;
+    private mediaProcessor: MediaProcessor;
 
     constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
         this.logger = logger || console;
         this.requestCount = 0;
         this.errorCount = 0;
+        this.mediaProcessor = new MediaProcessor(this.logger);
     }
 
     /**
@@ -36,6 +39,8 @@ class APIClient {
             mensagem_citada = '',
             reply_metadata = {},
             imagem_dados = null,
+            video_dados = null,
+            documento_dados = null,
             grupo_id = null,
             grupo_nome = null,
             forcar_pesquisa = false,
@@ -47,7 +52,7 @@ class APIClient {
             numero: String(numero || 'desconhecido').substring(0, 20),
             mensagem: String(mensagem || '').substring(0, 2000),
             tipo_conversa: ['pv', 'grupo'].includes(tipo_conversa) ? tipo_conversa : 'pv',
-            tipo_mensagem: ['texto', 'image', 'audio', 'video', 'document', 'documentWithCaption'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
+            tipo_mensagem: ['texto', 'image', 'imagem', 'audio', 'video', 'document', 'documento', 'documentWithCaption'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
             historico: [],
             forcar_busca: Boolean(forcar_pesquisa),
             analise_doc: String(analise_doc || '')
@@ -58,9 +63,9 @@ class APIClient {
             payload.mensagem_citada = String(mensagem_citada || '').substring(0, 3000);
             payload.reply_metadata = {
                 is_reply: true,
-                reply_to_bot: Boolean(reply_metadata.reply_to_bot),
-                quoted_author_name: String(reply_metadata.quoted_author_name || 'desconhecido').substring(0, 50),
-                quoted_author_numero: String(reply_metadata.quoted_author_numero || 'desconhecido'),
+                reply_to_bot: Boolean(reply_metadata.reply_to_bot || reply_metadata.ehRespostaAoBot),
+                quoted_author_name: String(reply_metadata.quoted_author_name || reply_metadata.quemEscreveuCitacaoName || 'desconhecido').substring(0, 50),
+                quoted_author_numero: String(reply_metadata.quoted_author_numero || reply_metadata.quemEscreveuCitacao || 'desconhecido'),
                 quoted_type: String(reply_metadata.quoted_type || 'texto'),
                 quoted_text_original: String(reply_metadata.quoted_text_original || '').substring(0, 2000),
                 context_hint: String(reply_metadata.context_hint || '')
@@ -72,9 +77,9 @@ class APIClient {
             };
         }
 
-        // Adiciona dados de imagem se existirem
+        // 📷 Mapeia Imagem (Sincronizado com api.py)
         if (imagem_dados && (imagem_dados.dados || imagem_dados.path)) {
-            payload.imagem = {
+            payload.imagem_dados = {
                 dados: imagem_dados.dados || null,
                 path: imagem_dados.path || null,
                 mime_type: imagem_dados.mime_type || 'image/jpeg',
@@ -83,10 +88,30 @@ class APIClient {
             };
         }
 
+        // 🎥 Mapeia Vídeo
+        if (video_dados && (video_dados.dados || video_dados.path)) {
+            payload.video_dados = {
+                dados: video_dados.dados || null,
+                path: video_dados.path || null,
+                mime_type: video_dados.mime_type || 'video/mp4',
+                descricao: video_dados.descricao || 'Vídeo enviado'
+            };
+        }
+
+        // 📄 Mapeia Documento
+        if (documento_dados && (documento_dados.dados || documento_dados.path)) {
+            payload.documento_dados = {
+                dados: documento_dados.dados || null,
+                path: documento_dados.path || null,
+                mime_type: documento_dados.mime_type || 'application/octet-stream',
+                nome_arquivo: documento_dados.nome_arquivo || 'documento'
+            };
+        }
+
         // Adiciona info de grupo se existir
         if (grupo_id) {
             payload.grupo_id = grupo_id;
-            payload.contexto_grupo = grupo_nome || 'Grupo';
+            payload.grupo_nome = grupo_nome || 'Grupo';
         }
 
         return payload;
@@ -105,7 +130,20 @@ class APIClient {
             };
         }
 
-        const url = `${this.config.API_URL}${endpoint}`;
+        // Normalização robusta da URL — extrai APENAS a origem (domínio + porta)
+        // Isso garante que qualquer path pré-existente na API_URL (como /api, /api/akira, etc.)
+        // seja ignorado, evitando URLs duplicadas como /api/api/akira
+        let baseUrl = (this.config.API_URL || '').trim();
+        try {
+            const parsed = new URL(baseUrl);
+            // origin = protocolo + host + porta (ex: "https://akra35567-akira-softedge.hf.space")
+            baseUrl = parsed.origin;
+        } catch {
+            // Fallback para URLs mal formadas: remove tudo a partir do primeiro /path
+            baseUrl = baseUrl.replace(/\/(api.*)?$/, '').replace(/\/$/, '');
+        }
+
+        const url = `${baseUrl}${endpoint}`;
         const maxRetries = options.retries || this.config.API_RETRY_ATTEMPTS;
         let lastError = null;
 
@@ -114,7 +152,7 @@ class APIClient {
                 this.requestCount++;
 
                 if (this.config.LOG_API_REQUESTS) {
-                    this.logger.info(`[API] ${method.toUpperCase()} ${endpoint} (tentativa ${attempt}/${maxRetries})`);
+                    this.logger.info(`[API] ${method.toUpperCase()} ${url} (tentativa ${attempt}/${maxRetries})`);
                 }
 
                 const axiosConfig = {
@@ -123,7 +161,7 @@ class APIClient {
                     timeout: this.config.API_TIMEOUT,
                     headers: {
                         'Content-Type': 'application/json',
-                        'User-Agent': `AkiraBot/${this.config.BOT_VERSION}`
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     },
                     ...options
                 };
@@ -145,9 +183,10 @@ class APIClient {
                 lastError = error;
                 const statusCode = (error.response && error.response.status) || undefined;
                 const errorMsg = (error.response && error.response.data && error.response.data.error) || error.message;
+                const responseData = error.response?.data ? JSON.stringify(error.response.data).substring(0, 500) : 'N/A';
 
                 if (this.config.LOG_API_REQUESTS) {
-                    this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'}: ${errorMsg} (tentativa ${attempt}/${maxRetries})`);
+                    this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'}: ${errorMsg} | Payload: ${responseData} (tentativa ${attempt}/${maxRetries})`);
                 }
 
                 // Não retry em erros 4xx (exceto timeout)
@@ -179,9 +218,29 @@ class APIClient {
     */
     async processMessage(messageData: any): Promise<any> {
         try {
+            // Se houver m: m nos dados de mídia e não houver dados/path, tenta baixar
+            if (messageData.imagem_dados?.m && !messageData.imagem_dados.dados && !messageData.imagem_dados.path) {
+                const buffer = await this.mediaProcessor.downloadMedia(messageData.imagem_dados.m, 'image');
+                if (buffer) {
+                    messageData.imagem_dados.dados = buffer.toString('base64');
+                }
+            }
+            if (messageData.video_dados?.m && !messageData.video_dados.dados && !messageData.video_dados.path) {
+                const buffer = await this.mediaProcessor.downloadMedia(messageData.video_dados.m, 'video');
+                if (buffer) {
+                    messageData.video_dados.dados = buffer.toString('base64');
+                }
+            }
+            if (messageData.documento_dados?.m && !messageData.documento_dados.dados && !messageData.documento_dados.path) {
+                const buffer = await this.mediaProcessor.downloadMedia(messageData.documento_dados.m, 'document');
+                if (buffer) {
+                    messageData.documento_dados.dados = buffer.toString('base64');
+                }
+            }
+
             const payload = this.buildPayload(messageData);
 
-            const result = await this.request('POST', '/akira', payload);
+            const result = await this.request('POST', '/api/akira', payload);
 
             if (result.success) {
                 return {
@@ -213,7 +272,7 @@ class APIClient {
     */
     async analyzeImage(imageBase64: string, usuario: string = 'anonimo', numero: string = ''): Promise<any> {
         try {
-            const result = await this.request('POST', '/vision/analyze', {
+            const result = await this.request('POST', '/api/vision/analyze', {
                 imagem: imageBase64,
                 usuario,
                 numero,
@@ -247,7 +306,7 @@ class APIClient {
     */
     async performOCR(imageBase64: string, numero: string = ''): Promise<any> {
         try {
-            const result = await this.request('POST', '/vision/ocr', {
+            const result = await this.request('POST', '/api/vision/ocr', {
                 imagem: imageBase64,
                 numero
             });
@@ -280,7 +339,7 @@ class APIClient {
     async reset(usuario: string | null = null): Promise<any> {
         try {
             const payload = usuario ? { usuario } : {};
-            const result = await this.request('POST', '/reset', payload);
+            const result = await this.request('POST', '/api/reset', payload);
 
             return {
                 success: result.success,
@@ -301,7 +360,7 @@ class APIClient {
     */
     async healthCheck(): Promise<any> {
         try {
-            const result = await this.request('GET', '/health');
+            const result = await this.request('GET', '/api/health');
             return {
                 success: result.success,
                 status: (result.data && result.data.status) || 'unknown',

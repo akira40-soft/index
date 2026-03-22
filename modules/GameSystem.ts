@@ -11,10 +11,18 @@
  */
 
 class GameSystem {
-    private games: Map<string, any>;
+    private static instance: GameSystem;
+    private games: Map<string, any> = new Map();
 
-    constructor() {
-        this.games = new Map();
+    private constructor() {
+        // Inicialização se necessário
+    }
+
+    public static getInstance(): GameSystem {
+        if (!GameSystem.instance) {
+            GameSystem.instance = new GameSystem();
+        }
+        return GameSystem.instance;
     }
 
     /**
@@ -1180,5 +1188,5 @@ class GameSystem {
     }
 }
 
-export default new GameSystem();
+export default GameSystem.getInstance();
 

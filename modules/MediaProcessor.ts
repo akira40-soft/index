@@ -1,3 +1,4 @@
+/// <reference path="./declarations.d.ts" />
 /**
  * ═══════════════════════════════════════════════════════════════════════
  * CLASSE: MediaProcessor
@@ -84,7 +85,7 @@ class MediaProcessor {
      * Constrói o comando yt-dlp seguindo as NORMAS TÉCNICAS de 2026
      * Usa Deno como runtime JS para decifrar assinaturas complexas (SABR/DPI)
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, clientOverride?: string }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, clientOverride?: string, userAgent?: string }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const poToken = this.config?.YT_PO_TOKEN;
@@ -92,25 +93,30 @@ class MediaProcessor {
         // Padrão Industrial: Se houver Deno, use-o. Caso contrário, deixa o yt-dlp decidir.
         const jsRuntime = fs.existsSync('/usr/local/bin/deno') || fs.existsSync('/root/.deno/bin/deno') ? '--js-runtime deno' : '';
 
-        // Clientes normatizados em ordem de prioridade
-        const clients = options.clientOverride || 'android_vr,ios,android,web_embedded,tv,web';
+        // Clientes normatizados em ordem de prioridade - EM 2026, web e mweb são os mais bloqueados
+        const clients = options.clientOverride || 'android_vr,ios,android,web_embedded';
 
-        let extractorArgs = `youtube:player_client=${clients}`;
+        // GAMBIARRA 2026: player_skip=web,mweb força o uso de APIs menos vigiadas
+        let extractorArgs = `youtube:player_client=${clients};player_skip=web,mweb`;
         if (poToken) extractorArgs += `;po_token=web+${poToken}`;
+
+        // Rotação de User-Agent: Se não vier um específico, usamos um de iPhone (mais confiável)
+        const ua = options.userAgent || 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
             '--force-ipv4',
             '--no-check-certificates',
-            '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"',
-            '--add-header "Accept-Language:en-US,en;q=0.9"',
+            `--user-agent "${ua}"`,
+            '--add-header "Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"',
+            '--add-header "Sec-Fetch-Mode: navigate"',
             '--ignore-config',
             '--no-warnings',
             '--no-playlist',
             '--geo-bypass',
-            '--socket-timeout 20',
-            '--retries 2'
+            '--socket-timeout 30',
+            '--retries 3'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
@@ -154,12 +160,11 @@ class MediaProcessor {
             // O yt-dlp fará sua mágica nativa para encontrar o melhor áudio
             // ================================================================
             const tentativas = [
-                { cliente: 'android_vr', sleepMs: 0 },
-                { cliente: 'ios', sleepMs: 1500 },
-                { cliente: 'android', sleepMs: 2000 },
-                { cliente: 'web_embedded', sleepMs: 2500 },
-                { cliente: 'tv', sleepMs: 3000 },
-                { cliente: 'ios,android_vr,web,tv', sleepMs: 3500 } // Super-combo
+                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.0.0.0.0 SamsungBrowser/4.0 Chrome/89.0.4389.90 Mobile Safari/537.36', sleepMs: 0 },
+                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1', sleepMs: 1000 },
+                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.64 Mobile Safari/537.36', sleepMs: 1500 },
+                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', sleepMs: 2000 },
+                { cliente: 'ios,android_vr', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -171,7 +176,8 @@ class MediaProcessor {
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'audio',
                     output: outputPath,
-                    clientOverride: t.cliente
+                    clientOverride: t.cliente,
+                    userAgent: t.ua
                 });
                 try {
                     await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
@@ -220,12 +226,11 @@ class MediaProcessor {
             // O yt-dlp fará a seleção nativa e juntará tudo em MP4
             // ================================================================
             const tentativas = [
-                { cliente: 'android_vr', sleepMs: 0 },
-                { cliente: 'ios', sleepMs: 1500 },
-                { cliente: 'android', sleepMs: 2000 },
-                { cliente: 'web_embedded', sleepMs: 2500 },
-                { cliente: 'tv', sleepMs: 3000 },
-                { cliente: 'ios,android_vr,web,mweb', sleepMs: 3500 } // Super-combo final
+                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.0.0.0.0 SamsungBrowser/4.0 Chrome/89.0.4389.90 Mobile Safari/537.36', sleepMs: 0 },
+                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1', sleepMs: 1000 },
+                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.64 Mobile Safari/537.36', sleepMs: 1500 },
+                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', sleepMs: 2000 },
+                { cliente: 'ios,android_vr', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -237,7 +242,8 @@ class MediaProcessor {
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'video',
                     output: outputPath,
-                    clientOverride: t.cliente
+                    clientOverride: t.cliente,
+                    userAgent: t.ua
                 });
                 try {
                     await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });

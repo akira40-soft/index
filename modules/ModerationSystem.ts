@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════
  * CLASSE: ModerationSystem (VERSÃO COM SEGURANÇA MILITAR)
  * ═══════════════════════════════════════════════════════════════════════
@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 class ModerationSystem {
+    private static instance: ModerationSystem;
     private config: any;
     private logger: any;
     private blacklistPath: string;
@@ -33,10 +34,12 @@ class ModerationSystem {
     private antiFakeGroups: Set<string>;
     private antiImageGroups: Set<string>;
     private antiStickerGroups: Set<string>;
+    private antiVideoGroups: Set<string>;
     private warningsPath: string;
     private antiFakePath: string;
     private antiImagePath: string;
     private antiStickerPath: string;
+    private antiVideoPath: string;
     private HOURLY_LIMIT: number;
     private HOURLY_WINDOW_MS: number;
     private SPAM_THRESHOLD: number;
@@ -44,7 +47,7 @@ class ModerationSystem {
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
 
-    constructor(logger: any = null) {
+    private constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
         this.logger = logger || console;
 
@@ -74,12 +77,14 @@ class ModerationSystem {
         this.antiFakeGroups = new Set();
         this.antiImageGroups = new Set();
         this.antiStickerGroups = new Set();
+        this.antiVideoGroups = new Set();
 
         // Persistência
         this.warningsPath = '/tmp/akira_data/data/warnings.json';
         this.antiFakePath = '/tmp/akira_data/data/antifake.json';
         this.antiImagePath = '/tmp/akira_data/data/antiimage.json';
         this.antiStickerPath = '/tmp/akira_data/data/antisticker.json';
+        this.antiVideoPath = '/tmp/akira_data/data/antivideo.json';
 
         this._loadAllSettings();
 
@@ -91,6 +96,13 @@ class ModerationSystem {
 
         // ═══ LOG DETALHADO ═══
         this.enableDetailedLogging = true;
+    }
+
+    public static getInstance(logger: any = null): ModerationSystem {
+        if (!ModerationSystem.instance) {
+            ModerationSystem.instance = new ModerationSystem(logger);
+        }
+        return ModerationSystem.instance;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -192,12 +204,7 @@ class ModerationSystem {
         return wasMuted;
     }
 
-    /**
-    * ═══════════════════════════════════════════════════════════════════════
-    * NOVO: Sistema de Rate Limiting com Logs Detalhados
-    * ═══════════════════════════════════════════════════════════════════════
-    */
-    public checkAndLimitHourlyMessages(userId: string, userName: string, userNumber: string, messageText: string, quotedMessage: any = null, ehDono: boolean = false): any {
+    public checkAndLimitHourlyMessages(userId: string, userName: string, userNumber: string, messageText: string, quotedMessage: any = null, ehDono: boolean = false, isGroup: boolean = false, groupJid: string | null = null): any {
         // DONO JAMAIS É LIMITADO
         if (ehDono) {
             return { allowed: true, reason: 'DONO_ISENTO' };
@@ -208,96 +215,102 @@ class ModerationSystem {
             windowStart: now,
             count: 0,
             blockedUntil: 0,
-            overAttempts: 0,
-            warnings: 0,
+            overAttempts: 0,     // Quantas vezes excedeu pós-bloqueio
+            penaltyStage: 0,       // Estágio da Penha (1, 2, 3, 4)
             blocked_at: null,
-            blocked_by_warning: false
+            time_blocked: null     // Tempo que foi bloqueado
         };
 
-        // ═══ VERIFICA SE BLOQUEIO AINDA ESTÁ ATIVO ═══
+        const limitToUse = isGroup ? 50 : 25; // 50 em Gp, 25 em PV
+        const penaltyDurationStage1 = 30 * 60 * 1000; // 30 min (Stage 1 e 2 cooldown)
+        const penaltyDurationStage3 = 2 * 24 * 60 * 60 * 1000; // 2 dias (Stage 3 Blacklist)
+
+        // ═══ VERIFICA SE ESTÁ NA BLACKLIST PERMANENTE OU TEMPORÁRIA ═══
+        if (this.isBlacklisted(userId)) {
+            // Se tentar falar, kicka imediatamente se for grupo
+            return {
+                allowed: false,
+                reason: 'AUTO_BLACKLIST_TRIGGERED',
+                action: 'KICK_SILENT' // O BotCore deverá reagir expulsando
+            };
+        }
+
+        // ═══ VERIFICA SE BLOQUEIO AINDA ESTÁ ATIVO (ESTÁGIO 1 ou 2) ═══
         if (userData.blockedUntil && now < userData.blockedUntil) {
             userData.overAttempts++;
 
             const timePassedMs = now - (userData.blocked_at || now);
-            const timePassedSec = Math.floor(timePassedMs / 1000);
             const timeRemainingMs = userData.blockedUntil - now;
-            const timeRemainingSec = Math.ceil(timeRemainingMs / 1000);
-            const blockExpireTime = new Date(userData.blockedUntil).toLocaleTimeString('pt-BR');
+            const timeRemainingMin = Math.ceil(timeRemainingMs / 60000);
 
-            this._logRateLimitAttempt(
-                'BLOQUEADO_REINCIDÊNCIA',
-                userId,
-                userName,
-                userNumber,
-                messageText,
-                quotedMessage,
-                `Tentativa ${userData.overAttempts}/${this.maxAttemptsBeforeBlacklist}`,
-                `Passou: ${timePassedSec}s | Falta: ${timeRemainingSec}s | Desbloqueio: ${blockExpireTime}`
-            );
-
-            // AUTO-BLACKLIST APÓS MÚLTIPLAS TENTATIVAS
-            if (userData.overAttempts >= this.maxAttemptsBeforeBlacklist) {
-                this._logRateLimitAttempt(
-                    '🚨 AUTO-BLACKLIST ACIONADO',
-                    userId,
-                    userName,
-                    userNumber,
-                    messageText,
-                    quotedMessage,
-                    `MÚLTIPLAS REINCIDÊNCIAS (${userData.overAttempts})`,
-                    'USUÁRIO ADICIONADO À BLACKLIST PERMANENTE'
-                );
-
+            // INSISTÊNCIA...
+            if (userData.overAttempts === 1) {
+                // Stage 2: Aviso Rígido
+                userData.penaltyStage = 2;
                 this.userRateLimit?.set(userId, userData);
+                this._logRateLimitAttempt('🚨 [STAGE 2] AVISO RIGOROSO', userId, userName, userNumber, messageText, null, `Insistiu no rate limit.`, `Enviando aviso de paragem obrigatória.`);
+                return {
+                    allowed: false,
+                    reason: 'WARNING_RIGOROUS',
+                    timeRemainingMin,
+                    action: 'WARN_STOP'
+                };
+            }
+            else if (userData.overAttempts >= 2) {
+                // Stage 3: Auto Blacklist de 2 dias (48h) + Kick automático
+                this.addToBlacklist(userId, userName, userNumber, 'spam_reincidente', penaltyDurationStage3);
+                userData.penaltyStage = 3;
+                this.userRateLimit?.set(userId, userData);
+
+                this._logRateLimitAttempt('🚨 [STAGE 3] BLACKLIST TEMPORÁRIA APLICADA', userId, userName, userNumber, messageText, null, `Insistiu no Rate Limit Stage 2.`, `Blacklist por 48h aplicada. E vai ser Kickado se estiver em grupo.`);
+
                 return {
                     allowed: false,
                     reason: 'AUTO_BLACKLIST_TRIGGERED',
-                    overAttempts: userData.overAttempts,
-                    action: 'ADD_TO_BLACKLIST'
+                    action: 'KICK_SILENT'
                 };
             }
 
+            // Apenas repetição do Stage 1 silencioso para logs
             this.userRateLimit?.set(userId, userData);
             return {
                 allowed: false,
-                reason: 'BLOQUEADO_REINCIDÊNCIA',
-                timePassedSec,
-                timeRemainingSec,
-                blockExpireTime,
-                overAttempts: userData.overAttempts
+                reason: 'BLOQUEADO_REINCIDENCIA_SILENTE'
             };
         }
 
-        // ═══ RESETA JANELA SE EXPIROU ═══
+        // ═══ RESETA JANELA SE EXPIROU (O user cumpriu o cooldown) ═══
         if (now - userData.windowStart >= this.hourlyWindow) {
+            // Se ele tinha passado por penalties (ex: cumpriu os 30 min e tá livre) e resvalar de novo,
+            // A regra diz: "se falar novamente sub-30min (verificado acima), blaclist". 
+            // Se resvalar aqui, é porque ele esperou o blockedUntil terminar. 
+            // Porém, o count zera a cada HORA desde a primeira msg dele hoje.
             userData.windowStart = now;
             userData.count = 0;
             userData.blockedUntil = 0;
             userData.overAttempts = 0;
-            userData.warnings = 0;
             userData.blocked_at = null;
-            userData.blocked_by_warning = false;
         }
 
         // ═══ INCREMENTA CONTADOR ═══
         userData.count++;
 
-        // ═══ VERIFICA SE PASSOU DO LIMITE ═══
-        if (userData.count > this.hourlyLimit) {
-            userData.blockedUntil = now + this.blockDuration;
+        // ═══ VERIFICA SE PASSOU DO LIMITE (ESTÁGIO 1) ═══
+        if (!userData.blockedUntil && userData.count > limitToUse) {
+            userData.blockedUntil = now + penaltyDurationStage1; // 30 mins block
             userData.blocked_at = now;
-            userData.blocked_by_warning = true;
-            userData.warnings++;
+            userData.penaltyStage = 1;
+            userData.overAttempts = 0; // zera as tentativas de falha pós bloqueio
 
             this._logRateLimitAttempt(
-                '⚠️ LIMITE EXCEDIDO',
+                '⚠️ [STAGE 1] LIMITE EXCEDIDO',
                 userId,
                 userName,
                 userNumber,
                 messageText,
                 quotedMessage,
-                `Mensagens: ${userData.count}/${this.hourlyLimit}`,
-                `Bloqueado por 1 hora`
+                `Mensagens: ${userData.count}/${limitToUse}`,
+                `Bloqueado por 30 minutos`
             );
 
             this.userRateLimit?.set(userId, userData);
@@ -305,24 +318,9 @@ class ModerationSystem {
                 allowed: false,
                 reason: 'LIMITE_HORARIO_EXCEDIDO',
                 messagesCount: userData.count,
-                limit: this.hourlyLimit,
-                blockDurationMinutes: 60
+                limit: limitToUse,
+                blockDurationMinutes: 30
             };
-        }
-
-        // ═══ AVISO DE PROXIMIDADE DO LIMITE ═══
-        const percentualUso = (userData.count / this.hourlyLimit) * 100;
-        if (percentualUso >= 80 && userData.count > 0) {
-            this._logRateLimitAttempt(
-                '⚡ AVISO: PROXIMIDADE DO LIMITE',
-                userId,
-                userName,
-                userNumber,
-                messageText,
-                quotedMessage,
-                `${userData.count}/${this.hourlyLimit} (${percentualUso.toFixed(1)}%)`,
-                `Faltam ${this.hourlyLimit - userData.count} mensagens`
-            );
         }
 
         this.userRateLimit?.set(userId, userData);
@@ -331,8 +329,7 @@ class ModerationSystem {
             allowed: true,
             reason: 'OK',
             messagesCount: userData.count,
-            limit: this.hourlyLimit,
-            percentualUso
+            limit: limitToUse
         };
     }
 
@@ -545,11 +542,23 @@ class ModerationSystem {
         return this.antiStickerGroups.has(groupId);
     }
 
+    public toggleAntiVideo(groupId: string, enable: boolean = true): boolean {
+        if (enable) this.antiVideoGroups.add(groupId);
+        else this.antiVideoGroups.delete(groupId);
+        this._saveAllSettings();
+        return enable;
+    }
+
+    public isAntiVideoActive(groupId: string): boolean {
+        return this.antiVideoGroups.has(groupId);
+    }
+
     private _loadAllSettings(): void {
         this._loadSettingsSet(this.antiLinkPath, this.antiLinkGroups);
         this._loadSettingsSet(this.antiFakePath, this.antiFakeGroups);
         this._loadSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._loadSettingsSet(this.antiStickerPath, this.antiStickerGroups);
+        this._loadSettingsSet(this.antiVideoPath, this.antiVideoGroups);
         this._loadSettingsMap(this.warningsPath, this.warnings);
     }
 
@@ -558,6 +567,7 @@ class ModerationSystem {
         this._saveSettingsSet(this.antiFakePath, this.antiFakeGroups);
         this._saveSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._saveSettingsSet(this.antiStickerPath, this.antiStickerGroups);
+        this._saveSettingsSet(this.antiVideoPath, this.antiVideoGroups);
         this._saveSettingsMap(this.warningsPath, this.warnings);
     }
 
@@ -705,7 +715,9 @@ class ModerationSystem {
         const list = this.loadBlacklistDataSync();
         if (!Array.isArray(list)) return false;
 
-        const found = list.find(entry => entry && entry.id === userId);
+        // Limpeza de JID para comparação robusta
+        const cleanUserId = typeof userId === 'string' ? userId.split(':')[0] : userId;
+        const found = list.find(entry => entry && (entry.id === cleanUserId || entry.id === userId));
 
         if (found) {
             if (found.expiresAt && found.expiresAt !== 'PERMANENT') {
@@ -720,20 +732,78 @@ class ModerationSystem {
         return false;
     }
 
+    /**
+     * Registra uma tentativa de comando não autorizado e aplica punição progressiva
+     */
+    public recordUnauthorizedCommandAttempt(userId: string, userName: string, userNumber: string, command: string, isGroup: boolean = false): any {
+        const now = Date.now();
+        let userData = this.userRateLimit.get(userId) || {
+            windowStart: now,
+            count: 0,
+            blockedUntil: 0,
+            overAttempts: 0,
+            penaltyStage: 0,
+            blocked_at: null,
+            time_blocked: null
+        };
+
+        // Uso indevido de comando VIP é tratado como spam agressivo (+10 msgs equivalentes)
+        userData.count += 10;
+        userData.overAttempts++;
+
+        this._logRateLimitAttempt(
+            '🚫 [COMANDO RESTRITO]',
+            userId,
+            userName,
+            userNumber,
+            `Tentou usar #${command}`,
+            null,
+            `Tentativa não autorizada (${userData.overAttempts}x)`,
+            'Punição acelerada aplicada'
+        );
+
+        // Se passar do limite ou se já estiver bloqueado, acelera a punição
+        if (userData.overAttempts >= 2) {
+            // Estágio 3 direto (Blacklist 2 dias)
+            const duration = 2 * 24 * 60 * 60 * 1000;
+            this.addToBlacklist(userId, userName, userNumber, 'abuso_comandos_vip', duration);
+            userData.penaltyStage = 3;
+            this.userRateLimit.set(userId, userData);
+
+            return {
+                allowed: false,
+                reason: 'AUTO_BLACKLIST_TRIGGERED',
+                action: 'KICK_SILENT'
+            };
+        } else if (userData.overAttempts === 1) {
+            // Estágio 1: Bloqueio de 1 hora (mais longo que spam comum)
+            userData.blockedUntil = now + (60 * 60 * 1000);
+            userData.blocked_at = now;
+            userData.penaltyStage = 1;
+            this.userRateLimit.set(userId, userData);
+
+            return {
+                allowed: false,
+                reason: 'WARNING_RIGOROUS',
+                action: 'WARN_STOP'
+            };
+        }
+
+        this.userRateLimit.set(userId, userData);
+        return { allowed: false, reason: 'UNAUTHORIZED_COMMAND' };
+    }
+
+
     public addToBlacklist(userId: string, userName: string, userNumber: string, reason: string = 'spam', expiryMs: number | null = null): any {
         const list = this.loadBlacklistDataSync();
         const arr = Array.isArray(list) ? list : [];
-
-        if (arr.find(x => x && x.id === userId)) {
-            return { success: false, message: 'Já estava na blacklist' };
-        }
 
         let expiresAt: string | number = 'PERMANENT';
         if (expiryMs) {
             expiresAt = Date.now() + expiryMs;
         }
 
-        const entry = {
+        let entry = {
             id: userId,
             name: userName,
             number: userNumber,
@@ -743,7 +813,19 @@ class ModerationSystem {
             severity: reason === 'abuse' ? 'CRÍTICO' : reason === 'spam' ? 'ALTO' : 'NORMAL'
         };
 
-        arr.push(entry);
+        const hasPrev = arr.find(x => x && x.id === userId);
+
+        if (hasPrev) {
+            this.logger.log(`⚠️ User ${userName} reincidiu na Blacklist. Convertendo para PERMANENT.`);
+            expiresAt = 'PERMANENT';
+            const idx = arr.findIndex(x => x.id === userId);
+            arr[idx].expiresAt = 'PERMANENT';
+            arr[idx].severity = 'MAXIMO';
+            arr[idx].reason = 'spam_agravado';
+            entry = arr[idx];
+        } else {
+            arr.push(entry);
+        }
 
         try {
             fs.writeFileSync(
@@ -799,104 +881,11 @@ class ModerationSystem {
                 return false;
             }
         }
-
         return false;
     }
 
-    /**
-    * Carrega dados da blacklist
-    */
     public loadBlacklistDataSync(): any[] {
-        try {
-            const filePath = this.blacklistPath || './database/datauser/blacklist.json';
-
-            if (!fs.existsSync(filePath)) {
-                return [];
-            }
-
-            const data = fs.readFileSync(filePath, 'utf8');
-            if (!data || !data.trim()) {
-                return [];
-            }
-
-            return JSON.parse(data);
-        } catch (e: any) {
-            this.logger.error('Erro ao carregar blacklist:', e.message);
-            return [];
-        }
-    }
-
-
-    public getStats(): any {
-        const blacklist = this.loadBlacklistDataSync();
-        return {
-            mutedUsers: this.mutedUsers?.size || 0,
-            bannedUsers: this.bannedUsers?.size || 0,
-            antiLinkGroups: this.antiLinkGroups?.size || 0,
-            spamCacheSize: this.spamCache?.size || 0,
-            hourlyBlockedUsers: Array.from(this.userRateLimit?.entries() || []).filter(([_, data]: [string, any]) => data.blockedUntil > Date.now()).length,
-            blacklistedUsers: blacklist?.length || 0
-        };
-    }
-
-    public reset(): void {
-        this.mutedUsers?.clear();
-        this.antiLinkGroups?.clear();
-        this.muteCounts?.clear();
-        this.bannedUsers?.clear();
-        this.spamCache?.clear();
-        this.userRateLimit?.clear();
-        this.logger?.info('🔄 Sistema de moderação resetado');
-    }
-    /**
-    * Retorna um relatório formatado da blacklist
-    */
-    public getBlacklistReport(): string {
-        const list = this.loadBlacklistDataSync();
-        if (!Array.isArray(list) || list.length === 0) {
-            return '🕳️ *A Blacklist está vazia.*';
-        }
-
-        let report = `🚫 *RELATÓRIO DE BLACKLIST (${list.length})*\n\n`;
-        list.slice(0, 15).forEach((entry, i) => {
-            const date = new Date(entry.addedAt).toLocaleDateString('pt-BR');
-            const expires = entry.expiresAt === 'PERMANENT' ? 'Permanente' : new Date(entry.expiresAt).toLocaleDateString('pt-BR');
-            report += `${i + 1}. *${entry.name}* (${entry.number})\n`;
-            report += `   └ Razão: ${entry.reason} | Expira: ${expires}\n`;
-        });
-
-        if (list.length > 15) {
-            report += `\n_...e mais ${list.length - 15} registros._`;
-        }
-
-        return report;
-    }
-
-    /**
-    * Retorna um relatório formatado de usuários silenciados (mute)
-    */
-    public getMutedReport(currentGroupJid: string): string {
-        const now = Date.now();
-        const groupMutes: any[] = [];
-
-        this.mutedUsers.forEach((data, key) => {
-            const [groupId, userId] = key.split('_');
-            if (groupId === currentGroupJid && data.expires > now) {
-                groupMutes.push({ userId, ...data });
-            }
-        });
-
-        if (groupMutes.length === 0) {
-            return '🔊 *Ninguém está silenciado neste grupo.*';
-        }
-
-        let report = `🔇 *USUÁRIOS SILENCIADOS NESTE GRUPO (${groupMutes.length})*\n\n`;
-        groupMutes.forEach((m, i) => {
-            const timeLeft = Math.ceil((m.expires - now) / 60000);
-            report += `${i + 1}. @${m.userId.split('@')[0]} — ${timeLeft} min restantes\n`;
-        });
-
-        return report;
+        return this._loadBlacklist();
     }
 }
 

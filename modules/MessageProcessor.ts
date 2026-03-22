@@ -42,40 +42,23 @@ class MessageProcessor {
                 return String(remoteJid).split(':')[0].split('@')[0];
             }
 
-            // Se for grupo, obtém do participant
-            if (key.participant) {
-                const participant = String(key.participant);
-                if (participant.includes('@s.whatsapp.net')) {
-                    return participant.split(':')[0].split('@')[0];
+            // Fallback robusto: se houver participante, tenta extrair o número de qualquer JID
+            const participant = key.participant || remoteJid;
+            if (participant) {
+                const jidStr = String(participant);
+                // Extrai apenas a parte numérica antes do primeiro @ ou :
+                const parts = jidStr.split('@')[0].split(':');
+                const rawNumber = parts[0];
+
+                // Se tiver pelo menos 5 dígitos, consideramos um número válido
+                if (rawNumber && rawNumber.length >= 5) {
+                    return rawNumber;
                 }
-                if (participant.includes('@lid')) {
-                    const limpo = participant.split(':')[0];
-                    const digitos = limpo.replace(/\D/g, '');
 
-                    // If libphonenumber-js is available, try to normalize to E.164 (without '+')
-                    try {
-                        const cfg = ConfigManager.getInstance();
-                        let defaultCountry = null;
-                        if (cfg?.BOT_NUMERO_REAL && String(cfg.BOT_NUMERO_REAL).startsWith('244')) {
-                            defaultCountry = 'AO';
-                        }
-
-                        if (parsePhoneNumberFromString) {
-                            const pn = defaultCountry
-                                ? parsePhoneNumberFromString(digitos, defaultCountry)
-                                : parsePhoneNumberFromString(digitos);
-
-                            if (pn && pn.isValid && pn.isValid()) {
-                                // return E.164 without '+' to match JID numeric part
-                                return String(pn.number).replace(/^\+/, '');
-                            }
-                        }
-                    } catch (err) {
-                        // fallback to raw digits if parsing fails
-                    }
-
-                    // Fallback: return the raw extracted digits (no forced country prefix)
-                    if (digitos.length > 0) return digitos;
+                // Se for @lid ou similar e falhou acima, tenta limpar tudo que não é dígito
+                if (jidStr.includes('@lid') || jidStr.includes('@s.whatsapp.net')) {
+                    const digits = jidStr.split('@')[0].replace(/\D/g, '');
+                    if (digits.length >= 5) return digits;
                 }
             }
 
@@ -267,15 +250,20 @@ class MessageProcessor {
             }
 
             // Try to get participant from context or from quoted message key
-            let participantJidCitado = context.participant || null;
+            let participantJidCitado = context.participant || context.remoteJid || null;
 
-            // Em PV, não há participant. Inferimos que é reply ao bot
+            // Em PV, não há participant explícito às vezes. 
+            // Se for resposta ao bot, inferimos
             if (!participantJidCitado) {
-                const messageRemoteJid = message.key?.remoteJid;
-                const isPV = !String(messageRemoteJid || '').endsWith('@g.us');
+                const isPV = !String(message.key?.remoteJid || '').endsWith('@g.us');
                 if (isPV) {
-                    participantJidCitado = `${this.config.BOT_NUMERO_REAL}@s.whatsapp.net`;
-                    this.logger?.debug('🔍 [PV REPLY] Detectado reply em PV - assumindo reply ao bot');
+                    // Se a mensagem citada veio de nós (bot), o autor é o bot
+                    if (context.fromMe) {
+                        participantJidCitado = `${this.config.BOT_NUMERO_REAL}@s.whatsapp.net`;
+                    } else {
+                        // Senão é a pessoa com quem estamos a falar
+                        participantJidCitado = message.key.remoteJid;
+                    }
                 }
             }
 
@@ -467,6 +455,25 @@ class MessageProcessor {
             return false;
         }
     }
+
+    /**
+    * Detecta se tem vídeo
+    */
+    hasVideo(message: any): boolean {
+        try {
+            const tipo = getContentType(message.message);
+            if (tipo === 'videoMessage') return true;
+
+            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
+                const subMsg = message.message[tipo].message;
+                return getContentType(subMsg) === 'videoMessage';
+            }
+            return false;
+        } catch (e: any) {
+            return false;
+        }
+    }
+
 
     /**
     * Detecta se tem documento

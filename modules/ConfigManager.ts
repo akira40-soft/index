@@ -92,7 +92,7 @@ class ConfigManager {
 
         // ═══ PORTAS E URLS ═══
         this.PORT = Number(process.env?.PORT || process.env?.HF_PORT || 3000);
-        this.API_URL = process.env?.API_URL || process.env?.HF_API_URL || 'https://akra35567-akira.hf.space/api/akira';
+        this.API_URL = process.env?.API_URL || process.env?.HF_API_URL || 'https://akra35567-akira-softedge.hf.space';
         this.API_TIMEOUT = Number(process.env?.API_TIMEOUT || 120000);
         this.API_RETRY_ATTEMPTS = Number(process.env?.API_RETRY_ATTEMPTS || 3);
         this.API_RETRY_DELAY = Number(process.env?.API_RETRY_DELAY || 1000);
@@ -106,7 +106,7 @@ class ConfigManager {
 
         // ═══ PATHS E FOLDERS ═══
         const isHuggingFaceSpace = process.env?.HF_SPACE === 'true' || process.env?.NODE_ENV === 'production';
-        const baseDataPath = isHuggingFaceSpace ? '/tmp/akira_data' : '.';
+        const baseDataPath = process.env?.DATA_DIR || (isHuggingFaceSpace ? '/tmp/akira_data' : '.');
 
         this.TEMP_FOLDER = process.env?.TEMP_FOLDER || path.join(baseDataPath, 'temp');
         this.AUTH_FOLDER = process.env?.AUTH_FOLDER || path.join(baseDataPath, 'auth_info_baileys');
