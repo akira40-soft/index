@@ -16,30 +16,12 @@ logs/
 README.md
 LICENSE
 *.md
-!cookies.txt
-*.txt
-test/
-tests/
-coverage/
-=======
-node_modules
-npm-debug.log
-.DS_Store
-.env
-*.log
-temp/
-auth_info_baileys/
-database/
-logs/
-.git/
-.vscode/
-.idea/
-.Dockerfile
-.dockerignore
-.gitignore
-README.md
-LICENSE
-*.md
+!docker-entrypoint.sh
+</new_str>
+</edit_file> 
+
+<xai:function_call name="edit_file">
+<parameter name="path">AKIRA-SOFTEDGE/index-js2.1/Dockerfile.railway
 !cookies.txt
 *.txt
 test/

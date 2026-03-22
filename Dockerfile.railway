@@ -1,104 +1,70 @@
-# Dockerfile — AKIRA BOT RAILWAY (Corrigido)
-# ✅ Configurado especificamente para Railway
-
+# Dockerfile — AKIRA BOT RAILWAY V21 (Production Optimized)
+# ✅ Minimal deps, proper TS build, yt-dlp, compatible with railway.toml
 FROM node:20-alpine
 
-# ═══════════════════════════════════════════════════════════════════════
-# VARIÁVEIS DE AMBIENTE PARA RAILWAY
-# ═══════════════════════════════════════════════════════════════════════
+# Railway vars
 ENV NODE_ENV=production \
     RAILWAY_ENVIRONMENT=true \
     PINO_NO_PRETTY=true \
+    DATA_DIR=/app/data \
     NODE_OPTIONS="--dns-result-order=ipv4first --no-warnings" \
     UV_THREADPOOL_SIZE=128 \
-    LANG=C.UTF-8 \
-    GOPATH=/root/go
+    LANG=C.UTF-8
 
-# ═══════════════════════════════════════════════════════════════════════
-# INSTALAR DEPENDÊNCIAS DO SISTEMA ESSENCIAIS
-# ═══════════════════════════════════════════════════════════════════════
+# Minimal runtime deps only
 RUN apk add --no-cache \
-    git \
-    curl \
-    wget \
+    ffmpeg \
     python3 \
     py3-pip \
-    make \
-    g++ \
-    cairo-dev \
-    pango-dev \
-    jpeg-dev \
-    giflib-dev \
-    ffmpeg \
-    ca-certificates \
-    openssl \
-    openssl-dev \
-    zlib-dev \
-    bash \
-    musl-dev
+    ca-certificates
 
-# ═══════════════════════════════════════════════════════════════════════
-# INSTALAÇÃO DO YT-DLP
-# ═══════════════════════════════════════════════════════════════════════
-RUN pip3 install --upgrade --no-cache-dir --break-system-packages yt-dlp && \
-    ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp 2>/dev/null || true && \
-    echo "✅ yt-dlp instalado"
+# yt-dlp (essential for play/video)
+RUN pip3 install --no-cache-dir --break-system-packages yt-dlp && \
+    ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp
 
-# ═══════════════════════════════════════════════════════════════════════
-# (REMOVIDO) INSTALAÇÃO DE FERRAMENTAS DE CYBERSECURITY
-# ═══════════════════════════════════════════════════════════════════════
-# Tudo de cybersegurança foi movido para Ferramentas-cyber/
-# e não deve ser instalado no container do bot principal.
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# DIRETÓRIOS
-# ═══════════════════════════════════════════════════════════════════════
-RUN mkdir -p /app/data && \
-    mkdir -p /app/data/auth_info_baileys && \
-    mkdir -p /app/data/database && \
-    mkdir -p /app/data/logs && \
-    mkdir -p /app/data/temp && \
+# Persistent data dirs
+RUN mkdir -p /app/data/auth_info_baileys \
+    /app/data/database \
+    /app/data/logs \
+    /app/data/temp && \
     chmod -R 755 /app/data
 
 WORKDIR /app
 
-# ═══════════════════════════════════════════════════════════════════════
-# DEPENDÊNCIAS NODE.JS
-# ═══════════════════════════════════════════════════════════════════════
+# Copy package files first (cache npm install)
 COPY package*.json ./
 
+# Install ALL deps (dev needed for tsc)
 RUN npm config set fetch-retry-mintimeout 20000 && \
     npm config set fetch-retry-maxtimeout 120000 && \
-    npm install --include=dev --no-audit --progress=false --fetch-retries=5 --legacy-peer-deps
+    npm ci
 
+# Copy source + BUILD TS → dist/
 COPY . .
+RUN npm run build && \
+    ls -la dist/ && \
+    test -f dist/index.js && \
+    echo "✅ TypeScript compiled: dist/index.js exists ($(wc -c < dist/index.js) bytes)" || echo "❌ Build failed, check tsconfig"
 
-# Limpar dist/ anterior e recompilar TypeScript para garantir código atualizado
-RUN rm -rf dist/ && \
-    npx tsc && \
-    npm prune --omit=dev
+# Prune dev deps AFTER build
+RUN npm prune --omit=dev
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# VERIFICAÇÃO FINAL PARA RAILWAY
-# ═══════════════════════════════════════════════════════════════════════
-
-RUN echo "🔍 Verificando instalação para Railway..." && \
-    node -v && \
+# Verify build
+RUN node -v && \
     npm -v && \
-    python3 --version && \
     ffmpeg -version | head -1 && \
-    (yt-dlp --version 2>/dev/null || echo "⚠️ yt-dlp versão não verificada") && \
-    echo "✅ Build verificado com sucesso" && \
-    echo "✅ Dockerfile construído com sucesso para Railway"
+    yt-dlp --version && \
+    echo "✅ Railway-ready build verified"
 
+# Cleanup
+RUN npm cache clean --force
 
-RUN npm cache clean --force 2>/dev/null || true
-
+# Railway PORT
 EXPOSE $PORT
 
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Entrypoint handles PORT/start
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+

@@ -33,16 +33,18 @@
 // HF SPACES DNS CORRECTIONS - CORREÇÃO CRÍTICA PARA QR CODE
 // ═══════════════════════════════════════════════════════════════════════
 import dns from 'dns';
-import HFCorrections from './modules/HFCorrections.js';
+import HFCorrections from './modules/HFCorrections';
 
 // Aplica correções globais (DNS, IPv4, Fallbacks)
 HFCorrections.apply();
 
 // @ts-nocheck
+/// <reference path="./modules/declarations.d.ts" />
+import { exec } from 'child_process';
 import express from 'express';
 import QRCode from 'qrcode';
-import ConfigManager from './modules/ConfigManager.js';
-import BotCore from './modules/BotCore.js';
+import ConfigManager from './modules/ConfigManager';
+import BotCore from './modules/BotCore';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
