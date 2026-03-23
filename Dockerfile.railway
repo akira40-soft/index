@@ -1,5 +1,5 @@
 # Dockerfile — AKIRA BOT RAILWAY V21 (Production Optimized)
-# ✅ Minimal deps, proper TS build, yt-dlp, compatible with railway.toml
+# ✅ CommonJS build, Alpine-compatible, yt-dlp, railway ready
 FROM node:20-alpine
 
 # Railway vars
@@ -11,7 +11,7 @@ ENV NODE_ENV=production \
     UV_THREADPOOL_SIZE=128 \
     LANG=C.UTF-8
 
-# Minimal runtime deps only (dos2unix incluso para garantir LF nos scripts)
+# Runtime deps + dos2unix para corrigir CRLF em scripts
 RUN apk add --no-cache \
     ffmpeg \
     python3 \
@@ -19,7 +19,7 @@ RUN apk add --no-cache \
     ca-certificates \
     dos2unix
 
-# yt-dlp (essential for play/video)
+# yt-dlp
 RUN pip3 install --no-cache-dir --break-system-packages yt-dlp && \
     ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp
 
@@ -40,27 +40,28 @@ RUN npm config set fetch-retry-mintimeout 20000 && \
     npm config set fetch-retry-maxtimeout 120000 && \
     npm ci
 
-# Copy source + BUILD TS → dist/
+# Copy source
 COPY . .
 
-# ⚠️ CRÍTICO: Converter line endings CRLF→LF no entrypoint (Windows → Linux)
+# Corrigir entrypoint CRLF→LF antes de tudo
 RUN dos2unix /app/docker-entrypoint.sh && \
     chmod +x /app/docker-entrypoint.sh
 
-RUN npm run build && \
-    ls -la dist/ && \
-    test -f dist/index.js && \
-    echo "✅ TypeScript compiled: dist/index.js exists ($(wc -c < dist/index.js) bytes)" || echo "❌ Build failed, check tsconfig"
+# BUILD TS → dist/ — falha explicitamente se tsc falhar
+RUN echo "🔨 Building TypeScript..." && \
+    npm run build 2>&1 && \
+    echo "✅ Build OK" && \
+    ls -la dist/index.js
 
 # Prune dev deps AFTER build
 RUN npm prune --omit=dev
 
-# Verify build
+# Verify runtime tools
 RUN node -v && \
     npm -v && \
     ffmpeg -version | head -1 && \
     yt-dlp --version && \
-    echo "✅ Railway-ready build verified"
+    echo "✅ Railway-ready!"
 
 # Cleanup
 RUN npm cache clean --force

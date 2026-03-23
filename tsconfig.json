@@ -1,8 +1,8 @@
 {
     "compilerOptions": {
-        "target": "ESNext",
+        "target": "ES2022",
         "module": "ESNext",
-        "moduleResolution": "node",
+        "moduleResolution": "Bundler",
         "lib": [
             "ES2022",
             "dom"
@@ -17,12 +17,19 @@
         "noImplicitAny": false,
         "skipLibCheck": true,
         "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "allowImportingTsExtensions": false,
         "forceConsistentCasingInFileNames": true,
-        "resolveJsonModule": true
+        "resolveJsonModule": true,
+        "verbatimModuleSyntax": false
     },
     "include": [
         "**/*.d.ts",
         "modules/**/*.ts",
         "index.ts"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist"
     ]
 }
