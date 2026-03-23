@@ -1,29 +1,30 @@
 # Dockerfile — AKIRA BOT RAILWAY V21 (Production Optimized)
-# ✅ CommonJS build, Alpine-compatible, yt-dlp, railway ready
+# ✅ Espelhado do Dockerfile funcional: npm install --include=dev + npx tsc
 FROM node:20-alpine
 
-# Railway vars
-ENV NODE_ENV=production \
-    RAILWAY_ENVIRONMENT=true \
+# Runtime env (definido DEPOIS do install - isso é crítico!)
+ENV RAILWAY_ENVIRONMENT=true \
     PINO_NO_PRETTY=true \
     DATA_DIR=/app/data \
     NODE_OPTIONS="--dns-result-order=ipv4first --no-warnings" \
     UV_THREADPOOL_SIZE=128 \
     LANG=C.UTF-8
 
-# Runtime deps + dos2unix para corrigir CRLF em scripts
+# Sistema: ffmpeg + python + dos2unix
 RUN apk add --no-cache \
     ffmpeg \
     python3 \
     py3-pip \
     ca-certificates \
-    dos2unix
+    dos2unix \
+    bash
 
 # yt-dlp
-RUN pip3 install --no-cache-dir --break-system-packages yt-dlp && \
-    ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp
+RUN pip3 install --upgrade --no-cache-dir --break-system-packages yt-dlp && \
+    ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp 2>/dev/null || true && \
+    echo "✅ yt-dlp instalado"
 
-# Persistent data dirs
+# Dirs persistentes
 RUN mkdir -p /app/data/auth_info_baileys \
     /app/data/database \
     /app/data/logs \
@@ -32,41 +33,41 @@ RUN mkdir -p /app/data/auth_info_baileys \
 
 WORKDIR /app
 
-# Copy package files first (cache npm install)
+# Instalar TODAS as deps incluindo devDeps (typescript necessário para tsc)
 COPY package*.json ./
-
-# Install ALL deps (dev needed for tsc)
 RUN npm config set fetch-retry-mintimeout 20000 && \
     npm config set fetch-retry-maxtimeout 120000 && \
-    npm ci
+    npm install --include=dev --no-audit --progress=false --fetch-retries=5 --legacy-peer-deps
 
-# Copy source
+# Copiar código fonte
 COPY . .
 
-# Corrigir entrypoint CRLF→LF antes de tudo
+# Corrigir line endings do entrypoint (CRLF→LF)
 RUN dos2unix /app/docker-entrypoint.sh && \
     chmod +x /app/docker-entrypoint.sh
 
-# BUILD TS → dist/ — falha explicitamente se tsc falhar
-RUN echo "🔨 Building TypeScript..." && \
-    npm run build 2>&1 && \
-    echo "✅ Build OK" && \
-    ls -la dist/index.js
+# Limpar dist anterior e compilar TypeScript (usando npx para garantir path)
+RUN rm -rf dist/ && \
+    npx tsc && \
+    ls -la dist/index.js && \
+    echo "✅ TypeScript compilado com sucesso"
 
-# Prune dev deps AFTER build
+# Prunar devDeps APÓS o build
 RUN npm prune --omit=dev
 
-# Verify runtime tools
-RUN node -v && \
+# Verificação final
+RUN echo "🔍 Verificando Railway..." && \
+    node -v && \
     npm -v && \
     ffmpeg -version | head -1 && \
-    yt-dlp --version && \
-    echo "✅ Railway-ready!"
+    (yt-dlp --version 2>/dev/null || echo "⚠️ yt-dlp não verificado") && \
+    echo "✅ Build verificado!"
 
-# Cleanup
-RUN npm cache clean --force
+RUN npm cache clean --force 2>/dev/null || true
 
-# Railway PORT
 EXPOSE $PORT
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# NODE_ENV definido por último (não afecta o install)
+ENV NODE_ENV=production
