@@ -11,12 +11,13 @@ ENV NODE_ENV=production \
     UV_THREADPOOL_SIZE=128 \
     LANG=C.UTF-8
 
-# Minimal runtime deps only
+# Minimal runtime deps only (dos2unix incluso para garantir LF nos scripts)
 RUN apk add --no-cache \
     ffmpeg \
     python3 \
     py3-pip \
-    ca-certificates
+    ca-certificates \
+    dos2unix
 
 # yt-dlp (essential for play/video)
 RUN pip3 install --no-cache-dir --break-system-packages yt-dlp && \
@@ -41,6 +42,11 @@ RUN npm config set fetch-retry-mintimeout 20000 && \
 
 # Copy source + BUILD TS → dist/
 COPY . .
+
+# ⚠️ CRÍTICO: Converter line endings CRLF→LF no entrypoint (Windows → Linux)
+RUN dos2unix /app/docker-entrypoint.sh && \
+    chmod +x /app/docker-entrypoint.sh
+
 RUN npm run build && \
     ls -la dist/ && \
     test -f dist/index.js && \
@@ -62,9 +68,4 @@ RUN npm cache clean --force
 # Railway PORT
 EXPOSE $PORT
 
-# Entrypoint handles PORT/start
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-
