@@ -1,0 +1,138 @@
+{
+  "name": "akira-bot-v21",
+  "version": "21.0.0",
+  "description": "🤖 AKIRA BOT V21 — DIGITAÇÃO REALISTA + DINÂMICAS WHATSAPP COMPLETAS + STT DEEPGRAM + TTS + COMANDOS COMPLETOS",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "node --watch index.js",
+    "build": "tsc",
+    "clean": "rm -rf temp auth_info_baileys node_modules package-lock.json",
+    "reinstall": "npm run clean && npm install",
+    "install-ffmpeg": "npm install ffmpeg-static --save",
+    "fix-deps": "npm audit fix --force",
+    "test": "echo \"✅ Bot configurado com sucesso!\" && node -v && npm -v",
+    "hf-start": "NODE_ENV=production node index.js",
+    "hf-dev": "NODE_ENV=development node index.js"
+  },
+  "dependencies": {
+    "@distube/ytdl-core": "^4.14.4",
+    "@imgly/background-removal": "^1.4.5",
+    "@whiskeysockets/baileys": "^6.7.8",
+    "async": "^3.2.5",
+    "axios": "^1.7.7",
+    "bufferutil": "^4.0.8",
+    "chalk": "^4.1.2",
+    "cheerio": "^1.2.0",
+    "content-disposition": "^0.5.4",
+    "cors": "^2.8.5",
+    "debug": "^4.3.4",
+    "dotenv": "^16.4.1",
+    "express": "^4.21.1",
+    "express-rate-limit": "^8.2.1",
+    "fluent-ffmpeg": "^2.1.2",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.2.0",
+    "google-tts-api": "^2.0.2",
+    "helmet": "^7.1.0",
+    "https-proxy-agent": "^7.0.2",
+    "joi": "^17.12.2",
+    "libphonenumber-js": "^1.9.50",
+    "lru-cache": "^10.2.0",
+    "mime-types": "^2.1.35",
+    "moment": "^2.30.1",
+    "moment-timezone": "^0.5.45",
+    "ms": "^2.1.3",
+    "node-cache": "^5.1.2",
+    "node-webpmux": "^1.1.2",
+    "parse-ms": "^3.0.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "rate-limiter-flexible": "^2.4.2",
+    "sharp": "^0.32.6",
+    "socks-proxy-agent": "^8.0.3",
+    "tmp-promise": "^3.0.3",
+    "url-parse": "^1.5.10",
+    "utf-8-validate": "^6.0.3",
+    "validator": "^13.11.0",
+    "winston": "^3.11.0",
+    "ws": "^8.17.1",
+    "yt-search": "^2.10.3"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.14.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/express-rate-limit": "^5.1.3",
+    "@types/fluent-ffmpeg": "^2.1.21",
+    "@types/helmet": "^0.0.48",
+    "@types/moment": "^2.13.0",
+    "@types/moment-timezone": "^0.5.30",
+    "@types/ms": "^2.1.0",
+    "@types/node": "^20.19.33",
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "whatsapp-bot",
+    "akira-bot",
+    "baileys",
+    "whatsapp-api",
+    "chatbot",
+    "sticker-maker",
+    "youtube-downloader",
+    "text-to-speech",
+    "speech-to-text",
+    "deepgram",
+    "tts",
+    "stt",
+    "moderation-bot",
+    "group-manager",
+    "huggingface",
+    "hf-spaces"
+  ],
+  "author": "Isaac Quarenta",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isaacquarenta/akira-bot-v21.git"
+  },
+  "bugs": {
+    "url": "https://github.com/isaacquarenta/akira-bot-v21/issues"
+  },
+  "homepage": "https://github.com/isaacquarenta/akira-bot-v21#readme",
+  "funding": {
+    "type": "individual",
+    "url": "https://ko-fi.com/isaacquarenta"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "index.js",
+    "modules/",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "volta": {
+    "node": "18.20.2",
+    "npm": "10.5.0"
+  }
+}
