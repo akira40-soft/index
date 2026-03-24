@@ -146,8 +146,9 @@ class BotCore {
             this.permissionManager = new PermissionManager(this.logger);
             this.stickerViewOnceHandler = new StickerViewOnceHandler(this.sock, this.config);
             this.rateLimiter = new RateLimiter({
-                hourlyLimit: this.config?.HOURLY_LIMIT || 100,
-                maxViolations: this.config?.MAX_VIOLATIONS || 3
+                pvLimit: this.config.RATE_LIMIT_PV,
+                groupLimit: this.config.RATE_LIMIT_GROUP,
+                maxViolations: this.config.MAX_VIOLATIONS
             });
 
             this.paymentManager = new PaymentManager(this, this.subscriptionManager);
@@ -370,17 +371,8 @@ class BotCore {
 
             if (this.moderationSystem?.isBlacklisted(numeroReal)) return;
 
-            // ═══ RATE LIMIT CHECK ═══
-            if (this.rateLimiter) {
-                const isOwner = this.config.isDono(numeroReal);
-                const rateCheck = this.rateLimiter.check(numeroReal, isOwner);
-                if (!rateCheck.allowed) {
-                    if (rateCheck.reason === 'BLACKLISTED') return;
-                    this.logger.warn(`🛑 [RATE-LIMIT] Bloqueado: ${numeroReal}`);
-                    await this.sock.sendMessage(remoteJid, { text: `⚠️ *Acalma-te!* Você atingiu o limite de mensagens por hora. Tente novamente em ${rateCheck.wait} minutos.` }, { quoted: m });
-                    return;
-                }
-            }
+            // ═══ BLACKLIST CHECK ═══
+            if (this.rateLimiter?.isBlacklisted(numeroReal)) return;
 
 
             if (ehGrupo && this.moderationSystem?.isMuted(remoteJid, m.key.participant)) {
@@ -436,6 +428,36 @@ class BotCore {
             }
 
             const replyInfo = this.messageProcessor.extractReplyInfo(m);
+
+            // ═══ NOVO RATE LIMIT CHECK (SELETIVO) ═══
+            if (this.rateLimiter) {
+                const isDirected = this.messageProcessor.isDirectedToBot(m);
+                if (isDirected) {
+                    const isOwner = this.config.isDono(numeroReal);
+
+                    // 1. Check Command Spam (Rapid Fire) - Se ativo no grupo
+                    if (ehGrupo && this.groupManagement && this.moderationSystem) {
+                        const settings = this.groupManagement.groupSettings?.[remoteJid] || {};
+                        if (settings.antispam && !isOwner) {
+                            if (this.moderationSystem.checkSpam(numeroReal)) {
+                                this.logger.warn(`🚫 [COMMAND-SPAM] ${numeroReal} bloqueado por rapid-fire em ${remoteJid}`);
+                                return;
+                            }
+                        }
+                    }
+
+                    // 2. Check Hourly Rate Limit (Avisos Progressivos)
+                    const rateCheck = this.rateLimiter.check(numeroReal, ehGrupo, isOwner, nome);
+
+                    if (!rateCheck.allowed) {
+                        if (rateCheck.message) {
+                            await this.sock.sendMessage(remoteJid, { text: rateCheck.message }, { quoted: m });
+                        }
+                        this.logger.warn(`🛑 [RATE-LIMIT] ${numeroReal} interceptado (${ehGrupo ? 'Grupo' : 'PV'})`);
+                        return;
+                    }
+                }
+            }
 
             // ═══ BARREIRA ANTI-MODERAÇÃO DE MÍDIA ═══
             // Executa para qualquer mídia em grupos, desde que o sender NÃO seja admin

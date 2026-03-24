@@ -320,6 +320,34 @@ class MessageProcessor {
     }
 
     /**
+    * Verifica se a mensagem é direcionada à Akira
+    */
+    isDirectedToBot(message: any): boolean {
+        try {
+            const isGroup = this.getConversationType(message) === 'grupo';
+
+            // Em PV, tudo é direcionado ao bot
+            if (!isGroup) return true;
+
+            const text = this.extractText(message);
+
+            // 1. É um comando (prefixo)
+            if (this.isCommand(text)) return true;
+
+            // 2. Bot foi mencionado
+            if (this.isBotMentioned(message)) return true;
+
+            // 3. É uma resposta ao bot
+            const replyInfo = this.extractReplyInfo(message);
+            if (replyInfo && replyInfo.ehRespostaAoBot) return true;
+
+            return false;
+        } catch (e: any) {
+            return false;
+        }
+    }
+
+    /**
     * Detecta se a mensagem citada é uma mensagem de jogo
     * Retorna o tipo de jogo se for uma mensagem de jogo
     */

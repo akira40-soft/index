@@ -1,4 +1,4 @@
-﻿import fs from 'fs';
+import fs from 'fs';
 import path from 'path';
 import ConfigManager from './ConfigManager.js';
 
@@ -15,8 +15,8 @@ class EconomySystem {
         this.config = ConfigManager.getInstance();
         this.logger = logger;
 
-        // Configurar persistência com process.env.DATA_DIR para Railway
-        const basePath = process.env.DATA_DIR || '/tmp/akira_data';
+        // Configurar persistência centralizada
+        const basePath = this.config.DATABASE_FOLDER || './database';
         this.dbPath = path.join(basePath, 'economy', 'economy.json');
 
         this._ensureFiles();

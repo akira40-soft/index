@@ -52,6 +52,9 @@ class ConfigManager {
     public TTS_SLOW: boolean = false;
     public RATE_LIMIT_WINDOW: number = 0;
     public RATE_LIMIT_MAX_CALLS: number = 0;
+    public RATE_LIMIT_PV: number = 0;
+    public RATE_LIMIT_GROUP: number = 0;
+    public MAX_VIOLATIONS: number = 0;
     public MUTE_DEFAULT_MINUTES: number = 0;
     public MUTE_MAX_DAILY: number = 0;
     public AUTO_BAN_AFTER_MINUTES: number = 0;
@@ -126,8 +129,11 @@ class ConfigManager {
         this.TTS_SLOW = process.env?.TTS_SLOW === 'true';
 
         // ═══ RATE LIMITING ═══
-        this.RATE_LIMIT_WINDOW = Number(process.env?.RATE_LIMIT_WINDOW || 8);
-        this.RATE_LIMIT_MAX_CALLS = Number(process.env?.RATE_LIMIT_MAX_CALLS || 6);
+        this.RATE_LIMIT_WINDOW = Number(process.env?.RATE_LIMIT_WINDOW || 3600); // 1 hora
+        this.RATE_LIMIT_MAX_CALLS = Number(process.env?.RATE_LIMIT_MAX_CALLS || 100);
+        this.RATE_LIMIT_PV = Number(process.env?.RATE_LIMIT_PV || 50);
+        this.RATE_LIMIT_GROUP = Number(process.env?.RATE_LIMIT_GROUP || 100);
+        this.MAX_VIOLATIONS = Number(process.env?.MAX_VIOLATIONS || 3);
 
         // ═══ MODERAÇÃO ═══
         this.MUTE_DEFAULT_MINUTES = Number(process.env?.MUTE_DEFAULT_MINUTES || 5);
