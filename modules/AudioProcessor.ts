@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import googleTTS from 'google-tts-api';
-import ConfigManager from './ConfigManager';
+import ConfigManager from './ConfigManager.js';
 
 class AudioProcessor {
     private config: any;

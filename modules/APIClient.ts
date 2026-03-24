@@ -8,8 +8,8 @@
  */
 
 import axios from 'axios';
-import ConfigManager from './ConfigManager';
-import MediaProcessor from './MediaProcessor';
+import ConfigManager from './ConfigManager.js';
+import MediaProcessor from './MediaProcessor.js';
 
 class APIClient {
     private config: any;
