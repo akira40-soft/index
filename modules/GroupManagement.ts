@@ -51,11 +51,11 @@ class GroupManagement {
      */
     private async _waitForSocketUser(maxRetries = 10): Promise<boolean> {
         for (let i = 0; i < maxRetries; i++) {
-            if (this.sock?.user?.id) return true;
+            if (this.sock?.user?.id || this.sock?.authState?.creds?.me?.id) return true;
             this.logger.debug(`[GroupManagement] Aguardando sock.user... (${i + 1}/${maxRetries})`);
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        return !!this.sock?.user?.id;
+        return !!(this.sock?.user?.id || this.sock?.authState?.creds?.me?.id);
     }
 
     /**
@@ -71,7 +71,7 @@ class GroupManagement {
             return false;
         }
         // Tenta esperar o user se estiver ausente
-        if (!this.sock.user?.id) {
+        if (!(this.sock?.user?.id || this.sock?.authState?.creds?.me?.id)) {
             const ready = await this._waitForSocketUser();
             if (!ready) {
                 this.logger.error('[GroupManagement] Socket não disponível após espera (sock.user ausente)');
@@ -504,7 +504,7 @@ class GroupManagement {
 
             let groupLink = 'Apenas admins podem gerar link';
             try {
-                const myId = this.sock?.user?.id;
+                const myId = this.sock?.user?.id || this.sock?.authState?.creds?.me?.id;
                 if (!myId) {
                     this.logger.warn('[GroupManagement] formatMessage: Meu ID ausente para gerar link');
                 } else {

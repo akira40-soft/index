@@ -547,11 +547,8 @@ class BotCore {
         this.logger.info(`🖼️ [IMAGEM] ${nome}`);
         // Leveling...
         try {
-            // CommandHandler primeiro - Comandos respondem INSTANTANEAMENTE sem simulateTyping
+            // CommandHandler primeiro - Comandos respondem INSTANTANEAMENTE sem delay
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
-                if (this.presenceSimulator) {
-                    await this.presenceSimulator.simulateTicks(m, replyInfo, ehGrupo);
-                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
@@ -607,9 +604,6 @@ class BotCore {
             const caption = this.messageProcessor.extractText(m) || '';
 
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
-                if (this.presenceSimulator) {
-                    await this.presenceSimulator.simulateTicks(m, replyInfo, ehGrupo);
-                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
@@ -653,9 +647,6 @@ class BotCore {
             const caption = this.messageProcessor.extractText(m) || '';
 
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
-                if (this.presenceSimulator) {
-                    await this.presenceSimulator.simulateTicks(m, replyInfo, ehGrupo);
-                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
@@ -720,11 +711,6 @@ class BotCore {
         try {
             if (this.commandHandler) {
                 // Comandos não devem ter delay de presença (ex: *ping deve ser instantâneo)
-                if (this.messageProcessor.isCommand(texto)) {
-                    if (this.presenceSimulator) {
-                        await this.presenceSimulator.simulateTicks(m, replyInfo, ehGrupo);
-                    }
-                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto, replyInfo, ehGrupo });
                 if (handled) return;
             }
