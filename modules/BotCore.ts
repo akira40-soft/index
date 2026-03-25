@@ -98,6 +98,7 @@ class BotCore {
             this.logger.info('🚀 Inicializando BotCore...');
             HFCorrections.apply();
             this.config.validate();
+            this.config.logConfig();
             await this.initializeComponents();
             return true;
         } catch (error: any) {

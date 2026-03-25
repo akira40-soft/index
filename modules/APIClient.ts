@@ -24,6 +24,7 @@ class APIClient {
         this.requestCount = 0;
         this.errorCount = 0;
         this.mediaProcessor = new MediaProcessor(this.logger);
+        this.logger.info(`🔌 [API] Cliente inicializado. URL Base: ${this.config.API_URL}`);
     }
 
     /**
@@ -258,7 +259,11 @@ class APIClient {
                 };
             }
         } catch (error: any) {
-            this.logger.error('[API] Erro ao processar mensagem:', error.message);
+            const status = error.response?.status;
+            const data = error.response?.data ? JSON.stringify(error.response.data) : 'N/A';
+            this.logger.error(`[API] Erro ao processar mensagem (Status: ${status || 'NETWORK'}):`, error.message);
+            if (data !== 'N/A') this.logger.error(`[API] Detalhes do erro:`, data);
+
             return {
                 success: false,
                 resposta: 'Deu um erro interno aqui. Tenta depois?',

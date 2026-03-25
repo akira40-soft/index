@@ -1092,32 +1092,39 @@ class MediaProcessor {
                 return null;
             }
 
-            const extractMediaContainer = (msgObj: any): any => {
-                if (!msgObj || typeof msgObj !== 'object') return null;
+            const extractMediaContainer = (msgObj: any, depth: number = 0): any => {
+                if (!msgObj || typeof msgObj !== 'object' || depth > 10) return null;
+
+                // Se já é o container direto
                 if (msgObj.mediaKey && (msgObj.url || msgObj.directPath)) return msgObj;
 
-                const wraps = [
-                    msgObj.viewOnceMessageV2?.message,
-                    msgObj.viewOnceMessageV2Extension?.message,
-                    msgObj.viewOnceMessage?.message,
-                    msgObj.ephemeralMessage?.message,
-                    msgObj.documentWithCaptionMessage?.message,
-                    msgObj.editMessage?.message,
-                    msgObj.protocolMessage?.editedMessage,
-                    msgObj.message
+                // Lista de wrappers comuns no Baileys/WhatsApp
+                const possibleWrappers = [
+                    'viewOnceMessageV2', 'viewOnceMessageV2Extension', 'viewOnceMessage',
+                    'ephemeralMessage', 'documentWithCaptionMessage', 'editMessage',
+                    'protocolMessage', 'editedMessage', 'message', 'quotedMessage'
                 ];
 
-                for (const w of wraps) {
-                    if (w) {
-                        const found = extractMediaContainer(w);
+                for (const key of possibleWrappers) {
+                    if (msgObj[key]) {
+                        const found = extractMediaContainer(msgObj[key], depth + 1);
                         if (found) return found;
                     }
                 }
 
-                const subKeys = ['imageMessage', 'videoMessage', 'stickerMessage', 'audioMessage', 'documentMessage'];
-                for (const k of subKeys) {
-                    if (msgObj[k]) {
-                        const found = extractMediaContainer(msgObj[k]);
+                // Tipos de mídia conhecidos
+                const subTypes = ['imageMessage', 'videoMessage', 'stickerMessage', 'audioMessage', 'documentMessage'];
+                for (const type of subTypes) {
+                    if (msgObj[type]) {
+                        const found = extractMediaContainer(msgObj[type], depth + 1);
+                        if (found) return found;
+                    }
+                }
+
+                // Busca exaustiva em qualquer objeto filho (exceto os já testados)
+                for (const key in msgObj) {
+                    if (msgObj[key] && typeof msgObj[key] === 'object' && !possibleWrappers.includes(key) && !subTypes.includes(key)) {
+                        const found = extractMediaContainer(msgObj[key], depth + 1);
                         if (found) return found;
                     }
                 }
@@ -1127,7 +1134,7 @@ class MediaProcessor {
 
             const mediaContent = extractMediaContainer(message);
             if (!mediaContent) {
-                this.logger?.error('❌ Mídia não encontrada');
+                this.logger?.error('❌ Mídia não encontrada. Estrutura recebida:', Object.keys(message || {}).join(', '));
                 return null;
             }
 
