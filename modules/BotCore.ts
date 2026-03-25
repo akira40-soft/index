@@ -133,6 +133,17 @@ class BotCore {
             this._selfUpdateYtdlp().catch(() => { });
 
             this.apiClient = new APIClient(this.logger);
+
+            // Teste de conectividade inicial (Não bloqueante)
+            this.apiClient.healthCheck().then((health: any) => {
+                if (health.success) {
+                    this.logger.info('✅ [API] Teste de conectividade: OK!');
+                } else {
+                    this.logger.warn(`⚠️ [API] Teste de conectividade: API offline ou inacessível (${health.error || 'Status ' + health.status})`);
+                }
+            }).catch((e: any) => {
+                this.logger.error(`🚨 [API] Falha crítica de rede no startup: ${e.message}`);
+            });
             this.audioProcessor = new AudioProcessor(this.logger);
             this.mediaProcessor = new MediaProcessor(this.logger);
             this.messageProcessor = new MessageProcessor(this.logger);

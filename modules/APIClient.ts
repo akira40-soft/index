@@ -131,20 +131,15 @@ class APIClient {
             };
         }
 
-        // Normalização robusta da URL — extrai APENAS a origem (domínio + porta)
-        // Isso garante que qualquer path pré-existente na API_URL (como /api, /api/akira, etc.)
-        // seja ignorado, evitando URLs duplicadas como /api/api/akira
+        // Normalização simples: garante que não termine em barra para evitar // no endpoint
         let baseUrl = (this.config.API_URL || '').trim();
-        try {
-            const parsed = new URL(baseUrl);
-            // origin = protocolo + host + porta (ex: "https://akra35567-akira-softedge.hf.space")
-            baseUrl = parsed.origin;
-        } catch {
-            // Fallback para URLs mal formadas: remove tudo a partir do primeiro /path
-            baseUrl = baseUrl.replace(/\/(api.*)?$/, '').replace(/\/$/, '');
+        if (baseUrl.endsWith('/')) {
+            baseUrl = baseUrl.slice(0, -1);
         }
 
-        const url = `${baseUrl}${endpoint}`;
+        let url = `${baseUrl}${endpoint}`;
+        // Remove duplicatas de /api/api/ caso o usuário tenha configurado a base com o prefixo
+        url = url.replace(/\/api\/api\//g, '/api/');
         const maxRetries = options.retries || this.config.API_RETRY_ATTEMPTS;
         let lastError = null;
 
@@ -182,12 +177,16 @@ class APIClient {
 
             } catch (error: any) {
                 lastError = error;
-                const statusCode = (error.response && error.response.status) || undefined;
-                const errorMsg = (error.response && error.response.data && error.response.data.error) || error.message;
-                const responseData = error.response?.data ? JSON.stringify(error.response.data).substring(0, 500) : 'N/A';
+                const statusCode = error.response?.status;
+                const errorMsg = error.response?.data?.error || error.message;
 
                 if (this.config.LOG_API_REQUESTS) {
-                    this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'}: ${errorMsg} | Payload: ${responseData} (tentativa ${attempt}/${maxRetries})`);
+                    const code = error.code || 'UNKNOWN';
+                    const syscall = error.syscall ? `| syscall: ${error.syscall}` : '';
+                    this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'} (${code}${syscall}): ${errorMsg} | URL: ${url} (tentativa ${attempt}/${maxRetries})`);
+                    if (error.stack && attempt === maxRetries) {
+                        this.logger.debug(`[API] Stack: ${error.stack.substring(0, 200)}...`);
+                    }
                 }
 
                 // Não retry em erros 4xx (exceto timeout)
@@ -260,8 +259,9 @@ class APIClient {
             }
         } catch (error: any) {
             const status = error.response?.status;
+            const code = error.code || 'NETWORK_ERR';
             const data = error.response?.data ? JSON.stringify(error.response.data) : 'N/A';
-            this.logger.error(`[API] Erro ao processar mensagem (Status: ${status || 'NETWORK'}):`, error.message);
+            this.logger.error(`[API] Erro ao processar mensagem (Status: ${status || 'NETWORK'} | Code: ${code}):`, error.message);
             if (data !== 'N/A') this.logger.error(`[API] Detalhes do erro:`, data);
 
             return {
