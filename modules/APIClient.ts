@@ -7,9 +7,6 @@
  * ═══════════════════════════════════════════════════════════════════════
  */
 
-import axios from 'axios';
-import http from 'http';
-import https from 'https';
 import ConfigManager from './ConfigManager.js';
 import MediaProcessor from './MediaProcessor.js';
 
@@ -155,32 +152,50 @@ class APIClient {
                     this.logger.info(`[API] ${method.toUpperCase()} ${url} (tentativa ${attempt}/${maxRetries})`);
                 }
 
-                const axiosConfig = {
+                const fetchOptions: any = {
                     method,
-                    url,
-                    timeout: this.config.API_TIMEOUT,
-                    httpAgent: new http.Agent({ keepAlive: false }),
-                    httpsAgent: new https.Agent({ keepAlive: false }),
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                        'Connection': 'close'
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
                     },
                     ...options
                 };
 
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), this.config.API_TIMEOUT);
+                fetchOptions.signal = controller.signal;
+
                 if (data) {
-                    axiosConfig.data = data;
+                    fetchOptions.body = JSON.stringify(data);
                 }
 
-                const response = await axios(axiosConfig);
+                const response = await fetch(url, fetchOptions);
+                clearTimeout(timeoutId);
 
-                if (response.status >= 200 && response.status < 300) {
+                let responseData: any = {};
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.includes("application/json")) {
+                    responseData = await response.json();
+                } else {
+                    const textData = await response.text();
+                    try { responseData = JSON.parse(textData); } catch (e) { responseData = { error: textData }; }
+                }
+
+                if (response.ok) {
                     if (this.config.LOG_API_REQUESTS) {
                         this.logger.info(`[API] ✅ ${endpoint} (${response.status})`);
                     }
-                    return { success: true, data: response.data, status: response.status };
+                    return { success: true, data: responseData, status: response.status };
+                } else {
+                    // Dispara exceção similar ao axios para o catch capturar
+                    throw {
+                        response: {
+                            status: response.status,
+                            data: responseData
+                        },
+                        message: `HTTP error! status: ${response.status}`,
+                        code: `HTTP_${response.status}`
+                    };
                 }
 
             } catch (error: any) {
@@ -189,7 +204,10 @@ class APIClient {
                 const errorMsg = error.response?.data?.error || error.message;
 
                 if (this.config.LOG_API_REQUESTS) {
-                    const code = error.code || 'UNKNOWN';
+                    let code = error.code || 'UNKNOWN';
+                    if (error.name === 'AbortError') {
+                        code = 'ETIMEDOUT';
+                    }
                     const syscall = error.syscall ? `| syscall: ${error.syscall}` : '';
                     this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'} (${code}${syscall}): ${errorMsg} | URL: ${url} (tentativa ${attempt}/${maxRetries})`);
                     if (error.stack && attempt === maxRetries) {
@@ -212,7 +230,16 @@ class APIClient {
         }
 
         this.errorCount++;
-        const errorMsg = (lastError && lastError.response && lastError.response.data && lastError.response.data.error) || (lastError && lastError.message) || 'Erro desconhecido';
+        let errorMsg = 'Erro desconhecido';
+        if (lastError) {
+            if (lastError.response?.data?.error) {
+                errorMsg = lastError.response.data.error;
+            } else if (lastError.name === 'AbortError') {
+                errorMsg = 'Timeout da API excedido';
+            } else {
+                errorMsg = lastError.message || String(lastError);
+            }
+        }
 
         if (this.config.LOG_API_REQUESTS) {
             this.logger.error(`[API] ❌ Falhou após ${maxRetries} tentativas: ${errorMsg}`);
