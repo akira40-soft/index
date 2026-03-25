@@ -59,16 +59,17 @@ class APIClient {
         };
 
         // Adiciona contexto de reply se existir
-        if (mensagem_citada || reply_metadata.is_reply) {
+        const safeReplyMeta = reply_metadata || {};
+        if (mensagem_citada || safeReplyMeta.is_reply) {
             payload.mensagem_citada = String(mensagem_citada || '').substring(0, 3000);
             payload.reply_metadata = {
                 is_reply: true,
-                reply_to_bot: Boolean(reply_metadata.reply_to_bot || reply_metadata.ehRespostaAoBot),
-                quoted_author_name: String(reply_metadata.quoted_author_name || reply_metadata.quemEscreveuCitacaoName || 'desconhecido').substring(0, 50),
-                quoted_author_numero: String(reply_metadata.quoted_author_numero || reply_metadata.quemEscreveuCitacao || 'desconhecido'),
-                quoted_type: String(reply_metadata.quoted_type || 'texto'),
-                quoted_text_original: String(reply_metadata.quoted_text_original || '').substring(0, 2000),
-                context_hint: String(reply_metadata.context_hint || '')
+                reply_to_bot: Boolean(safeReplyMeta.reply_to_bot || safeReplyMeta.ehRespostaAoBot),
+                quoted_author_name: String(safeReplyMeta.quoted_author_name || safeReplyMeta.quemEscreveuCitacaoName || 'desconhecido').substring(0, 50),
+                quoted_author_numero: String(safeReplyMeta.quoted_author_numero || safeReplyMeta.quemEscreveuCitacao || 'desconhecido'),
+                quoted_type: String(safeReplyMeta.quoted_type || 'texto'),
+                quoted_text_original: String(safeReplyMeta.quoted_text_original || '').substring(0, 2000),
+                context_hint: String(safeReplyMeta.context_hint || '')
             };
         } else {
             payload.reply_metadata = {
