@@ -8,6 +8,8 @@
  */
 
 import axios from 'axios';
+import http from 'http';
+import https from 'https';
 import ConfigManager from './ConfigManager.js';
 import MediaProcessor from './MediaProcessor.js';
 
@@ -140,6 +142,8 @@ class APIClient {
         let url = `${baseUrl}${endpoint}`;
         // Remove duplicatas de /api/api/ caso o usuário tenha configurado a base com o prefixo
         url = url.replace(/\/api\/api\//g, '/api/');
+
+        const parsedUrl = new URL(url);
         const maxRetries = options.retries || this.config.API_RETRY_ATTEMPTS;
         let lastError = null;
 
@@ -155,9 +159,13 @@ class APIClient {
                     method,
                     url,
                     timeout: this.config.API_TIMEOUT,
+                    httpAgent: new http.Agent({ keepAlive: false }),
+                    httpsAgent: new https.Agent({ keepAlive: false }),
                     headers: {
                         'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        'Connection': 'close'
                     },
                     ...options
                 };
