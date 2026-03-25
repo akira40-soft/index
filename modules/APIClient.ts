@@ -273,7 +273,9 @@ class APIClient {
                 }
             }
 
+            this.logger.info(`[API] Construindo payload...`);
             const payload = this.buildPayload(messageData);
+            this.logger.info(`[API] Payload pronto. Enviando this.request('POST') url: /api/akira`);
 
             const result = await this.request('POST', '/api/akira', payload);
 
@@ -293,11 +295,10 @@ class APIClient {
                 };
             }
         } catch (error: any) {
-            const status = error.response?.status;
+            const status = error.response?.status || 'NETWORK';
             const code = error.code || 'NETWORK_ERR';
-            const data = error.response?.data ? JSON.stringify(error.response.data) : 'N/A';
-            this.logger.error(`[API] Erro ao processar mensagem (Status: ${status || 'NETWORK'} | Code: ${code}):`, error.message);
-            if (data !== 'N/A') this.logger.error(`[API] Detalhes do erro:`, data);
+            const errDetails = error.stack || error.message || String(error);
+            this.logger.error(`[API] Erro FATAL ao processar mensagem (Status: ${status} | Code: ${code}):\n${errDetails}`);
 
             return {
                 success: false,
