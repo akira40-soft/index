@@ -99,9 +99,9 @@ class MediaProcessor {
         // Clientes normatizados em ordem de prioridade - EM 2026, web e mweb são os mais bloqueados
         const clients = options.clientOverride || 'android_vr,ios,android,web_embedded';
 
-        // GAMBIARRA 2026: player_skip=web,mweb força o uso de APIs menos vigiadas
-        // Hack: Usar clients específicos que o YouTube costuma liberar mais facilmente para IPs de Datacenter
-        let extractorArgs = `youtube:player_client=${clients};player_skip=web,mweb`;
+        // EM 2026: player_skip=web,mweb às vezes oculta formatos progressivos necessários
+        // Vamos permitir que o yt-dlp decida a melhor estratégia de fallback entre os clientes
+        let extractorArgs = `youtube:player_client=${clients}`;
         if (poToken) extractorArgs += `;po_token=web+${poToken}`;
 
         // Rotação de User-Agent: Usando um de Android (mais confiável para bypass)
@@ -114,9 +114,6 @@ class MediaProcessor {
             '--no-check-certificates',
             `--user-agent "${ua}"`,
             '--add-header "Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"',
-            '--add-header "X-Youtube-Client-Name: 5"',
-            '--add-header "X-Youtube-Client-Version: 2.20240320.00.00"',
-            '--add-header "Sec-Fetch-Mode: navigate"',
             '--ignore-config',
             '--no-warnings',
             '--no-playlist',
@@ -127,13 +124,12 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ba/b: Tenta áudio. Se falhar, melhor vídeo+áudio.
-            // Format sort garante m4a/mp3 primeiro se possível.
+            // "ba/b": Tenta áudio puro. Se não achar, pega o melhor vídeo+áudio disponível.
             actionFlags = `-f "ba/b" --format-sort "ext:m4a,ext:mp3,br" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // HACK UNIVERSAL: bestvideo+bestaudio/best. Prioriza MP4 via merge-output-format e format-sort.
-            // Isso evita erro "Requested format is not available" se um ID específico de extensão faltar.
-            actionFlags = `-f "bestvideo+bestaudio/best" --merge-output-format mp4 --format-sort "res:720,vcodec:h264,ext:mp4" -o "${options.output}"`;
+            // "b/bv+ba/best": O 'b' na frente garante que ele procure um formato progressivo (único arquivo) 
+            // se os separados (bv+ba) falharem. Isso evita "Requested format is not available".
+            actionFlags = `-f "b/bv+ba/best" --merge-output-format mp4 --format-sort "res:720,vcodec:h264,ext:mp4" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
