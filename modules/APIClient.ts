@@ -60,16 +60,21 @@ class APIClient {
 
         // Adiciona contexto de reply se existir
         const safeReplyMeta = reply_metadata || {};
-        if (mensagem_citada || safeReplyMeta.is_reply) {
-            payload.mensagem_citada = String(mensagem_citada || '').substring(0, 3000);
+        const isReply = Boolean(mensagem_citada || safeReplyMeta.is_reply || safeReplyMeta.isReply);
+
+        if (isReply) {
+            // Se mensagem_citada raiz for vazia, puxa do metadado gerado pelo MessageProcessor
+            const textoCitadoReal = mensagem_citada || safeReplyMeta.textoMensagemCitada || safeReplyMeta.quotedTextOriginal || '';
+            payload.mensagem_citada = String(textoCitadoReal).substring(0, 3000);
+
             payload.reply_metadata = {
                 is_reply: true,
                 reply_to_bot: Boolean(safeReplyMeta.reply_to_bot || safeReplyMeta.ehRespostaAoBot),
                 quoted_author_name: String(safeReplyMeta.quoted_author_name || safeReplyMeta.quemEscreveuCitacaoName || 'desconhecido').substring(0, 50),
                 quoted_author_numero: String(safeReplyMeta.quoted_author_numero || safeReplyMeta.quemEscreveuCitacao || 'desconhecido'),
-                quoted_type: String(safeReplyMeta.quoted_type || 'texto'),
-                quoted_text_original: String(safeReplyMeta.quoted_text_original || '').substring(0, 2000),
-                context_hint: String(safeReplyMeta.context_hint || '')
+                quoted_type: String(safeReplyMeta.quoted_type || safeReplyMeta.tipoMidiaCitada || 'texto'),
+                quoted_text_original: String(safeReplyMeta.quoted_text_original || safeReplyMeta.quotedTextOriginal || '').substring(0, 2000),
+                context_hint: String(safeReplyMeta.context_hint || safeReplyMeta.contextHint || '')
             };
         } else {
             payload.reply_metadata = {

@@ -119,26 +119,27 @@ class MediaProcessor {
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
-            '--force-ipv4',
+            // Removemos --force-ipv4 para permitir IPv6 (Railway/Datacenters têm IPv6 limpos!)
             '--no-check-certificates',
             `--user-agent "${ua}"`,
             '--add-header "Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"',
+            '--rm-cache-dir', // Limpa cache de tokens do yt-dlp
             '--ignore-config',
             '--no-warnings',
             '--no-playlist',
             '--geo-bypass',
             '--socket-timeout 30',
-            '--retries 3'
+            '--retries 5'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Progressivo primeiro (arquivos com áudio já embutido) - mais compativel
-            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // --format-sort força o melhor áudio primeiro sem se prender a streams combinados que dam erro
+            actionFlags = `-f "bestaudio/best" --format-sort "hasaud" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Ultra-simples: qualquer arquivo único até 720p que seja mp4, depois qualquer
-            // NUNCA tenta merge de streams separados primeiro (causa "format not available" em Shorts)
-            actionFlags = `-f "best[ext=mp4][height<=720]/best[height<=720]/mp4/best" --merge-output-format mp4 -o "${options.output}"`;
+            // Tolerância máxima: baixa melhor até 720p ou pior, mas que tenha VÍDEO E ÁUDIO juntos,
+            // ou funde eles na marra.
+            actionFlags = `-f "bestvideo[height<=720]+bestaudio/best[height<=720]/best" --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -168,19 +169,21 @@ class MediaProcessor {
             const cookiePath = this._findCookiePath();
 
             // ================================================================
-            // NOVA ESTRATEGIA: tv_embedded/web_embedded SEM cookies primeiro
-            // Cookies de conta + IP datacenter = bloqueio imediato do YouTube
-            // Sem cookies, o cliente atua como guest e passa pela barreira
+            // ESTRATÉGIA ANTI-DATACENTER S/ API: Uso de clientes mobile nativos
+            // Aplicativos iOS e Android não exigem verificação JS/Login pesada
+            // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1: tv_embedded SEM cookies (guest, nunca bloqueado por SABR)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0, useCookies: false },
-                // 2: web_embedded SEM cookies
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 500, useCookies: false },
-                // 3: tv_embedded COM cookies (age-restricted / privado)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 1000, useCookies: true },
-                // 4: mweb COM cookies (ultimo recurso mobile)
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 1500, useCookies: true }
+                // 1. App Android Nativo s/ Cookies (Imune ao bloqueio Datacenter inicial)
+                { cliente: 'android', ua: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; pt_BR)', sleepMs: 0, useCookies: false },
+                // 2. App iOS Nativo s/ Cookies
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.29.1 (iPhone14,5; U; CPU iOS 17_5_1 like Mac OS X; pt_BR)', sleepMs: 500, useCookies: false },
+                // 3. Web Embedded (Guest) para vídeos abertos
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000, useCookies: false },
+                // 4. Android Music (Ideal p/ audio, imune a idade na maioria)
+                { cliente: 'android_music', ua: 'com.google.android.apps.youtube.music/7.10.51 (Linux; U; Android 14; pt_BR)', sleepMs: 1500, useCookies: false },
+                // 5. tv_embedded c/ Cookies (Último recurso pra videos restritos por idade)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 2000, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -249,19 +252,21 @@ class MediaProcessor {
             const outputPath = this.generateRandomFilename('mp4');
 
             // ================================================================
-            // NOVA ESTRATEGIA: tv_embedded/web_embedded SEM cookies primeiro
-            // Cookies de conta + IP datacenter = bloqueio imediato do YouTube
-            // Sem cookies, o cliente atua como guest e passa pela barreira
+            // ESTRATÉGIA ANTI-DATACENTER S/ API: Uso de clientes mobile nativos
+            // Aplicativos iOS e Android não exigem verificação JS/Login pesada
+            // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1: tv_embedded SEM cookies (guest, nunca bloqueado por SABR)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0, useCookies: false },
-                // 2: web_embedded SEM cookies
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 500, useCookies: false },
-                // 3: tv_embedded COM cookies (age-restricted / privado)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 1000, useCookies: true },
-                // 4: mweb COM cookies (ultimo recurso mobile)
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 1500, useCookies: true }
+                // 1. App Android Nativo s/ Cookies (Imune ao bloqueio Datacenter inicial)
+                { cliente: 'android', ua: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; pt_BR)', sleepMs: 0, useCookies: false },
+                // 2. App iOS Nativo s/ Cookies
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.29.1 (iPhone14,5; U; CPU iOS 17_5_1 like Mac OS X; pt_BR)', sleepMs: 500, useCookies: false },
+                // 3. Web Embedded (Guest) para vídeos abertos
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000, useCookies: false },
+                // 4. Android VR (Excelente para vídeos restritos no datacenter)
+                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.54.34 (Linux; U; Android 14; pt_BR)', sleepMs: 1500, useCookies: false },
+                // 5. tv_embedded c/ Cookies (Último recurso pra videos restritos por idade)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 2000, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
