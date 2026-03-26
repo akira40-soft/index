@@ -808,25 +808,30 @@ class GroupManagement {
             return true;
         }
 
-        // JIDs já vem sanitizados do _extractTargets, mas garantimos uma segunda passagem
         const targets = rawTargets.map((t: string) => t.split(':')[0].split('@')[0] + '@s.whatsapp.net');
         const groupJid = m.key.remoteJid;
 
-        // Log de diagnóstico - visível nos logs do Railway para debug
         this.logger.info(`[kickUser] Alvos extraídos: ${JSON.stringify(targets)}`);
 
         try {
-            // Verificação prévia: Evita erro 500 se o usuário não estiver no grupo
             const metadata = await this._getGroupMetadata(groupJid);
             if (!metadata) throw new Error('Falha ao obter dados do grupo');
 
             const participants = metadata.participants.map((p: any) => p.id);
             this.logger.info(`[kickUser] Participantes no grupo: ${participants.length}. Procurando: ${JSON.stringify(targets)}`);
 
-            const toRemove = targets.filter((t: string) => participants.includes(t));
+            // Comparação numérica parcial: remove @ e : para evitar mismatch de formato
+            // Ex: "40755431264474@s.whatsapp.net" bate com "40755431264474:17@s.whatsapp.net"
+            const getNum = (jid: string) => jid.split(':')[0].split('@')[0];
+            const toRemove = targets.map(target => {
+                const targetNum = getNum(target);
+                // Procura o JID real do participante que tenha o mesmo número
+                const realJid = participants.find((p: string) => getNum(p) === targetNum);
+                return realJid || null;
+            }).filter(Boolean) as string[];
 
             if (toRemove.length === 0) {
-                this.logger.warn(`[kickUser] Nenhum alvo encontrado entre os participantes! Alvos: ${JSON.stringify(targets)}`);
+                this.logger.warn(`[kickUser] Nenhum alvo encontrado! Alvos: ${JSON.stringify(targets)} | Participantes (primeiros 3): ${JSON.stringify(participants.slice(0, 3))}`);
                 await this.sock.sendMessage(groupJid, { text: '⚠️ O(s) usuário(s) indicado(s) não estão mais no grupo.' }, { quoted: m });
                 return true;
             }
@@ -834,8 +839,6 @@ class GroupManagement {
             await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toRemove, 'remove'));
             const mentions = toRemove.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s) do grupo.`, mentions: toRemove }, { quoted: m });
-
-            // Limpa cache para refletir a saída
             this.clearMetadataCache(groupJid);
         } catch (e: any) {
             this.logger.error(`[GroupManagement] kickUser erro: ${e.message}`);

@@ -88,22 +88,31 @@ class MediaProcessor {
      * Constrói o comando yt-dlp seguindo as NORMAS TÉCNICAS de 2026
      * Usa Deno como runtime JS para decifrar assinaturas complexas (SABR/DPI)
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, clientOverride?: string, userAgent?: string }): string {
+    private _buildYtdlpCommand(
+        url: string,
+        options: {
+            type: 'audio' | 'video' | 'json',
+            output?: string,
+            isSearch?: boolean,
+            clientOverride?: string,
+            userAgent?: string,
+            useCookies?: boolean // Permite desativar cookies por tentativa
+        }
+    ): string {
         const cookiePath = this._findCookiePath();
-        const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
+        // Cookies OPCIONAIS por tentativa - cookies de conta + IP datacenter = bloqueio
+        const cookieArg = (options.useCookies !== false && cookiePath) ? `--cookies "${cookiePath}"` : '';
         const poToken = this.config?.YT_PO_TOKEN;
 
-        // Runtime JS: Se existir deno, usa. So caso contrario omite.
         const jsRuntime = fs.existsSync('/usr/local/bin/deno') || fs.existsSync('/root/.deno/bin/deno') ? '--js-runtime deno' : '';
 
-        // Cliente: tv_embedded e web_embedded são os mais estáveis em IPs de datacenter (Railway/Heroku)
-        // ios e android sofrem SABR blocking em datacenters = "Requested format is not available"
-        const clients = options.clientOverride || 'tv_embedded,web_embedded';
+        const clients = options.clientOverride || 'tv_embedded';
 
+        // SEM formats=missing_pot quando não temos POT - causa bugs de formato
         let extractorArgs = `youtube:player_client=${clients}`;
-        // formats=missing_pot: mostra formatos que precisam de POT mesmo sem token (mais compatível)
-        extractorArgs += `;formats=missing_pot`;
-        if (poToken) extractorArgs += `;po_token=web+${poToken}`;
+        if (poToken) {
+            extractorArgs += `;formats=missing_pot;po_token=web+${poToken}`;
+        }
 
         const ua = options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -124,18 +133,18 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Formato garantido: mp4a ou webm de áudio. Sempre existem nesses clientes.
-            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio/best" --format-sort "ext:m4a,ext:mp3,br" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Progressivo primeiro (arquivos com áudio já embutido) - mais compativel
+            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Formato progressivo (jpg) primeiro, depois merge só se existir ffmpeg.
-            // bestvideo[ext=mp4]+bestaudio[ext=m4a] garante merge em mp4 se tiver ambos.
-            // mp4/best é o ultimo recurso: pega qualquer formato único disponível.
-            actionFlags = `-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best" --merge-output-format mp4 -o "${options.output}"`;
+            // Ultra-simples: qualquer arquivo único até 720p que seja mp4, depois qualquer
+            // NUNCA tenta merge de streams separados primeiro (causa "format not available" em Shorts)
+            actionFlags = `-f "best[ext=mp4][height<=720]/best[height<=720]/mp4/best" --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
+        // Log do comando completo para debug (sem mostrar cookies)
         return `yt-dlp ${cookieArg} ${bypassFlags} ${actionFlags} "${target}"`;
     }
 
@@ -159,16 +168,19 @@ class MediaProcessor {
             const cookiePath = this._findCookiePath();
 
             // ================================================================
-            // CLIENTES COMPATIVEIS COM DATACENTER (IPs Railway/Heroku)
-            // tv_embedded e web_embedded não sofrem SABR blocking por IP
+            // NOVA ESTRATEGIA: tv_embedded/web_embedded SEM cookies primeiro
+            // Cookies de conta + IP datacenter = bloqueio imediato do YouTube
+            // Sem cookies, o cliente atua como guest e passa pela barreira
             // ================================================================
             const tentativas = [
-                // 1ª: tv_embedded - imune a SABR, sem necessidade de POT
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0 },
-                // 2ª: web_embedded - imune, mas pode pedir POT em alguns vídeos
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000 },
-                // 3ª: mweb - fallback móvel que ainda funciona em muitos casos
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 2000 }
+                // 1: tv_embedded SEM cookies (guest, nunca bloqueado por SABR)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0, useCookies: false },
+                // 2: web_embedded SEM cookies
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 500, useCookies: false },
+                // 3: tv_embedded COM cookies (age-restricted / privado)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 1000, useCookies: true },
+                // 4: mweb COM cookies (ultimo recurso mobile)
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 1500, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -176,12 +188,13 @@ class MediaProcessor {
                 const t = tentativas[i];
                 if (t.sleepMs > 0) await new Promise(r => setTimeout(r, t.sleepMs));
 
-                this.logger?.info(`[ÁUDIO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente}`);
+                this.logger?.info(`[AUDIO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente} | Cookies: ${t.useCookies ? 'SIM' : 'NAO'}`);
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'audio',
                     output: outputPath,
                     clientOverride: t.cliente,
-                    userAgent: t.ua
+                    userAgent: t.ua,
+                    useCookies: t.useCookies
                 });
                 try {
                     await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
@@ -236,16 +249,19 @@ class MediaProcessor {
             const outputPath = this.generateRandomFilename('mp4');
 
             // ================================================================
-            // CLIENTES COMPATIVEIS COM DATACENTER (IPs Railway/Heroku)
-            // tv_embedded e web_embedded não sofrem SABR blocking por IP
+            // NOVA ESTRATEGIA: tv_embedded/web_embedded SEM cookies primeiro
+            // Cookies de conta + IP datacenter = bloqueio imediato do YouTube
+            // Sem cookies, o cliente atua como guest e passa pela barreira
             // ================================================================
             const tentativas = [
-                // 1ª: tv_embedded - imune a SABR blocking, sem necessidade de POT
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0 },
-                // 2ª: web_embedded - imune, pode pedir POT em alguns privados
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000 },
-                // 3ª: mweb - fallback móvel que ainda tem compatibilidade
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 2000 }
+                // 1: tv_embedded SEM cookies (guest, nunca bloqueado por SABR)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0, useCookies: false },
+                // 2: web_embedded SEM cookies
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 500, useCookies: false },
+                // 3: tv_embedded COM cookies (age-restricted / privado)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 1000, useCookies: true },
+                // 4: mweb COM cookies (ultimo recurso mobile)
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 1500, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -253,12 +269,13 @@ class MediaProcessor {
                 const t = tentativas[i];
                 if (t.sleepMs > 0) await new Promise(r => setTimeout(r, t.sleepMs));
 
-                this.logger?.info(`[VÍDEO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente}`);
+                this.logger?.info(`[VÍDEO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente} | Cookies: ${t.useCookies ? 'SIM' : 'NAO'}`);
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'video',
                     output: outputPath,
                     clientOverride: t.cliente,
-                    userAgent: t.ua
+                    userAgent: t.ua,
+                    useCookies: t.useCookies
                 });
                 try {
                     await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
