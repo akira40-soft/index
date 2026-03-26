@@ -97,11 +97,12 @@ class MediaProcessor {
         const clients = options.clientOverride || 'android_vr,ios,android,web_embedded';
 
         // GAMBIARRA 2026: player_skip=web,mweb força o uso de APIs menos vigiadas
+        // Hack: Usar clients específicos que o YouTube costuma liberar mais facilmente para IPs de Datacenter
         let extractorArgs = `youtube:player_client=${clients};player_skip=web,mweb`;
         if (poToken) extractorArgs += `;po_token=web+${poToken}`;
 
-        // Rotação de User-Agent: Se não vier um específico, usamos um de iPhone (mais confiável)
-        const ua = options.userAgent || 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
+        // Rotação de User-Agent: Usando um de Android (mais confiável para bypass)
+        const ua = options.userAgent || 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36';
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
@@ -110,13 +111,15 @@ class MediaProcessor {
             '--no-check-certificates',
             `--user-agent "${ua}"`,
             '--add-header "Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"',
+            '--add-header "X-Youtube-Client-Name: 5"',
+            '--add-header "X-Youtube-Client-Version: 2.20240320.00.00"',
             '--add-header "Sec-Fetch-Mode: navigate"',
             '--ignore-config',
             '--no-warnings',
             '--no-playlist',
             '--geo-bypass',
             '--socket-timeout 30',
-            '--retries 3'
+            '--retries 5'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
@@ -439,13 +442,14 @@ class MediaProcessor {
     private async _getMetadataFromInvidious(videoId: string): Promise<any> {
         // Instâncias Invidious VERIFICADAS e ATIVAS (Março 2026)
         const invidiousInstances = [
-            'https://yewtu.be',
+            'https://invidious.nerdvpn.de',
             'https://inv.nadeko.net',
             'https://invidious.flokinet.to',
+            'https://yewtu.be',
             'https://yt.artemislena.eu',
             'https://invidious.privacydev.net',
-            'https://invidious.nerdvpn.de',
-            'https://invidious.v0l.io'
+            'https://invidious.v0l.io',
+            'https://iv.melmac.space'
         ];
 
         for (const instance of invidiousInstances) {
@@ -485,9 +489,11 @@ class MediaProcessor {
         const pipedInstances = [
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.tokhmi.xyz',
-            'https://pipedapi.syncpundit.io',
             'https://api.piped.projectsegfau.lt',
-            'https://watchapi.whatever.social'
+            'https://pipedapi.syncpundit.io',
+            'https://watchapi.whatever.social',
+            'https://piped-api.lunar.icu',
+            'https://pipedapi.mha.fi'
         ];
 
         for (const instance of pipedInstances) {
@@ -534,9 +540,11 @@ class MediaProcessor {
         const pipedInstances = [
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.tokhmi.xyz',
-            'https://pipedapi.syncpundit.io',
             'https://api.piped.projectsegfau.lt',
-            'https://watchapi.whatever.social'
+            'https://pipedapi.syncpundit.io',
+            'https://watchapi.whatever.social',
+            'https://piped-api.lunar.icu',
+            'https://pipedapi.mha.fi'
         ];
 
         for (const instance of pipedInstances) {
@@ -622,9 +630,11 @@ class MediaProcessor {
         const pipedInstances = [
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.tokhmi.xyz',
-            'https://pipedapi.syncpundit.io',
             'https://api.piped.projectsegfau.lt',
-            'https://watchapi.whatever.social'
+            'https://pipedapi.syncpundit.io',
+            'https://watchapi.whatever.social',
+            'https://piped-api.lunar.icu',
+            'https://pipedapi.mha.fi'
         ];
 
         for (const instance of pipedInstances) {

@@ -474,7 +474,8 @@ class BotCore {
             const replyInfo = this.messageProcessor.extractReplyInfo(m);
 
             // ═══ GANHO DE XP POR MENSAGEM (SISTEMA DE NÍVEIS) ═══
-            if (ehGrupo && this.levelSystem) {
+            const levelingAtivo = ehGrupo && this.groupManagement?.groupSettings?.[remoteJid]?.leveling === true;
+            if (levelingAtivo && this.levelSystem) {
                 try {
                     const resultXp = this.levelSystem.awardXp(remoteJid, participantJid, 10);
                     if (resultXp.leveled) {
