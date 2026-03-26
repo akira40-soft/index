@@ -65,8 +65,11 @@ class MediaProcessor {
      */
     private _findCookiePath(): string {
         const possiblePaths = [
+            this.config?.YT_COOKIES_PATH,
             './cookies.txt',
+            './cookie.txt',
             '/app/cookies.txt',
+            '/app/cookie.txt',
             './youtube_cookies.txt',
             '/tmp/akira_data/cookies/youtube_cookies.txt',
             process.env.YT_COOKIES_PATH

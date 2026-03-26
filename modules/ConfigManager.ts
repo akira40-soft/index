@@ -171,8 +171,10 @@ class ConfigManager {
         if (!this.YT_COOKIES_PATH) {
             const possiblePaths = [
                 path.join(process.cwd(), 'cookies.txt'),
+                path.join(process.cwd(), 'cookie.txt'),
                 path.join(process.cwd(), 'youtube_cookies.txt'),
                 '/app/cookies.txt',
+                '/app/cookie.txt',
                 '/app/youtube_cookies.txt',
                 path.join(baseDataPath, 'cookies', 'youtube_cookies.txt')
             ];
