@@ -59,6 +59,28 @@ class GroupManagement {
     }
 
     /**
+     * Resiliência para conexões instáveis com o WebSocket.
+     */
+    private async _withRetry<T>(action: () => Promise<T>, retries = 3): Promise<T> {
+        let lastError;
+        for (let i = 0; i < retries; i++) {
+            if (!await this._checkSocket()) throw new Error('Socket offline');
+            try {
+                return await action();
+            } catch (e: any) {
+                lastError = e;
+                if (e.message?.includes('Connection Closed') || e.message?.includes('timeout') || e.message?.includes('Server Timeout')) {
+                    this.logger.warn(`[GroupManagement] Query WA Falhou. Retry ${i + 1}/${retries}...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    continue; // Tenta de novo
+                }
+                throw e; // Lança se for erro definitivo como Not Admin
+            }
+        }
+        throw lastError;
+    }
+
+    /**
      * Check socket resiliente.
      */
     private async _checkSocket(): Promise<boolean> {
@@ -332,7 +354,7 @@ class GroupManagement {
                 const warns = this.moderationSystem.addWarning(m.key.remoteJid, target, reason);
 
                 if (warns >= 3) {
-                    await this.sock.groupParticipantsUpdate(m.key.remoteJid, [target], 'remove');
+                    await this._withRetry(() => this.sock.groupParticipantsUpdate(m.key.remoteJid, [target], 'remove'));
                     await this.sock.sendMessage(m.key.remoteJid, { text: `🚨 *@${target.split('@')[0]}* atingiu 3 advertências e foi automaticamente banido da organização!`, mentions: [target] });
                     this.moderationSystem.resetWarnings(m.key.remoteJid, target);
                 } else {
@@ -445,11 +467,12 @@ class GroupManagement {
     async getGroupLink(m: any): Promise<boolean> {
         const groupJid = m.key.remoteJid;
         try {
-            const code = await this.sock.groupInviteCode(groupJid);
+            const code = await this._withRetry(() => this.sock.groupInviteCode(groupJid));
             const link = `https://chat.whatsapp.com/${code}`;
             if (this.sock) await this.sock.sendMessage(groupJid, { text: `🔗 *LINK DO GRUPO*\n\n${link}` }, { quoted: m });
         } catch (e: any) {
-            if (this.sock) await this.sock.sendMessage(groupJid, { text: '❌ Erro ao gerar link. Verifique se sou administrador.' }, { quoted: m });
+            this.logger.error(`[GroupManagement] getGroupLink erro: ${e.message}`);
+            if (this.sock) await this.sock.sendMessage(groupJid, { text: `❌ Erro ao gerar link: ${e.message?.includes('not-authorized') ? 'Não sou admin deste grupo.' : 'Tente novamente.'}` }, { quoted: m }).catch(() => { });
         }
         return true;
     }
@@ -457,7 +480,7 @@ class GroupManagement {
     async revokeGroupLink(m: any): Promise<boolean> {
         const groupJid = m.key.remoteJid;
         try {
-            await this.sock.groupRevokeInvite(groupJid);
+            await this._withRetry(() => this.sock.groupRevokeInvite(groupJid));
             if (this.sock) await this.sock.sendMessage(groupJid, { text: '🔄 Link revogado com sucesso!' }, { quoted: m });
         } catch (e: any) {
             if (this.sock) await this.sock.sendMessage(groupJid, { text: '❌ Erro ao revogar link.' }, { quoted: m });
@@ -547,7 +570,7 @@ class GroupManagement {
     async closeGroup(groupJid: string): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this.sock.groupSettingUpdate(groupJid, 'announcement');
+            await this._withRetry(() => this.sock.groupSettingUpdate(groupJid, 'announcement'));
             this.clearMetadataCache(groupJid);
             this.logger.info(`✅ Grupo ${groupJid} fechado`);
             return { success: true, message: '🔒 Grupo fechado. Apenas admins.' };
@@ -560,7 +583,7 @@ class GroupManagement {
     async openGroup(groupJid: string): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this.sock.groupSettingUpdate(groupJid, 'not_announcement');
+            await this._withRetry(() => this.sock.groupSettingUpdate(groupJid, 'not_announcement'));
             this.clearMetadataCache(groupJid);
             this.logger.info(`✅ Grupo ${groupJid} aberto`);
             return { success: true, message: '🔓 Grupo aberto. Todos.' };
@@ -668,7 +691,7 @@ class GroupManagement {
 
     async markAsRead(m: any) {
         try {
-            await this.sock.readMessages([m.key]);
+            await this._withRetry(() => this.sock.readMessages([m.key]));
         } catch (e) { }
         return true;
     }
@@ -685,49 +708,70 @@ class GroupManagement {
 
     async kickUser(m: any, args: any[]) {
         const targets = this._extractTargets(m);
-        if (targets.length === 0) return true;
+        if (targets.length === 0) {
+            await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Mencione (@alguem) ou responda a mensagem de quem deseja remover.' }, { quoted: m }).catch(() => { });
+            return true;
+        }
         const groupJid = m.key.remoteJid;
         try {
-            await this.sock.groupParticipantsUpdate(groupJid, targets, 'remove');
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'remove'));
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
-            await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s)`, mentions: targets }, { quoted: m });
-        } catch (e) { }
+            await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s) do grupo.`, mentions: targets }, { quoted: m });
+        } catch (e: any) {
+            this.logger.error(`[GroupManagement] kickUser erro: ${e.message}`);
+            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao remover: ${e.message?.includes('not-authorized') ? 'Não tenho permissão de admin.' : e.message}` }, { quoted: m }).catch(() => { });
+        }
         return true;
     }
 
     async addUser(m: any, args: any[]) {
         const groupJid = m.key.remoteJid;
-        if (args.length === 0) return true;
+        if (args.length === 0) {
+            await this.sock.sendMessage(groupJid, { text: '❌ Uso: #add [número] — ex: #add 244900000000' }, { quoted: m }).catch(() => { });
+            return true;
+        }
         const numbers = args.map((arg: string) => arg.replace(/\D/g, '')).filter(Boolean).map((n: string) => `${n}@s.whatsapp.net`);
         if (numbers.length === 0) return true;
         try {
-            const result = await this.sock.groupParticipantsUpdate(groupJid, numbers, 'add');
-            // Handle result...
-        } catch (e) { }
+            const result = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, numbers, 'add'));
+            await this.sock.sendMessage(groupJid, { text: `✅ Adicionado(s): ${numbers.map((n: string) => `@${n.split('@')[0]}`).join(', ')}`, mentions: numbers }, { quoted: m });
+        } catch (e: any) {
+            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao adicionar: ${e.message?.includes('not-authorized') ? 'Não tenho permissão.' : e.message}` }, { quoted: m }).catch(() => { });
+        }
         return true;
     }
 
     async promoteUser(m: any, args: any[]) {
         const targets = this._extractTargets(m);
-        if (targets.length === 0) return true;
+        if (targets.length === 0) {
+            await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Mencione (@alguem) quem promover a admin.' }, { quoted: m }).catch(() => { });
+            return true;
+        }
         const groupJid = m.key.remoteJid;
         try {
-            await this.sock.groupParticipantsUpdate(groupJid, targets, 'promote');
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'promote'));
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
-            await this.sock.sendMessage(groupJid, { text: `👑 ${mentions} promovido(s)`, mentions: targets }, { quoted: m });
-        } catch (e) { }
+            await this.sock.sendMessage(groupJid, { text: `👑 ${mentions} promovido(s) a admin!`, mentions: targets }, { quoted: m });
+        } catch (e: any) {
+            await this.sock.sendMessage(m.key.remoteJid, { text: `❌ Falha ao promover: ${e.message?.includes('not-authorized') ? 'Não tenho permissão.' : e.message}` }, { quoted: m }).catch(() => { });
+        }
         return true;
     }
 
     async demoteUser(m: any, args: any[]) {
         const targets = this._extractTargets(m);
-        if (targets.length === 0) return true;
+        if (targets.length === 0) {
+            await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Mencione (@alguem) quem rebaixar.' }, { quoted: m }).catch(() => { });
+            return true;
+        }
         const groupJid = m.key.remoteJid;
         try {
-            await this.sock.groupParticipantsUpdate(groupJid, targets, 'demote');
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'demote'));
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
-            await this.sock.sendMessage(groupJid, { text: `⬇️ ${mentions} rebaixado(s)`, mentions: targets }, { quoted: m });
-        } catch (e) { }
+            await this.sock.sendMessage(groupJid, { text: `⬇️ ${mentions} rebaixado(s) de admin.`, mentions: targets }, { quoted: m });
+        } catch (e: any) {
+            await this.sock.sendMessage(m.key.remoteJid, { text: `❌ Falha ao rebaixar: ${e.message?.includes('not-authorized') ? 'Não tenho permissão.' : e.message}` }, { quoted: m }).catch(() => { });
+        }
         return true;
     }
 
@@ -781,7 +825,7 @@ class GroupManagement {
     async setGroupDesc(groupJid: string, desc: string): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this.sock.groupUpdateDescription(groupJid, desc);
+            await this._withRetry(() => this.sock.groupUpdateDescription(groupJid, desc));
             this.clearMetadataCache(groupJid);
             return { success: true, message: '✅ Descrição alterada com sucesso!' };
         } catch (e: any) {
@@ -793,7 +837,7 @@ class GroupManagement {
     async setGroupPhoto(groupJid: string, buffer: any): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this.sock.updateProfilePicture(groupJid, buffer);
+            await this._withRetry(() => this.sock.updateProfilePicture(groupJid, buffer));
             this.clearMetadataCache(groupJid);
             return { success: true, message: '✅ Foto alterada com sucesso!' };
         } catch (e: any) {
@@ -805,7 +849,7 @@ class GroupManagement {
     async setGroupName(groupJid: string, name: string): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this.sock.groupUpdateSubject(groupJid, name);
+            await this._withRetry(() => this.sock.groupUpdateSubject(groupJid, name));
             this.clearMetadataCache(groupJid);
             return { success: true, message: '✅ Nome alterado com sucesso!' };
         } catch (e: any) {

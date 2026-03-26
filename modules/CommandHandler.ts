@@ -105,15 +105,31 @@ class CommandHandler {
     public setSocket(sock: any): void {
         this.sock = sock;
 
-        // Garante inicialização dos módulos dependentes de sock
-        if (!this.stickerHandler) this.stickerHandler = new StickerViewOnceHandler(sock, this.config);
-        if (!this.groupManagement) {
+        // Propaga o socket novo para TODOS os sub-módulos (crítico após reconexão do Baileys)
+        if (this.stickerHandler?.setSocket) this.stickerHandler.setSocket(sock);
+        else if (!this.stickerHandler) this.stickerHandler = new StickerViewOnceHandler(sock, this.config);
+
+        if (this.groupManagement?.setSocket) {
+            this.groupManagement.setSocket(sock); // Propaga para instância existente
+        } else if (!this.groupManagement) {
             this.groupManagement = new GroupManagement(sock, this.config, this.moderationSystem);
-            this.userProfile = new UserProfile(sock, this.config);
-            this.botProfile = new BotProfile(sock, this.config);
-            this.imageEffects = new ImageEffects(this.config);
         }
-        if (!this.presenceSimulator) this.presenceSimulator = new PresenceSimulator(sock);
+
+        if (this.userProfile?.setSocket) this.userProfile.setSocket(sock);
+        else if (this.userProfile) this.userProfile.sock = sock; // Atribuição direta (UserProfile não tem setSocket)
+        else this.userProfile = new UserProfile(sock, this.config);
+
+        if (this.botProfile?.setSocket) this.botProfile.setSocket(sock);
+        else if (this.botProfile) this.botProfile.sock = sock; // Atribuição direta (BotProfile não tem setSocket)
+        else this.botProfile = new BotProfile(sock, this.config);
+
+        if (this.presenceSimulator) {
+            this.presenceSimulator.sock = sock; // PresenceSimulator usa atributo direto
+        } else {
+            this.presenceSimulator = new PresenceSimulator(sock);
+        }
+
+        if (!this.imageEffects) this.imageEffects = new ImageEffects(this.config);
     }
 
     public async handle(m: any, meta: any): Promise<boolean | void> {
