@@ -104,14 +104,21 @@ class GroupManagement {
     }
 
     private _extractTargets(m: any): string[] {
-        const mentioned: string[] = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-        if (mentioned.length > 0) return mentioned;
+        const contextInfo = m.message?.extendedTextMessage?.contextInfo || {};
+        const mentioned: string[] = contextInfo.mentionedJid || [];
+        if (mentioned.length > 0) return mentioned.map(j => j.split(':')[0].split('@')[0] + '@s.whatsapp.net');
 
         const replyInfo = m.replyInfo || m._replyInfo;
-        if (replyInfo?.quemEscreveuCitacaoJid) return [replyInfo.quemEscreveuCitacaoJid];
+        if (replyInfo?.quemEscreveuCitacaoJid) {
+            const jid = replyInfo.quemEscreveuCitacaoJid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            return [jid];
+        }
 
-        const participant = m.message?.extendedTextMessage?.contextInfo?.participant;
-        if (participant) return [participant];
+        const participant = contextInfo.participant || m.participant || m.key?.participant;
+        if (participant) {
+            const jid = participant.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            return [jid];
+        }
 
         return [];
     }
@@ -300,6 +307,17 @@ class GroupManagement {
             case 'goodbye':
                 return await this.toggleSetting(m, 'goodbye', args[0]);
             case 'antifake':
+                if (args[0] === 'add' && args[1]) {
+                    const num = args[1].replace(/\D/g, '') + '@s.whatsapp.net';
+                    if (this.moderationSystem) Object.getPrototypeOf(this.moderationSystem).addFakeException?.call(this.moderationSystem, num);
+                    if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `✅ Exceção AntiFake adicionada para: ${args[1]}` }, { quoted: m });
+                    return true;
+                } else if (args[0] === 'remove' && args[1]) {
+                    const num = args[1].replace(/\D/g, '') + '@s.whatsapp.net';
+                    if (this.moderationSystem) Object.getPrototypeOf(this.moderationSystem).removeFakeException?.call(this.moderationSystem, num);
+                    if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `🗑️ Exceção AntiFake removida para: ${args[1]}` }, { quoted: m });
+                    return true;
+                }
                 return await this.toggleSetting(m, 'antifake', args[0]);
             case 'antispam':
                 return await this.toggleSetting(m, 'antispam', args[0]);
@@ -316,8 +334,31 @@ class GroupManagement {
             case 'antidocumento':
                 return await this.toggleSetting(m, 'antidoc', args[0]);
             case 'blacklist':
-                const report = await this.getBlacklistInfo(m.key.remoteJid);
-                if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: report }, { quoted: m });
+                if (args[0] === 'add') {
+                    const targets = this._extractTargets(m);
+                    const targetInfo = args[1] || targets[0];
+                    if (targetInfo) {
+                        const num = targetInfo.replace(/\D/g, '').replace(/@.*/, '') + '@s.whatsapp.net';
+                        if (this.moderationSystem) this.moderationSystem.addToBlacklist(num, 'Manual', num, 'Adicionado por admin', 0);
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `🚫 Número cadastrado na Blacklist Global!` }, { quoted: m });
+                    } else {
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `⚠️ Responda ou mencione para dar Blacklist.` }, { quoted: m });
+                    }
+                    return true;
+                } else if (args[0] === 'remove') {
+                    const targets = this._extractTargets(m);
+                    const targetInfo = args[1] || targets[0];
+                    if (targetInfo) {
+                        const num = targetInfo.replace(/\D/g, '').replace(/@.*/, '') + '@s.whatsapp.net';
+                        if (this.moderationSystem) this.moderationSystem.removeFromBlacklist(num);
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `✅ Número libertado da Blacklist.` }, { quoted: m });
+                    }
+                    return true;
+                }
+                if (typeof (this as any).getBlacklistInfo === 'function') {
+                    const report = await (this as any).getBlacklistInfo(m.key.remoteJid);
+                    if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: report }, { quoted: m });
+                }
                 return true;
 
             case 'setwelcome': {
@@ -611,17 +652,32 @@ class GroupManagement {
             if (!this.groupSettings[groupJid].mutedUsers) this.groupSettings[groupJid].mutedUsers = {};
             this.groupSettings[groupJid].mutedUsers[target] = muteInfo.expires;
             this.saveGroupSettings();
+
+            if (muteInfo.muteCount >= 3) {
+                // Ao 3º Strike no mesmo dia, auto-ban!
+                if (this.sock) {
+                    await this.sock.groupParticipantsUpdate(groupJid, [target], 'remove');
+                    await this.sock.sendMessage(groupJid, { text: `🚨 @${target.split('@')[0]} recebeu o seu 3º MUTE hoje e foi banido permanentemente por infrações repetidas!`, mentions: [target] }, { quoted: m });
+                }
+                return true;
+            }
+
+            if (this.sock) {
+                const userName = target.split('@')[0];
+                await this.sock.sendMessage(m.key.remoteJid, { text: `🔇 @${userName} silenciado ${muteInfo.muteMinutes}m\n\n⚠️ *Aviso [${muteInfo.muteCount}/3]*: Ao 3º mute será banido. Se falar no chat, será banido.`, mentions: [target] }, { quoted: m });
+            }
         } else {
             if (!this.groupSettings[groupJid]) this.groupSettings[groupJid] = {};
             if (!this.groupSettings[groupJid].mutedUsers) this.groupSettings[groupJid].mutedUsers = {};
             this.groupSettings[groupJid].mutedUsers[target] = Date.now() + (duration * 60 * 1000);
             this.saveGroupSettings();
+
+            if (this.sock) {
+                const userName = target.split('@')[0];
+                await this.sock.sendMessage(m.key.remoteJid, { text: `🔇 @${userName} silenciado ${duration}m`, mentions: [target] }, { quoted: m });
+            }
         }
 
-        if (this.sock) {
-            const userName = target.split('@')[0];
-            await this.sock.sendMessage(m.key.remoteJid, { text: `🔇 @${userName} silenciado ${duration}m`, mentions: [target] }, { quoted: m });
-        }
         return true;
     }
 

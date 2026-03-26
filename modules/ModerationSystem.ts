@@ -32,11 +32,13 @@ class ModerationSystem {
     private maxAttemptsBeforeBlacklist: number;
     private warnings: Map<string, any>;
     private antiFakeGroups: Set<string>;
+    private antiFakeExceptions: Set<string>;
     private antiImageGroups: Set<string>;
     private antiStickerGroups: Set<string>;
     private antiVideoGroups: Set<string>;
     private warningsPath: string;
     private antiFakePath: string;
+    private antiFakeExceptionsPath: string;
     private antiImagePath: string;
     private antiStickerPath: string;
     private antiVideoPath: string;
@@ -82,6 +84,7 @@ class ModerationSystem {
         // Persistência
         this.warningsPath = '/tmp/akira_data/data/warnings.json';
         this.antiFakePath = '/tmp/akira_data/data/antifake.json';
+        this.antiFakeExceptionsPath = '/tmp/akira_data/data/antifake_exceptions.json';
         this.antiImagePath = '/tmp/akira_data/data/antiimage.json';
         this.antiStickerPath = '/tmp/akira_data/data/antisticker.json';
         this.antiVideoPath = '/tmp/akira_data/data/antivideo.json';
@@ -176,10 +179,16 @@ class ModerationSystem {
         countData.count += 1;
         this.muteCounts.set(key, countData);
 
-        // Calcula tempo com base na reincidência
+        // Se for o 3º strike no mesmo dia -> Banimento automático
+        if (countData.count >= 3) {
+            this.logger.warn(`🚨 [3-STRIKES] ${userId} atingiu o limite de mutes diários. Marque para BAN.`);
+            return { action: 'BAN', muteCount: countData.count };
+        }
+
+        // Calcula tempo com base na reincidência (X2)
         let muteMinutes = minutes;
         if (countData.count > 1) {
-            muteMinutes = minutes * Math.pow(2, countData.count - 1); // Exponencial: 5, 10, 20...
+            muteMinutes = minutes * Math.pow(2, countData.count - 1);
             this.logger.warn(`⚠️ [MUTE INTENSIFICADO] ${userId} muteado ${countData.count}x hoje. Tempo: ${muteMinutes} min`);
         }
 
@@ -191,7 +200,7 @@ class ModerationSystem {
             muteCount: countData.count
         });
 
-        return { expires, muteMinutes, muteCount: countData.count };
+        return { action: 'MUTE', expires, muteMinutes, muteCount: countData.count };
     }
 
     public unmuteUser(groupId: string, userId: string): boolean {
@@ -511,13 +520,39 @@ class ModerationSystem {
         return enable;
     }
 
+    public isFakeNumber(jid: string): boolean {
+        // Formato esperado Baileys: 244XXXXXXXXX@s.whatsapp.net ou 244XXXXXXXXX:1@s.whatsapp.net
+        const cleanId = jid.split(':')[0].split('@')[0];
+
+        // Se estiver na lista de exceções, não é fake
+        if (this.antiFakeExceptions.has(jid) || this.antiFakeExceptions.has(cleanId + '@s.whatsapp.net')) return false;
+
+        // Se não começar com 244 (Angola), é considerado fake para este bot (regra do usuário)
+        return !cleanId.startsWith('244');
+    }
+
+    public addFakeException(jid: string): void {
+        const cleanId = jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+        this.antiFakeExceptions.add(cleanId);
+        this._saveAllSettings();
+        this.logger.info(`✅ [ANTI-FAKE] Exceção adicionada: ${cleanId}`);
+    }
+
+    public removeFakeException(jid: string): boolean {
+        const cleanId = jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+        const res = this.antiFakeExceptions.delete(cleanId) || this.antiFakeExceptions.delete(jid);
+        if (res) this._saveAllSettings();
+        return res;
+    }
+
     public isAntiFakeActive(groupId: string): boolean {
         return this.antiFakeGroups.has(groupId);
     }
 
-    public isFakeNumber(userId: string): boolean {
-        // Formato esperado: 244XXXXXXXXX@s.whatsapp.net
-        return !userId.startsWith('244');
+    public isLink(text: string): boolean {
+        if (!text) return false;
+        const linkPattern = /(https?:\/\/[^\s]+|www\.[^\s]+|chat\.whatsapp\.com\/[^\s]+)/gi;
+        return linkPattern.test(text);
     }
 
     public toggleAntiImage(groupId: string, enable: boolean = true): boolean {
@@ -556,6 +591,7 @@ class ModerationSystem {
     private _loadAllSettings(): void {
         this._loadSettingsSet(this.antiLinkPath, this.antiLinkGroups);
         this._loadSettingsSet(this.antiFakePath, this.antiFakeGroups);
+        this._loadSettingsSet(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._loadSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._loadSettingsSet(this.antiStickerPath, this.antiStickerGroups);
         this._loadSettingsSet(this.antiVideoPath, this.antiVideoGroups);
@@ -565,6 +601,7 @@ class ModerationSystem {
     private _saveAllSettings(): void {
         this._saveSettingsSet(this.antiLinkPath, this.antiLinkGroups);
         this._saveSettingsSet(this.antiFakePath, this.antiFakeGroups);
+        this._saveSettingsSet(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._saveSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._saveSettingsSet(this.antiStickerPath, this.antiStickerGroups);
         this._saveSettingsSet(this.antiVideoPath, this.antiVideoGroups);

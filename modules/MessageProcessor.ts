@@ -30,38 +30,39 @@ class MessageProcessor {
     }
 
     /**
+    * Extrai o JID real do participante (limpo de sufixos de dispositivo)
+    * Garantindo funcionamento em grupos no Railway
+    */
+    extractParticipantJid(message: any): string {
+        try {
+            const remoteJid = message.key?.remoteJid || '';
+            const isGroup = String(remoteJid).endsWith('@g.us');
+
+            // Em grupos, o sender está em participant. Em PV, é o próprio remoteJid
+            const participant = isGroup
+                ? (message.key?.participant || message.participant)
+                : remoteJid;
+
+            if (!participant) return '';
+
+            const jidStr = String(participant);
+            // Remove sufixos de dispositivo (:1, :2) mantendo o domínio @s.whatsapp.net ou @lid
+            const [userPart, domainPart] = jidStr.split('@');
+            if (!userPart || !domainPart) return jidStr;
+
+            const cleanUser = userPart.split(':')[0];
+            return `${cleanUser}@${domainPart}`;
+        } catch (e: any) {
+            this.logger?.error('Erro ao extrair JID real:', e.message);
+            return '';
+        }
+    }
+
+    /**
     * Extrai número real do usuário
     */
     extractUserNumber(message: any) {
         try {
-            const key = message.key || {};
-            const remoteJid = key.remoteJid || '';
-
-            // Se for PV (não termina com @g.us)
-            if (!String(remoteJid).endsWith('@g.us')) {
-                return String(remoteJid).split(':')[0].split('@')[0];
-            }
-
-            // Fallback robusto: se houver participante, tenta extrair o número de qualquer JID
-            const participant = key.participant || remoteJid;
-            if (participant) {
-                const jidStr = String(participant);
-                // Extrai apenas a parte numérica antes do primeiro @ ou :
-                const parts = jidStr.split('@')[0].split(':');
-                const rawNumber = parts[0];
-
-                // Se tiver pelo menos 5 dígitos, consideramos um número válido
-                if (rawNumber && rawNumber.length >= 5) {
-                    return rawNumber;
-                }
-
-                // Se for @lid ou similar e falhou acima, tenta limpar tudo que não é dígito
-                if (jidStr.includes('@lid') || jidStr.includes('@s.whatsapp.net')) {
-                    const digits = jidStr.split('@')[0].replace(/\D/g, '');
-                    if (digits.length >= 5) return digits;
-                }
-            }
-
             return 'desconhecido';
 
         } catch (e: any) {

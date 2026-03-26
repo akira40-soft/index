@@ -133,9 +133,9 @@ class CommandHandler {
     }
 
     public async handle(m: any, meta: any): Promise<boolean | void> {
-        // meta: { nome, numeroReal, texto, replyInfo, ehGrupo }
+        // meta: { nome, numeroReal, participantJid, texto, replyInfo, ehGrupo }
         try {
-            const { nome, numeroReal, texto, replyInfo, ehGrupo } = meta;
+            const { nome, numeroReal, participantJid, texto, replyInfo, ehGrupo } = meta;
             // make replyInfo available to downstream modules (GroupManagement etc.)
             if (replyInfo) {
                 // attach under a private property to avoid conflict with Baileys
@@ -263,8 +263,8 @@ class CommandHandler {
             }
 
             // Verifica permissões de dono
-            const isOwner = this.config.isDono(senderId, nome);
-            const userId = m.key.participant || senderId;
+            const isOwner = this.config.isDono(numeroReal, nome);
+            const userId = participantJid || m.key.participant || numeroReal;
 
             // VERIFICAÇÃO DE REGISTRO GLOBAL - APENAS NO PV, NÃO EM GRUPOS
             // Grupos permitem usuários não registrados usarem comandos
@@ -438,14 +438,9 @@ class CommandHandler {
                 case 'game':
                 case 'osint':
                 case 'inteligencia':
-                case 'premium':
-                case 'vip':
-                case 'buy':
-                case 'comprar':
-                case 'info':
+                case 'extras':
                 case 'informacoes':
                 case 'about':
-                case 'extras':
                     return await this._showMenu(m, command);
 
                 case 'pinterest':
@@ -822,6 +817,20 @@ class CommandHandler {
                 case 'reportar':
                 case 'bug':
                     return await this._handleReport(m, fullArgs, nome, senderId, ehGrupo);
+
+                case 'dono':
+                case 'owner':
+                case 'criador':
+                case 'creator':
+                    return await this._handleDono(m);
+
+                case 'premium':
+                case 'vip':
+                case 'plano':
+                case 'planos':
+                case 'assinatura':
+                case 'subscribe':
+                    return await this._handlePremium(m, userId, args);
 
                 default:
                     return false;
@@ -1521,7 +1530,7 @@ ${P}menu osint — Comandos OSINT avançados`,
             msg += `📜 *Bio:* ${userInfo.status || 'Sem biografia'}\n\n`;
 
             msg += `🏆 *CONQUISTAS:* ${record.level > 10 ? '🎖️ Veterano' : '🐣 Novato'}\n`;
-            msg += `💎 *Status:* ${this.bot.subscriptionManager.isPremium(uid) ? 'PREMIUM 💎' : 'FREE'}\n`;
+            msg += `💎 *Status:* ${this.subscriptionManager.isPremium(uid) ? 'PREMIUM 💎' : 'FREE'}\n`;
 
             if (userInfo.picture) {
                 await this.sock.sendMessage(m.key.remoteJid, {
@@ -1571,31 +1580,84 @@ ${P}menu osint — Comandos OSINT avançados`,
     }
 
     public async _handleReport(m: any, fullArgs: string, nome: string, senderId: string, ehGrupo: boolean): Promise<boolean> {
-        if (!fullArgs) {
-            await this._reply(m, `❌ Uso: ${this.config.PREFIXO}report <bug/sugestão>`);
+        const P = this.config.PREFIXO || '#';
+        const OWNER_NUMBER = '244937035662';
+        const OWNER_JID = `${OWNER_NUMBER}@s.whatsapp.net`;
+        const chatJid = m.key.remoteJid;
+
+        if (!fullArgs || fullArgs.trim().length < 3) {
+            await this._reply(m,
+                `📝 *USO DO REPORT*\n\n` +
+                `${P}report [descrição do problema]\n\n` +
+                `_Exemplo: ${P}report O bot não está respondendo no grupo X_`
+            );
             return true;
         }
 
         const reportId = Math.random().toString(36).substring(7).toUpperCase();
-        const origem = ehGrupo ? `Grupo (${m.key.remoteJid.split('@')[0]})` : 'Privado (PV)';
-        const timestamp = new Date().toLocaleString('pt-BR');
 
-        const reportMsg = `🚨 *NOVO REPORT [${reportId}]* 🚨\n\n` +
-            `👤 *De:* ${nome}\n` +
-            `📱 *Número:* ${senderId.split('@')[0]}\n` +
-            `📍 *Origem:* ${origem}\n` +
-            `🕒 *Data:* ${timestamp}\n\n` +
-            `📝 *Conteúdo:*\n${fullArgs}`;
+        // Confirmação para o usuário
+        await this._reply(m,
+            `✅ *REPORT ENVIADO AO DONO!*\n\n` +
+            `📨 Sua mensagem foi encaminhada para Isaac Quarenta.\n` +
+            `🔖 *ID:* #${reportId}\n` +
+            `⏳ Aguarde resposta.`
+        );
 
-        // Envia sempre para o dono principal: 244937035662
-        const donoJid = '244937035662@s.whatsapp.net';
+        // --- Dados do Reporter ---
+        const userInfo = await this.userProfile.getUserInfo(senderId);
+        const grupoInfo = ehGrupo
+            ? `\n📁 *Grupo:* ${(m as any)._groupName || chatJid.split('@')[0]}\n🔗 *GID:* ${chatJid}`
+            : '\n📂 *Local:* Conversa Privada (PV)';
+
+        const timestamp = new Date().toLocaleString('pt-PT', { timeZone: 'Africa/Luanda' });
+        const numeroClean = senderId.replace('@s.whatsapp.net', '').split(':')[0];
+
+        const reportMsg =
+            `🚨 *NOVO REPORT [#${reportId}]*\n` +
+            `══════════════════════════════\n\n` +
+            `👤 *Reporter:* ${nome}\n` +
+            `📱 *Número:* +${numeroClean}\n` +
+            `🆔 *JID:* ${senderId}` +
+            grupoInfo + `\n` +
+            `🕐 *Data/Hora:* ${timestamp}\n\n` +
+            `📝 *Mensagem:*\n"${fullArgs}"\n\n` +
+            `📜 *Bio do Reporter:* ${userInfo.status || 'N/A'}\n` +
+            `💎 *Status:* ${this.subscriptionManager.isPremium(senderId) ? 'PREMIUM 💎' : 'FREE'}\n` +
+            `══════════════════════════════\n` +
+            `_Akira Enterprise Report System_`;
+
         try {
-            await this.sock.sendMessage(donoJid, { text: reportMsg });
-            await this._reply(m, `✅ *Report enviado com sucesso!*\nID: #${reportId}\n\nObrigado por colaborar.`);
+            // Envia para o dono
+            if (userInfo.photoUrl) {
+                await this.sock.sendMessage(OWNER_JID, {
+                    image: { url: userInfo.photoUrl },
+                    caption: reportMsg
+                });
+            } else {
+                await this.sock.sendMessage(OWNER_JID, { text: reportMsg });
+            }
+
+            // Envia VCard para o dono facilitar contato
+            const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${nome}\nTEL;type=CELL;type=VOICE;waid=${numeroClean}:${numeroClean}\nEND:VCARD`;
+            await this.sock.sendMessage(OWNER_JID, {
+                contacts: { displayName: nome, contacts: [{ vcard }] }
+            });
+
+            // Encaminha mensagem citada se existir (Contexto Extra)
+            if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+                const q = m.message.extendedTextMessage.contextInfo;
+                const quotedText = q.quotedMessage?.conversation || q.quotedMessage?.extendedTextMessage?.text || '[Mídia ou outro]';
+                await this.sock.sendMessage(OWNER_JID, {
+                    text: `📎 *Contexto Citado:* \nAutor: ${q.participant}\n"${quotedText}"`
+                });
+            }
+
+            this.logger.info(`📨 [REPORT] #${reportId} enviado para o dono.`);
         } catch (err: any) {
-            await this._reply(m, '⚠️ Erro ao enviar report. Tenta contactar o dono directamente.');
-            console.warn(`[REPORT FALHO] ${reportMsg}`, err.message);
+            this.logger.error(`❌ [REPORT] Erro ao enviar para dono: ${err.message}`);
         }
+
         return true;
     }
 
@@ -3067,7 +3129,67 @@ ${P}menu osint — Comandos OSINT avançados`,
             return true;
         }
     }
+    // ═══════════════════════════════════════════════════════════════════════
+    // #PREMIUM / #VIP — Status e planos de subscrição
+    // ═══════════════════════════════════════════════════════════════════════
+    private async _handlePremium(m: any, userId: string, args: string[]): Promise<boolean> {
+        const P = this.config.PREFIXO || '#';
+
+        // Sub-comando: #premium ativar <código> (apenas dono)
+        if (args[0] === 'ativar' && this.config.isDono(userId)) {
+            const targetJid = m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]
+                || m.message?.extendedTextMessage?.contextInfo?.participant;
+            const dias = parseInt(args[1]) || 30;
+            if (targetJid) {
+                const res = this.subscriptionManager.subscribe(targetJid, dias);
+                await this._reply(m, res.sucesso
+                    ? `✅ Premium ativado para @${targetJid.split('@')[0]} por ${dias} dias!\n📅 Expira em: ${res.expiraEm}`
+                    : `❌ Erro: ${res.erro}`,
+                    { mentions: [targetJid] });
+                return true;
+            }
+            await this._reply(m, '❌ Mencione o utilizador: *#premium ativar @user 30*');
+            return true;
+        }
+
+        // Exibe status e planos para o utilizador atual
+        const info = this.subscriptionManager.getSubscriptionInfo(userId);
+        const isOwner = this.config.isDono(userId);
+
+        const tierEmoji = isOwner ? '🔱' : (info.tier === 'SUBSCRIBER' ? '💎' : '🆓');
+        const contacto = 'wa.me/244937035662';
+
+        const msg =
+            `${tierEmoji} *STATUS PREMIUM — AKIRA V21*\n` +
+            `════════════════════════════\n\n` +
+            `👤 *Plano atual:* ${info.tier}\n` +
+            `📊 *Status:* ${info.status}\n` +
+            `⏱️ *Período:* ${info.periodo}\n` +
+            `📈 *Usos/período:* ${info.usoPorPeriodo}\n` +
+            (info.expiraEm ? `📅 *Expira em:* ${info.expiraEm}\n` : '') +
+            `\n🔓 *Recursos:\n${info.recursos.join('\n')}\n\n` +
+            `════════════════════════════\n` +
+            `💰 *PLANOS DISPONÍVEIS*\n\n` +
+            `🆓 *FREE (padrão)*\n` +
+            `• 1 uso/mês por feature\n` +
+            `• Acesso a ferramentas básicas\n` +
+            `• Custo: Grátis\n\n` +
+            `💎 *SUBSCRIBER (30 dias)*\n` +
+            `• 1 uso/semana por feature\n` +
+            `• OSINT avançado + análise\n` +
+            `• Leak database search\n` +
+            `• Custo: 500 Kz / mês\n\n` +
+            `🔱 *OWNER / ROOT*\n` +
+            `• Acesso ilimitado a tudo\n` +
+            `• Modo ROOT + dark web\n` +
+            `• Custo: Contacto direto\n\n` +
+            `📲 *Para adquirir:*\n` +
+            `${contacto}\n\n` +
+            `_Use ${P}report para reportar problemas de acesso._`;
+
+        await this._reply(m, msg);
+        return true;
+    }
 
 }
 export default CommandHandler;
-

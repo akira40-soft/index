@@ -253,9 +253,13 @@ class BotCore {
                     this.currentQR = null;
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     let shouldReconnect = reason !== DisconnectReason.loggedOut;
-                    if (reason === 401 || reason === 500) {
-                        this.logger.warn('🔄 401/500 → Clearing auth');
+                    if (reason === 401) {
+                        this.logger.warn('🔄 401 → Clearing auth');
                         this._cleanAuthOnError();
+                        shouldReconnect = true;
+                        this.reconnectAttempts = 0;
+                    } else if (reason === 500) {
+                        this.logger.warn('🔄 500 Internal Server Error → Force Reconnect without clearing auth');
                         shouldReconnect = true;
                         this.reconnectAttempts = 0;
                     }
@@ -305,37 +309,63 @@ class BotCore {
 
             this.sock.ev.on('group-participants.update', async (update: any) => {
                 const { id, participants, action } = update;
+                if (!id || !participants || participants.length === 0) return;
 
+                // Limpa todos os JIDs de participantes (remove :1, :2 etc)
+                const cleanParticipants = participants.map((p: string) => {
+                    const [user, domain] = p.split('@');
+                    return `${user.split(':')[0]}@${domain || 's.whatsapp.net'}`;
+                });
+
+                let validParticipants = [...cleanParticipants];
+
+                // Anti-Fake Check
                 if (action === 'add' && this.moderationSystem?.isAntiFakeActive(id)) {
-                    for (const participant of participants) {
-                        if (this.moderationSystem.isFakeNumber(participant)) {
-                            this.logger.warn(`🚫 [ANTI-FAKE] ${participant}`);
-                            await this.sock.sendMessage(id, { text: '⚠️ Número fake removido.' });
-                            await this.sock.groupParticipantsUpdate(id, [participant], 'remove');
-                            participants.splice(participants.indexOf(participant), 1);
+                    const fakeParticipants = validParticipants.filter((p: string) => this.moderationSystem.isFakeNumber(p));
+                    validParticipants = validParticipants.filter((p: string) => !this.moderationSystem.isFakeNumber(p));
+
+                    if (fakeParticipants.length > 0) {
+                        for (const p of fakeParticipants) {
+                            this.logger.warn(`🚫 [ANTI-FAKE] Removendo ${p} de ${id}`);
+                            try {
+                                await this.sock.groupParticipantsUpdate(id, [p], 'remove');
+                            } catch (e: any) {
+                                this.logger.error(`Erro ao remover fake: ${e.message}`);
+                            }
                         }
+                        await this.sock.sendMessage(id, { text: '⚠️ Números não-autorizados removidos (Anti-Fake ativo).' }).catch(() => { });
                     }
                 }
 
-                if (action === 'add' && this.groupManagement && participants.length > 0) {
-                    const isWelcomeOn = this.groupManagement.groupSettings?.[id]?.welcome;
-                    if (isWelcomeOn) {
-                        for (const p of participants) {
-                            const template = this.groupManagement.getCustomMessage(id, 'welcome') || 'Olá @user!';
-                            const formatted = await this.groupManagement.formatMessage(id, p, template);
-                            await this.sock.sendMessage(id, { text: formatted, mentions: [p] });
+                // Welcome Trigger
+                if (action === 'add' && this.groupManagement && validParticipants.length > 0) {
+                    try {
+                        const isWelcomeOn = this.groupManagement.getWelcomeStatus(id);
+                        if (isWelcomeOn) {
+                            for (const p of validParticipants) {
+                                const template = this.groupManagement.getCustomMessage(id, 'welcome') || 'Olá @user, bem-vindo ao @group!';
+                                const formatted = await this.groupManagement.formatMessage(id, p, template);
+                                await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch(() => { });
+                            }
                         }
+                    } catch (e: any) {
+                        this.logger.error(`Erro no Welcome: ${e.message}`);
                     }
                 }
 
-                if (action === 'remove' && this.groupManagement) {
-                    const isGoodbyeOn = this.groupManagement.groupSettings?.[id]?.goodbye;
-                    if (isGoodbyeOn) {
-                        for (const p of participants) {
-                            const template = this.groupManagement.getCustomMessage(id, 'goodbye') || 'Adeus @user!';
-                            const formatted = await this.groupManagement.formatMessage(id, p, template);
-                            await this.sock.sendMessage(id, { text: formatted, mentions: [p] });
+                // Goodbye Trigger
+                if (action === 'remove' && this.groupManagement && cleanParticipants.length > 0) {
+                    try {
+                        const isGoodbyeOn = this.groupManagement.getGoodbyeStatus(id);
+                        if (isGoodbyeOn) {
+                            for (const p of cleanParticipants) {
+                                const template = this.groupManagement.getCustomMessage(id, 'goodbye') || 'Adeus @user!';
+                                const formatted = await this.groupManagement.formatMessage(id, p, template);
+                                await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch(() => { });
+                            }
                         }
+                    } catch (e: any) {
+                        this.logger.error(`Erro no Goodbye: ${e.message}`);
                     }
                 }
             });
@@ -379,6 +409,7 @@ class BotCore {
             if (!this.messageProcessor) return;
 
             const nome = m.pushName || 'Usuário';
+            const participantJid = this.messageProcessor.extractParticipantJid(m);
             const numeroReal = this.messageProcessor.extractUserNumber(m);
 
             if (this.moderationSystem?.isBlacklisted(numeroReal)) return;
@@ -387,16 +418,19 @@ class BotCore {
             if (this.rateLimiter?.isBlacklisted(numeroReal)) return;
 
 
-            if (ehGrupo && this.moderationSystem?.isMuted(remoteJid, m.key.participant)) {
-                // MUTE: Delete silently
+            if (ehGrupo && this.moderationSystem?.isMuted(remoteJid, participantJid)) {
+                // MUTE VIOLATION: Delete message and autoban user
+                this.logger.warn(`🔇 MUTE VIOLATION: @${participantJid.split('@')[0]} falou enquanto mutado. BANINDO.`);
                 try {
                     await this.sock.sendMessage(remoteJid, {
-                        delete: {
-                            remoteJid,
-                            fromMe: false,
-                            id: m.key.id!,
-                            participant: m.key.participant!
-                        }
+                        delete: { remoteJid, fromMe: false, id: m.key.id!, participant: participantJid }
+                    });
+
+                    // Remove participant immediately as requested
+                    await this.sock.groupParticipantsUpdate(remoteJid, [participantJid], 'remove');
+                    await this.sock.sendMessage(remoteJid, {
+                        text: `🚫 @${participantJid.split('@')[0]} foi removido por falar durante o período de Mute!`,
+                        mentions: [participantJid]
                     });
                 } catch (e) { }
                 return;
@@ -411,35 +445,61 @@ class BotCore {
             if (ehGrupo && texto && this.moderationSystem) {
                 let isAdmin = false;
                 try {
-                    if (this.groupManagement) isAdmin = await this.groupManagement.isUserAdmin(remoteJid, m.key.participant);
+                    if (this.groupManagement) isAdmin = await this.groupManagement.isUserAdmin(remoteJid, participantJid);
                 } catch (e) { }
 
-                if (!isAdmin && this.moderationSystem.checkLink(texto, remoteJid, m.key.participant, isAdmin)) {
-                    // ANTI-LINK: Delete + kick + notify
-                    this.logger.warn(`🔗 ANTI-LINK: kick ${m.key.participant}`);
+                // Antilink rigoroso (apenas para não-admins)
+                if (!isAdmin && this.moderationSystem.isAntiLinkActive(remoteJid) && this.moderationSystem.isLink(texto)) {
+                    this.logger.warn(`🔗 ANTI-LINK DETECTADO: @${participantJid}`);
                     try {
-                        // 1. Delete message
+                        // 1. Deleta a mensagem com o link imediatamente
                         await this.sock.sendMessage(remoteJid, {
-                            delete: {
-                                remoteJid,
-                                fromMe: false,
-                                id: m.key.id!,
-                                participant: m.key.participant!
-                            }
+                            delete: { remoteJid, fromMe: false, id: m.key.id!, participant: participantJid }
                         });
-                        // 2. Kick user
-                        await this.sock.groupParticipantsUpdate(remoteJid, [m.key.participant!], 'remove');
-                        // 3. Notify
-                        await this.sock.sendMessage(remoteJid, { text: '🚫 Usuário removido por enviar link (Anti-Link ativo)' });
+
+                        // 2. Remove o membro conforme pedido
+                        await this.sock.groupParticipantsUpdate(remoteJid, [participantJid], 'remove');
+
+                        // 3. Notifica o grupo
+                        await this.sock.sendMessage(remoteJid, {
+                            text: `🚫 @${participantJid.split('@')[0]} foi expulso e seu rasto apagado por enviar link proibido!`,
+                            mentions: [participantJid]
+                        });
                     } catch (e: any) {
-                        this.logger.error(`Anti-link error: ${e.message}`);
+                        this.logger.error(`Erro ao aplicar Anti-Link: ${e.message}`);
                     }
                     return;
                 }
-
             }
-
             const replyInfo = this.messageProcessor.extractReplyInfo(m);
+
+            // ═══ GANHO DE XP POR MENSAGEM (SISTEMA DE NÍVEIS) ═══
+            if (ehGrupo && this.levelSystem) {
+                try {
+                    const resultXp = this.levelSystem.awardXp(remoteJid, participantJid, 10);
+                    if (resultXp.leveled) {
+                        const newLevel = resultXp.rec.level;
+                        const patente = this.levelSystem.getPatente(newLevel);
+                        const msgLvl = `🎉 LEVEL UP! 🔥\n\n@${participantJid.split('@')[0]} subiu para o Nível ${newLevel}!\n\n👑 *Nova Patente:* ${patente}`;
+                        await this.sock.sendMessage(remoteJid, { text: msgLvl, mentions: [participantJid] });
+
+                        // Verifica Auto-ADM
+                        if (newLevel >= this.levelSystem.maxLevel) {
+                            const resultPromo = this.levelSystem.registerMaxLevelUser(
+                                remoteJid,
+                                participantJid,
+                                m.pushName || 'Usuário',
+                                this.sock
+                            );
+                            if (resultPromo && resultPromo.message) {
+                                await this.sock.sendMessage(remoteJid, { text: resultPromo.message, mentions: [participantJid] });
+                            }
+                        }
+                    }
+                } catch (e: any) {
+                    this.logger.error(`Erro no LevelSystem: ${e.message}`);
+                }
+            }
 
             // ═══ NOVO RATE LIMIT CHECK (SELETIVO) ═══
             if (this.rateLimiter) {
@@ -476,18 +536,18 @@ class BotCore {
             if (ehGrupo && this.moderationSystem && this.groupManagement) {
                 let senderIsAdmin = false;
                 try {
-                    senderIsAdmin = await this.groupManagement.isUserAdmin(remoteJid, m.key.participant);
+                    senderIsAdmin = await this.groupManagement.isUserAdmin(remoteJid, participantJid);
                 } catch (e) { }
 
                 const deletarMídia = async (motivo: string, aviso: string) => {
-                    this.logger.warn(`🛡️ [ANTI-MEDIA] ${motivo}: ${m.key.participant}`);
+                    this.logger.warn(`🛡️ [ANTI-MEDIA] ${motivo}: ${participantJid}`);
                     try {
                         await this.sock.sendMessage(remoteJid, {
-                            delete: { remoteJid, fromMe: false, id: m.key.id!, participant: m.key.participant! }
+                            delete: { remoteJid, fromMe: false, id: m.key.id!, participant: participantJid }
                         });
                         await this.sock.sendMessage(remoteJid, {
                             text: aviso,
-                            mentions: [m.key.participant!]
+                            mentions: [participantJid]
                         });
                     } catch (e) { }
                 };
@@ -496,50 +556,50 @@ class BotCore {
                     // Anti-Image
                     const settings = this.groupManagement.groupSettings?.[remoteJid] || {};
                     if (temImagem && settings.antiimage) {
-                        await deletarMídia('ANTI-IMAGE', `🚫 @${m.key.participant?.split('@')[0]} — Envio de imagens está desactivado neste grupo.`);
+                        await deletarMídia('ANTI-IMAGE', `🚫 @${participantJid.split('@')[0]} — Envio de imagens está desactivado neste grupo.`);
                         return;
                     }
                     // Anti-Video
                     if (temVideo && (settings.antivideo || this.moderationSystem.isAntiVideoActive?.(remoteJid))) {
-                        await deletarMídia('ANTI-VIDEO', `🚫 @${m.key.participant?.split('@')[0]} — Envio de vídeos está desactivado neste grupo.`);
+                        await deletarMídia('ANTI-VIDEO', `🚫 @${participantJid.split('@')[0]} — Envio de vídeos está desactivado neste grupo.`);
                         return;
                     }
                     // Anti-Sticker (detectamos via messageType)
                     const msgType = this.messageProcessor?.getMessageType?.(m) || Object.keys(m.message || {})[0];
                     if (msgType === 'stickerMessage' && (settings.antisticker || this.moderationSystem.isAntiStickerActive?.(remoteJid))) {
-                        await deletarMídia('ANTI-STICKER', `🚫 @${m.key.participant?.split('@')[0]} — Envio de stickers está desactivado neste grupo.`);
+                        await deletarMídia('ANTI-STICKER', `🚫 @${participantJid.split('@')[0]} — Envio de stickers está desactivado neste grupo.`);
                         return;
                     }
                     // Anti-Audio/PTT
                     if (temAudio && settings.antiaudio) {
-                        await deletarMídia('ANTI-AUDIO', `🚫 @${m.key.participant?.split('@')[0]} — Envio de áudios está desactivado neste grupo.`);
+                        await deletarMídia('ANTI-AUDIO', `🚫 @${participantJid.split('@')[0]} — Envio de áudios está desactivado neste grupo.`);
                         return;
                     }
                     // Anti-Doc
                     if (temDoc && settings.antidoc) {
-                        await deletarMídia('ANTI-DOC', `🚫 @${m.key.participant?.split('@')[0]} — Envio de documentos está desactivado neste grupo.`);
+                        await deletarMídia('ANTI-DOC', `🚫 @${participantJid.split('@')[0]} — Envio de documentos está desactivado neste grupo.`);
                         return;
                     }
                 }
             }
 
             if (temImagem) {
-                await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+                await this.handleImageMessage(m, nome, numeroReal, participantJid, replyInfo, ehGrupo);
             } else if (temVideo) {
-                await this.handleVideoMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+                await this.handleVideoMessage(m, nome, numeroReal, participantJid, replyInfo, ehGrupo);
             } else if (temDoc) {
-                await this.handleDocumentMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+                await this.handleDocumentMessage(m, nome, numeroReal, participantJid, replyInfo, ehGrupo);
             } else if (temAudio) {
-                await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+                await this.handleAudioMessage(m, nome, numeroReal, participantJid, replyInfo, ehGrupo);
             } else if (texto) {
-                await this.handleTextMessage(m, nome, numeroReal, texto, replyInfo, ehGrupo);
+                await this.handleTextMessage(m, nome, numeroReal, participantJid, texto, replyInfo, ehGrupo);
             }
         } catch (error: any) {
             this.logger.error('❌ Erro pipeline:', error?.message);
         }
     }
 
-    async handleImageMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
+    async handleImageMessage(m: any, nome: string, numeroReal: string, participantJid: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         const caption = this.messageProcessor.extractText(m) || '';
         const allowed = await this.handleRateLimitAndBlacklist(m, nome, numeroReal, caption || '<IMAGEM>', ehGrupo);
         if (!allowed) return;
@@ -549,7 +609,7 @@ class BotCore {
         try {
             // CommandHandler primeiro - Comandos respondem INSTANTANEAMENTE sem delay
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
-                const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto: caption, replyInfo, ehGrupo });
+                const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
 
@@ -597,14 +657,14 @@ class BotCore {
         }
     }
 
-    async handleVideoMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
+    async handleVideoMessage(m: any, nome: string, numeroReal: string, participantJid: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         // Similar a imagem, stub completo
         this.logger.info(`🎥 [VIDEO] ${nome}`);
         try {
             const caption = this.messageProcessor.extractText(m) || '';
 
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
-                const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto: caption, replyInfo, ehGrupo });
+                const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
 
@@ -641,13 +701,13 @@ class BotCore {
         } catch (e) { }
     }
 
-    async handleDocumentMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
+    async handleDocumentMessage(m: any, nome: string, numeroReal: string, participantJid: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         this.logger.info(`📄 [DOC] ${nome}`);
         try {
             const caption = this.messageProcessor.extractText(m) || '';
 
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
-                const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto: caption, replyInfo, ehGrupo });
+                const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
 
@@ -684,7 +744,7 @@ class BotCore {
         } catch (e) { }
     }
 
-    async handleAudioMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
+    async handleAudioMessage(m: any, nome: string, numeroReal: string, participantJid: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         this.logger.info(`🎤 [AUDIO] ${nome}`);
         try {
             const transcricao = await this.audioProcessor.speechToText(await this.mediaProcessor.downloadMedia(m.message, 'audio'));
@@ -707,11 +767,11 @@ class BotCore {
         return isReplyToBot || hasAkiraMention || isMentioned;
     }
 
-    async handleTextMessage(m: any, nome: string, numeroReal: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio = false): Promise<void> {
+    async handleTextMessage(m: any, nome: string, numeroReal: string, participantJid: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio = false): Promise<void> {
         try {
             if (this.commandHandler) {
                 // Comandos não devem ter delay de presença (ex: *ping deve ser instantâneo)
-                const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto, replyInfo, ehGrupo });
+                const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto, replyInfo, ehGrupo });
                 if (handled) return;
             }
 
