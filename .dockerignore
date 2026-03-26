@@ -17,13 +17,6 @@ README.md
 LICENSE
 *.md
 !docker-entrypoint.sh
-</new_str>
-</edit_file> 
-
-<xai:function_call name="edit_file">
-<parameter name="path">AKIRA-SOFTEDGE/index-js2.1/Dockerfile.railway
-!cookies.txt
-*.txt
 test/
 tests/
 coverage/
