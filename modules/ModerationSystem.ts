@@ -364,32 +364,32 @@ class ModerationSystem {
         const border = '─'.repeat(100);
 
         // ═══ LOG FORMATADO ═══
-        this.logger.log(`\n${separator}`);
-        this.logger.log(`📊 [${timestamp}] ${status}`);
-        this.logger.log(border);
+        this.logger.info(`\n${separator}`);
+        this.logger.info(`📊 [${timestamp}] ${status}`);
+        this.logger.info(border);
 
-        this.logger.log(`👤 USUÁRIO`);
-        this.logger.log(` ├─ Nome: ${userName || 'Desconhecido'}`);
-        this.logger.log(` ├─ Número: ${userNumber || 'N/A'}`);
-        this.logger.log(` └─ JID: ${userId || 'N/A'}`);
+        this.logger.info(`👤 USUÁRIO`);
+        this.logger.info(` ├─ Nome: ${userName || 'Desconhecido'}`);
+        this.logger.info(` ├─ Número: ${userNumber || 'N/A'}`);
+        this.logger.info(` └─ JID: ${userId || 'N/A'}`);
 
-        this.logger.log(`💬 MENSAGEM`);
-        this.logger.log(` ├─ Texto: "${messageText?.substring(0, 150)}${messageText?.length > 150 ? '...' : ''}"`);
-        this.logger.log(` ├─ Comprimento: ${messageText?.length || 0} caracteres`);
+        this.logger.info(`💬 MENSAGEM`);
+        this.logger.info(` ├─ Texto: "${messageText?.substring(0, 150)}${messageText?.length > 150 ? '...' : ''}"`);
+        this.logger.info(` ├─ Comprimento: ${messageText?.length || 0} caracteres`);
         if (quotedMessage) {
-            this.logger.log(` ├─ Citada: "${quotedMessage?.substring(0, 100)}${quotedMessage?.length > 100 ? '...' : ''}"`);
+            this.logger.info(` ├─ Citada: "${quotedMessage?.substring(0, 100)}${quotedMessage?.length > 100 ? '...' : ''}"`);
         }
-        this.logger.log(` └─ Tipo: ${messageText?.startsWith('#') ? 'COMANDO' : 'MENSAGEM'}`);
+        this.logger.info(` └─ Tipo: ${messageText?.startsWith('#') ? 'COMANDO' : 'MENSAGEM'}`);
 
-        this.logger.log(`📈 DETALHES`);
-        this.logger.log(` └─ ${details}`);
+        this.logger.info(`📈 DETALHES`);
+        this.logger.info(` └─ ${details}`);
 
         if (action) {
-            this.logger.log(`⚡ AÇÃO`);
-            this.logger.log(` └─ ${action}`);
+            this.logger.info(`⚡ AÇÃO`);
+            this.logger.info(` └─ ${action}`);
         }
 
-        this.logger.log(separator);
+        this.logger.info(separator);
     }
 
     /**
@@ -664,14 +664,14 @@ class ModerationSystem {
             const timestamp = new Date().toLocaleString('pt-BR');
             const detectedLink = text.match(linkRegex)?.[0] || 'link detectado';
 
-            this.logger.log(`\n${'═'.repeat(80)}`);
-            this.logger.log(`🔗 [${timestamp}] ANTILINK - LINK DETECTADO`);
-            this.logger.log(`${'─'.repeat(80)}`);
-            this.logger.log(`👤 Usuário: ${userId}`);
-            this.logger.log(`👥 Grupo: ${groupId}`);
-            this.logger.log(`🔗 Link: ${detectedLink.substring(0, 50)}${detectedLink.length > 50 ? '...' : ''}`);
-            this.logger.log(`📝 Ação: Link bloqueado (AntiLink ativo)`);
-            this.logger.log(`${'═'.repeat(80)}\n`);
+            this.logger.info(`\n${'═'.repeat(80)}`);
+            this.logger.info(`🔗 [${timestamp}] ANTILINK - LINK DETECTADO`);
+            this.logger.info(`${'─'.repeat(80)}`);
+            this.logger.info(`👤 Usuário: ${userId}`);
+            this.logger.info(`👥 Grupo: ${groupId}`);
+            this.logger.info(`🔗 Link: ${detectedLink.substring(0, 50)}${detectedLink.length > 50 ? '...' : ''}`);
+            this.logger.info(`📝 Ação: Link bloqueado (AntiLink ativo)`);
+            this.logger.info(`${'═'.repeat(80)}\n`);
         }
 
         return hasLink;
@@ -853,7 +853,7 @@ class ModerationSystem {
         const hasPrev = arr.find(x => x && x.id === userId);
 
         if (hasPrev) {
-            this.logger.log(`⚠️ User ${userName} reincidiu na Blacklist. Convertendo para PERMANENT.`);
+            this.logger.info(`⚠️ User ${userName} reincidiu na Blacklist. Convertendo para PERMANENT.`);
             expiresAt = 'PERMANENT';
             const idx = arr.findIndex(x => x.id === userId);
             arr[idx].expiresAt = 'PERMANENT';
@@ -874,17 +874,17 @@ class ModerationSystem {
             const timestamp = new Date().toLocaleString('pt-BR');
             const expiresStr = expiresAt === 'PERMANENT' ? 'PERMANENTE' : new Date(expiresAt).toLocaleString('pt-BR');
 
-            this.logger.log(`\n${'═'.repeat(100)}`);
-            this.logger.log(`🚫 [${timestamp}] BLACKLIST ADICIONADO - SEVERIDADE: ${entry.severity}`);
-            this.logger.log(`${'─'.repeat(100)}`);
-            this.logger.log(`👤 USUÁRIO`);
-            this.logger.log(` ├─ Nome: ${userName}`);
-            this.logger.log(` ├─ Número: ${userNumber}`);
-            this.logger.log(` └─ JID: ${userId}`);
-            this.logger.log(`📋 RAZÃO: ${reason}`);
-            this.logger.log(`⏰ EXPIRAÇÃO: ${expiresStr}`);
-            this.logger.log(`🔐 STATUS: Agora será ignorado completamente`);
-            this.logger.log(`${'═'.repeat(100)}\n`);
+            this.logger.info(`\n${'═'.repeat(100)}`);
+            this.logger.info(`🚫 [${timestamp}] BLACKLIST ADICIONADO - SEVERIDADE: ${entry.severity}`);
+            this.logger.info(`${'─'.repeat(100)}`);
+            this.logger.info(`👤 USUÁRIO`);
+            this.logger.info(` ├─ Nome: ${userName}`);
+            this.logger.info(` ├─ Número: ${userNumber}`);
+            this.logger.info(` └─ JID: ${userId}`);
+            this.logger.info(`📋 RAZÃO: ${reason}`);
+            this.logger.info(`⏰ EXPIRAÇÃO: ${expiresStr}`);
+            this.logger.info(`🔐 STATUS: Agora será ignorado completamente`);
+            this.logger.info(`${'═'.repeat(100)}\n`);
 
             return { success: true, entry };
         } catch (e: any) {
@@ -911,7 +911,7 @@ class ModerationSystem {
                     JSON.stringify(arr, null, 2)
                 );
 
-                this.logger.log(`✅ [BLACKLIST] ${removed.name} (${removed.number}) removido da blacklist`);
+                this.logger.info(`✅ [BLACKLIST] ${removed.name} (${removed.number}) removido da blacklist`);
                 return true;
             } catch (e: any) {
                 this.logger.error('Erro ao remover da blacklist:', e.message);

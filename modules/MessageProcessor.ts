@@ -61,10 +61,9 @@ class MessageProcessor {
     /**
     * Extrai número real do usuário
     */
-    extractUserNumber(message: any) {
+    extractUserNumber(message: any): string {
         try {
-            return 'desconhecido';
-
+            return this.extractParticipantJid(message) || 'desconhecido';
         } catch (e: any) {
             this.logger?.error('Erro ao extrair número:', e.message);
             return 'desconhecido';

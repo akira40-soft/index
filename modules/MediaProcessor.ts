@@ -128,12 +128,12 @@ class MediaProcessor {
         let actionFlags = '';
         if (options.type === 'audio') {
             // ba/b: Tenta pegar só o áudio. Se não conseguir, baixa o melhor vídeo+áudio e extrai
-            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Adicionamos --format-sort para priorizar extensões estáveis
+            actionFlags = `-f "ba/b" --format-sort "ext:m4a" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // SEM STRING DE FORMATO (-f): Deixa o yt-dlp usar o padrão oficial (bv*+ba/b)
-            // Apenas garantimos que o container final seja MP4 (compatível com WhatsApp)
-            // e forçamos o re-encode de áudio se for muito fora do padrão, mas "--merge-output-format" dá conta
-            actionFlags = `--merge-output-format mp4 -o "${options.output}"`;
+            // HACK 2026: Priorizamos MP4 nativo para evitar processamento pesado de merge no Railway
+            // se o vídeo for vertical (Shorts), o yt-dlp lida automaticamente com obv+oba
+            actionFlags = `-f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b" --merge-output-format mp4 --format-sort "res:720,vcodec:h264" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -166,11 +166,11 @@ class MediaProcessor {
             // O yt-dlp fará sua mágica nativa para encontrar o melhor áudio
             // ================================================================
             const tentativas = [
-                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.0.0.0.0 SamsungBrowser/4.0 Chrome/89.0.4389.90 Mobile Safari/537.36', sleepMs: 0 },
-                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1', sleepMs: 1000 },
-                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.64 Mobile Safari/537.36', sleepMs: 1500 },
-                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', sleepMs: 2000 },
-                { cliente: 'ios,android_vr', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
+                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1', sleepMs: 0 },
+                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.40 Mobile Safari/537.36', sleepMs: 1000 },
+                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/32.0.0.0.0 SamsungBrowser/4.0 Chrome/120.0.6099.199 Mobile Safari/537.36', sleepMs: 1500 },
+                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36', sleepMs: 2000 },
+                { cliente: 'ios,android', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -227,16 +227,12 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // ================================================================
-            // GAMBIARRAS ANTI-BLOQUEIO: Rotação Pura de Clientes (Sem Format Override)
-            // O yt-dlp fará a seleção nativa e juntará tudo em MP4
-            // ================================================================
             const tentativas = [
-                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.0.0.0.0 SamsungBrowser/4.0 Chrome/89.0.4389.90 Mobile Safari/537.36', sleepMs: 0 },
-                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1', sleepMs: 1000 },
-                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.64 Mobile Safari/537.36', sleepMs: 1500 },
-                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', sleepMs: 2000 },
-                { cliente: 'ios,android_vr', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
+                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1', sleepMs: 0 },
+                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.40 Mobile Safari/537.36', sleepMs: 1000 },
+                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/32.0.0.0.0 SamsungBrowser/4.0 Chrome/120.0.6099.199 Mobile Safari/537.36', sleepMs: 1500 },
+                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36', sleepMs: 2000 },
+                { cliente: 'ios,android', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {

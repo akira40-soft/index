@@ -14,9 +14,9 @@ class PresenceSimulator {
     public sock: any;
     public logger: any;
 
-    constructor(sock: any) {
+    constructor(sock: any, logger: any = null) {
         this.sock = sock;
-        this.logger = console;
+        this.logger = logger || console;
     }
 
     /**
@@ -70,7 +70,7 @@ class PresenceSimulator {
 
             // Step 2: Começar a digitar
             await this.safeSendPresenceUpdate('composing', jid);
-            this.logger.log(`⌨️  [DIGITANDO] Simulando digitação por ${(durationMs / 1000).toFixed(1)}s...`);
+            this.logger.info(`⌨️  [DIGITANDO] Simulando digitação por ${(durationMs / 1000).toFixed(1)}s...`);
 
             // Step 3: Aguardar conforme tamanho da mensagem
             await delay(durationMs);
@@ -81,7 +81,7 @@ class PresenceSimulator {
 
             // Step 5: Voltar ao normal
             await this.safeSendPresenceUpdate('available', jid);
-            this.logger.log('✅ [PRONTO] Digitação simulada concluída');
+            this.logger.info('✅ [PRONTO] Digitação simulada concluída');
 
             return true;
         } catch (e: any) {
@@ -98,7 +98,7 @@ class PresenceSimulator {
      */
     async simulateRecording(jid: string, durationMs: number = 2000) {
         try {
-            this.logger.log(`🎤 [GRAVANDO] Preparando áudio por ${(durationMs / 1000).toFixed(1)}s...`);
+            this.logger.info(`🎤 [GRAVANDO] Preparando áudio por ${(durationMs / 1000).toFixed(1)}s...`);
 
             // Step 1: Começar a "gravar"
             await this.safeSendPresenceUpdate('recording', jid);
@@ -109,7 +109,7 @@ class PresenceSimulator {
             // Step 3: Concluir gravação
             await this.safeSendPresenceUpdate('paused', jid);
 
-            this.logger.log('✅ [PRONTO] Áudio preparado para envio');
+            this.logger.info('✅ [PRONTO] Áudio preparado para envio');
 
             return true;
         } catch (e: any) {
@@ -145,7 +145,7 @@ class PresenceSimulator {
                     // Não foi ativada: Apenas um tick (entregue)
                     try {
                         await this.sock.sendReadReceipt(jid, participant, [messageId]);
-                        this.logger.log('✓ [ENTREGUE] Grupo');
+                        this.logger.info('✓ [ENTREGUE] Grupo');
                         return true;
                     } catch (err) {
                         return false;
@@ -154,7 +154,7 @@ class PresenceSimulator {
                     // Foi ativada: Dois ticks azuis (lido)
                     try {
                         await this.sock.readMessages([m.key]);
-                        this.logger.log('✓✓ [LIDO] Grupo');
+                        this.logger.info('✓✓ [LIDO] Grupo');
                         return true;
                     } catch (err) {
                         return false;
@@ -165,7 +165,7 @@ class PresenceSimulator {
                 if (wasActivated || isAudio) {
                     try {
                         await this.sock.readMessages([m.key]);
-                        this.logger.log(isAudio ? '▶️ [REPRODUZIDO] PV' : '✓✓ [LIDO] PV');
+                        this.logger.info(isAudio ? '▶️ [REPRODUZIDO] PV' : '✓✓ [LIDO] PV');
                         return true;
                     } catch (err) {
                         return false;
@@ -173,7 +173,7 @@ class PresenceSimulator {
                 } else {
                     try {
                         await this.sock.sendReadReceipt(jid, participant, [messageId]);
-                        this.logger.log('✓ [ENTREGUE] PV');
+                        this.logger.info('✓ [ENTREGUE] PV');
                         return true;
                     } catch (err) {
                         return false;
@@ -192,7 +192,7 @@ class PresenceSimulator {
         try {
             if (!this.sock) return false;
             await this.sock.readMessages([m.key]);
-            this.logger.log('✓✓ [LIDO] Mensagem marcada');
+            this.logger.info('✓✓ [LIDO] Mensagem marcada');
             return true;
         } catch (e: any) {
             return false;

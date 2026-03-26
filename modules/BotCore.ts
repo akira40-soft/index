@@ -164,7 +164,7 @@ class BotCore {
             });
 
             this.paymentManager = new PaymentManager(this, this.subscriptionManager);
-            this.presenceSimulator = new PresenceSimulator(this.sock || null);
+            this.presenceSimulator = new PresenceSimulator(this.sock || null, this.logger);
             this.economySystem = EconomySystem.getInstance(this.logger);
 
             try {
@@ -625,9 +625,8 @@ class BotCore {
 
             // API análise imagem...
             let grupo_nome = '';
-            if (ehGrupo && this.groupManagement) {
-                const metaGroup = await this.groupManagement._getGroupMetadata(m.key.remoteJid);
-                grupo_nome = metaGroup?.subject || '';
+            if (ehGrupo) {
+                grupo_nome = await this._getGrupoNome(m.key.remoteJid);
             }
 
             const resultado = await this.apiClient.processMessage({
@@ -678,9 +677,8 @@ class BotCore {
             }
 
             let grupo_nome = '';
-            if (ehGrupo && this.groupManagement) {
-                const metaGroup = await this.groupManagement._getGroupMetadata(m.key.remoteJid);
-                grupo_nome = metaGroup?.subject || '';
+            if (ehGrupo) {
+                grupo_nome = await this._getGrupoNome(m.key.remoteJid);
             }
 
             const resultado = await this.apiClient.processMessage({
@@ -721,9 +719,8 @@ class BotCore {
             }
 
             let grupo_nome = '';
-            if (ehGrupo && this.groupManagement) {
-                const metaGroup = await this.groupManagement._getGroupMetadata(m.key.remoteJid);
-                grupo_nome = metaGroup?.subject || '';
+            if (ehGrupo) {
+                grupo_nome = await this._getGrupoNome(m.key.remoteJid);
             }
 
             const resultado = await this.apiClient.processMessage({
@@ -786,11 +783,8 @@ class BotCore {
             }
 
             let grupo_nome = '';
-            if (ehGrupo && this.groupManagement) {
-                try {
-                    const metaGroup = await this.groupManagement._getGroupMetadata(m.key.remoteJid);
-                    grupo_nome = metaGroup?.subject || '';
-                } catch (e) { }
+            if (ehGrupo) {
+                grupo_nome = await this._getGrupoNome(m.key.remoteJid);
             }
 
             const resultado = await this.apiClient.processMessage({
@@ -887,6 +881,27 @@ class BotCore {
         } catch (error: any) {
             this.logger.error('❌ Erro reply:', error.message);
             return false;
+        }
+    }
+
+    private async _getGrupoNome(remoteJid: string): Promise<string> {
+        try {
+            if (!remoteJid || !remoteJid.endsWith('@g.us')) return '';
+
+            // Tenta via GroupManagement (cache interno dele)
+            if (this.groupManagement) {
+                const meta = await this.groupManagement._getGroupMetadata(remoteJid);
+                if (meta?.subject) return meta.subject;
+            }
+
+            // Tenta via socket cache (Baileys nativo)
+            const socketCache = this.sock?.groupMetadataCache?.[remoteJid];
+            if (socketCache?.subject) return socketCache.subject;
+
+            // Fallback: Nome genérico ou JID parcial
+            return 'Grupo';
+        } catch (e) {
+            return 'Grupo';
         }
     }
 }
