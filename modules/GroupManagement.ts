@@ -69,12 +69,21 @@ class GroupManagement {
                 return await action();
             } catch (e: any) {
                 lastError = e;
-                if (e.message?.includes('Connection Closed') || e.message?.includes('timeout') || e.message?.includes('Server Timeout')) {
-                    this.logger.warn(`[GroupManagement] Query WA Falhou. Retry ${i + 1}/${retries}...`);
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    continue; // Tenta de novo
+                // Erros transitórios que valem retry: conexão, timeout, e internal-server-error do WA
+                const isRetryable =
+                    e.message?.includes('Connection Closed') ||
+                    e.message?.includes('timeout') ||
+                    e.message?.includes('Server Timeout') ||
+                    e.message?.includes('internal-server-error') ||
+                    e.message?.includes('503') ||
+                    e.message?.includes('rate-overlimit');
+                if (isRetryable) {
+                    const waitMs = 2000 * (i + 1); // backoff exponencial: 2s, 4s, 6s
+                    this.logger.warn(`[GroupManagement] Retry ${i + 1}/${retries} em ${waitMs}ms (${e.message?.substring(0, 40)})...`);
+                    await new Promise(resolve => setTimeout(resolve, waitMs));
+                    continue;
                 }
-                throw e; // Lança se for erro definitivo como Not Admin
+                throw e; // Lança imediatamente se for erro definitivo (not-authorized, etc.)
             }
         }
         throw lastError;
@@ -104,20 +113,50 @@ class GroupManagement {
     }
 
     private _extractTargets(m: any): string[] {
-        const contextInfo = m.message?.extendedTextMessage?.contextInfo || {};
-        const mentioned: string[] = contextInfo.mentionedJid || [];
-        if (mentioned.length > 0) return mentioned.map(j => j.split(':')[0].split('@')[0] + '@s.whatsapp.net');
+        const normalizeJid = (jid: string): string => {
+            if (!jid) return '';
+            // Remove sufixos de dispositivo (:1, :2) e garante formato correto
+            return jid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+        };
 
-        const replyInfo = m.replyInfo || m._replyInfo;
-        if (replyInfo?.quemEscreveuCitacaoJid) {
-            const jid = replyInfo.quemEscreveuCitacaoJid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-            return [jid];
+        // 1. Mencões diretas (@mention na mensagem)
+        const contextInfo =
+            m.message?.extendedTextMessage?.contextInfo ||
+            m.message?.imageMessage?.contextInfo ||
+            m.message?.videoMessage?.contextInfo ||
+            m.message?.documentMessage?.contextInfo ||
+            {};
+
+        const mentioned: string[] = contextInfo.mentionedJid || [];
+        if (mentioned.length > 0) {
+            return mentioned.map(normalizeJid).filter(Boolean);
         }
 
-        const participant = contextInfo.participant || m.participant || m.key?.participant;
-        if (participant) {
-            const jid = participant.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-            return [jid];
+        // 2. Reply: quotedParticipant no contextInfo (caminho principal do Baileys)
+        if (contextInfo.quotedParticipant) {
+            return [normalizeJid(contextInfo.quotedParticipant)];
+        }
+
+        // 3. Reply: participant no contextInfo
+        if (contextInfo.participant) {
+            return [normalizeJid(contextInfo.participant)];
+        }
+
+        // 4. replyInfo customizado (mapeado no BotCore)
+        const replyInfo = m.replyInfo || m._replyInfo;
+        if (replyInfo?.quemEscreveuCitacaoJid) {
+            return [normalizeJid(replyInfo.quemEscreveuCitacaoJid)];
+        }
+
+        // 5. participant da mensagem pai (para documentos, áudios, etc. com reply)
+        if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.senderKeyDistributionMessage?.groupId) {
+            // ignora
+        }
+
+        // 6. participant direto da mensagem (casos extremos em grupos)
+        const directParticipant = m.participant || m.key?.participant;
+        if (directParticipant) {
+            return [normalizeJid(directParticipant)];
         }
 
         return [];
@@ -769,9 +808,12 @@ class GroupManagement {
             return true;
         }
 
-        // Sanitização: Remove sufixos :1, :2 que o Baileys as vezes coloca
+        // JIDs já vem sanitizados do _extractTargets, mas garantimos uma segunda passagem
         const targets = rawTargets.map((t: string) => t.split(':')[0].split('@')[0] + '@s.whatsapp.net');
         const groupJid = m.key.remoteJid;
+
+        // Log de diagnóstico - visível nos logs do Railway para debug
+        this.logger.info(`[kickUser] Alvos extraídos: ${JSON.stringify(targets)}`);
 
         try {
             // Verificação prévia: Evita erro 500 se o usuário não estiver no grupo
@@ -779,9 +821,12 @@ class GroupManagement {
             if (!metadata) throw new Error('Falha ao obter dados do grupo');
 
             const participants = metadata.participants.map((p: any) => p.id);
+            this.logger.info(`[kickUser] Participantes no grupo: ${participants.length}. Procurando: ${JSON.stringify(targets)}`);
+
             const toRemove = targets.filter((t: string) => participants.includes(t));
 
             if (toRemove.length === 0) {
+                this.logger.warn(`[kickUser] Nenhum alvo encontrado entre os participantes! Alvos: ${JSON.stringify(targets)}`);
                 await this.sock.sendMessage(groupJid, { text: '⚠️ O(s) usuário(s) indicado(s) não estão mais no grupo.' }, { quoted: m });
                 return true;
             }

@@ -93,19 +93,19 @@ class MediaProcessor {
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const poToken = this.config?.YT_PO_TOKEN;
 
-        // Padrão Industrial: Se houver Deno, use-o. Caso contrário, deixa o yt-dlp decidir.
+        // Runtime JS: Se existir deno, usa. So caso contrario omite.
         const jsRuntime = fs.existsSync('/usr/local/bin/deno') || fs.existsSync('/root/.deno/bin/deno') ? '--js-runtime deno' : '';
 
-        // Clientes normatizados em ordem de prioridade - EM 2026, web e mweb são os mais bloqueados
-        const clients = options.clientOverride || 'android_vr,ios,android,web_embedded';
+        // Cliente: tv_embedded e web_embedded são os mais estáveis em IPs de datacenter (Railway/Heroku)
+        // ios e android sofrem SABR blocking em datacenters = "Requested format is not available"
+        const clients = options.clientOverride || 'tv_embedded,web_embedded';
 
-        // EM 2026: player_skip=web,mweb às vezes oculta formatos progressivos necessários
-        // Vamos permitir que o yt-dlp decida a melhor estratégia de fallback entre os clientes
         let extractorArgs = `youtube:player_client=${clients}`;
+        // formats=missing_pot: mostra formatos que precisam de POT mesmo sem token (mais compatível)
+        extractorArgs += `;formats=missing_pot`;
         if (poToken) extractorArgs += `;po_token=web+${poToken}`;
 
-        // Rotação de User-Agent: Usando um de Android (mais confiável para bypass)
-        const ua = options.userAgent || 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36';
+        const ua = options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
@@ -119,17 +119,18 @@ class MediaProcessor {
             '--no-playlist',
             '--geo-bypass',
             '--socket-timeout 30',
-            '--retries 5'
+            '--retries 3'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // "bestaudio/best": Tenta áudio puro. Se não achar, pega o melhor vídeo+áudio disponível.
-            actionFlags = `-f "bestaudio/best" --format-sort "ext:m4a,ext:mp3,br" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Formato garantido: mp4a ou webm de áudio. Sempre existem nesses clientes.
+            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio/best" --format-sort "ext:m4a,ext:mp3,br" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // "best/bestvideo+bestaudio": Prioriza formato progressivo (único arquivo) que é menos bloqueado no Railway.
-            // Se houver suporte a merge e bv+ba disponíveis, ele fará o merge se for superior ao best.
-            actionFlags = `-f "best/bestvideo+bestaudio" --merge-output-format mp4 --format-sort "res:720,vcodec:h264,ext:mp4" -o "${options.output}"`;
+            // Formato progressivo (jpg) primeiro, depois merge só se existir ffmpeg.
+            // bestvideo[ext=mp4]+bestaudio[ext=m4a] garante merge em mp4 se tiver ambos.
+            // mp4/best é o ultimo recurso: pega qualquer formato único disponível.
+            actionFlags = `-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best" --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -158,15 +159,16 @@ class MediaProcessor {
             const cookiePath = this._findCookiePath();
 
             // ================================================================
-            // GAMBIARRAS ANTI-BLOQUEIO: Rotação Pura de Clientes (Sem Format Override)
-            // O yt-dlp fará sua mágica nativa para encontrar o melhor áudio
+            // CLIENTES COMPATIVEIS COM DATACENTER (IPs Railway/Heroku)
+            // tv_embedded e web_embedded não sofrem SABR blocking por IP
             // ================================================================
             const tentativas = [
-                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1', sleepMs: 0 },
-                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.40 Mobile Safari/537.36', sleepMs: 1000 },
-                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/32.0.0.0.0 SamsungBrowser/4.0 Chrome/120.0.6099.199 Mobile Safari/537.36', sleepMs: 1500 },
-                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36', sleepMs: 2000 },
-                { cliente: 'ios,android', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
+                // 1ª: tv_embedded - imune a SABR, sem necessidade de POT
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0 },
+                // 2ª: web_embedded - imune, mas pode pedir POT em alguns vídeos
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000 },
+                // 3ª: mweb - fallback móvel que ainda funciona em muitos casos
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 2000 }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -212,23 +214,38 @@ class MediaProcessor {
      */
     async downloadYouTubeVideo(url: string, quality: string = '720'): Promise<{ sucesso: boolean; buffer?: Buffer; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎥 Download vídeo: ${url} (qualidade: ${quality})`);
+            // Normaliza URL de Shorts para o formato padrão
+            // YouTube Shorts (/shorts/ID) às vezes é tratado diferente pelo yt-dlp
+            const normalizeUrl = (u: string) => {
+                const shortsMatch = u.match(/youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/);
+                if (shortsMatch) return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
+                return u;
+            };
+            const normalizedUrl = normalizeUrl(url);
+            if (normalizedUrl !== url) this.logger?.info(`🔄 Short detectado! Normalizado: ${normalizedUrl}`);
 
-            const metadata = await this._getYouTubeMetadataSimple(url);
+            this.logger?.info(`🎥 Download vídeo: ${normalizedUrl} (qualidade: ${quality})`);
+
+            const metadata = await this._getYouTubeMetadataSimple(normalizedUrl);
             if (!metadata.sucesso) {
-                if (url.startsWith('http')) return await this._downloadWithYtdlCore(url, 'video');
+                if (normalizedUrl.startsWith('http')) return await this._downloadWithYtdlCore(normalizedUrl, 'video');
                 return { sucesso: false, error: 'Metadados não encontrados.' };
             }
 
-            const finalUrl = metadata.url || url;
+            const finalUrl = metadata.url || normalizedUrl;
             const outputPath = this.generateRandomFilename('mp4');
 
+            // ================================================================
+            // CLIENTES COMPATIVEIS COM DATACENTER (IPs Railway/Heroku)
+            // tv_embedded e web_embedded não sofrem SABR blocking por IP
+            // ================================================================
             const tentativas = [
-                { cliente: 'ios', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1', sleepMs: 0 },
-                { cliente: 'android', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.40 Mobile Safari/537.36', sleepMs: 1000 },
-                { cliente: 'android_vr', ua: 'Mozilla/5.0 (Linux; Android 10; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/32.0.0.0.0 SamsungBrowser/4.0 Chrome/120.0.6099.199 Mobile Safari/537.36', sleepMs: 1500 },
-                { cliente: 'tv', ua: 'Mozilla/5.0 (Chromecast; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36', sleepMs: 2000 },
-                { cliente: 'ios,android', ua: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', sleepMs: 2500 }
+                // 1ª: tv_embedded - imune a SABR blocking, sem necessidade de POT
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 0 },
+                // 2ª: web_embedded - imune, pode pedir POT em alguns privados
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000 },
+                // 3ª: mweb - fallback móvel que ainda tem compatibilidade
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36', sleepMs: 2000 }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
