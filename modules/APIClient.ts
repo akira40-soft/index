@@ -34,6 +34,7 @@ class APIClient {
             usuario,
             numero,
             mensagem,
+            pushName = '',
             tipo_conversa = 'pv',
             tipo_mensagem = 'texto',
             mensagem_citada = '',
@@ -48,14 +49,16 @@ class APIClient {
         } = messageData;
 
         const payload: any = {
-            usuario: String(usuario || 'anonimo').substring(0, 50),
-            numero: String(numero || 'desconhecido').substring(0, 20),
-            mensagem: String(mensagem || '').substring(0, 2000),
+            usuario: String(usuario || 'anonimo').substring(0, 100),
+            numero: String(numero || 'desconhecido').substring(0, 50),
+            pushName: String(pushName || usuario || '').substring(0, 100),
+            mensagem: String(mensagem || '').substring(0, 4000),
             tipo_conversa: ['pv', 'grupo'].includes(tipo_conversa) ? tipo_conversa : 'pv',
             tipo_mensagem: ['texto', 'image', 'imagem', 'audio', 'video', 'document', 'documento', 'documentWithCaption'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
             historico: [],
             forcar_busca: Boolean(forcar_pesquisa),
-            analise_doc: String(analise_doc || '')
+            analise_doc: String(analise_doc || ''),
+            timestamp: Date.now()
         };
 
         // Adiciona contexto de reply se existir
@@ -65,16 +68,17 @@ class APIClient {
         if (isReply) {
             // Se mensagem_citada raiz for vazia, puxa do metadado gerado pelo MessageProcessor
             const textoCitadoReal = mensagem_citada || safeReplyMeta.textoMensagemCitada || safeReplyMeta.quotedTextOriginal || '';
-            payload.mensagem_citada = String(textoCitadoReal).substring(0, 3000);
+            payload.mensagem_citada = String(textoCitadoReal).substring(0, 4000);
 
             payload.reply_metadata = {
                 is_reply: true,
-                reply_to_bot: Boolean(safeReplyMeta.reply_to_bot || safeReplyMeta.ehRespostaAoBot),
-                quoted_author_name: String(safeReplyMeta.quoted_author_name || safeReplyMeta.quemEscreveuCitacaoName || 'desconhecido').substring(0, 50),
-                quoted_author_numero: String(safeReplyMeta.quoted_author_numero || safeReplyMeta.quemEscreveuCitacao || 'desconhecido'),
-                quoted_type: String(safeReplyMeta.quoted_type || safeReplyMeta.tipoMidiaCitada || 'texto'),
-                quoted_text_original: String(safeReplyMeta.quoted_text_original || safeReplyMeta.quotedTextOriginal || '').substring(0, 2000),
-                context_hint: String(safeReplyMeta.context_hint || safeReplyMeta.contextHint || '')
+                reply_to_bot: Boolean(safeReplyMeta.ehRespostaAoBot || safeReplyMeta.reply_to_bot),
+                quoted_author_name: String(safeReplyMeta.quemEscreveuCitacaoName || safeReplyMeta.quoted_author_name || 'Usuário').substring(0, 100),
+                quoted_author_numero: String(safeReplyMeta.quemEscreveuCitacao || safeReplyMeta.quoted_author_numero || 'desconhecido'),
+                quoted_type: String(safeReplyMeta.tipoMidiaCitada || safeReplyMeta.quoted_type || 'texto'),
+                quoted_text_original: String(safeReplyMeta.quotedTextOriginal || safeReplyMeta.quoted_text_original || '').substring(0, 3000),
+                context_hint: String(safeReplyMeta.contextHint || safeReplyMeta.context_hint || 'contexto_geral'),
+                priority_level: safeReplyMeta.priorityLevel || 1
             };
         } else {
             payload.reply_metadata = {
@@ -118,6 +122,10 @@ class APIClient {
         if (grupo_id) {
             payload.grupo_id = grupo_id;
             payload.grupo_nome = grupo_nome || 'Grupo';
+            // Isola contexto via ID único (segurança extra)
+            payload.contexto_id = `WA_${grupo_id.split('@')[0]}`;
+        } else {
+            payload.contexto_id = `WA_PV_${payload.numero.split('@')[0]}`;
         }
 
         return payload;

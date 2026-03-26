@@ -635,6 +635,7 @@ class BotCore {
             const resultado = await this.apiClient.processMessage({
                 usuario: nome,
                 numero: numeroReal,
+                pushName: nome,
                 mensagem: caption,
                 tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                 tipo_mensagem: 'imagem',
@@ -690,6 +691,7 @@ class BotCore {
             const resultado = await this.apiClient.processMessage({
                 usuario: nome,
                 numero: numeroReal,
+                pushName: nome,
                 mensagem: this.messageProcessor.extractText(m) || '',
                 tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                 tipo_mensagem: 'video',
@@ -735,6 +737,7 @@ class BotCore {
             const resultado = await this.apiClient.processMessage({
                 usuario: nome,
                 numero: numeroReal,
+                pushName: nome,
                 mensagem: this.messageProcessor.extractText(m) || '',
                 tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                 tipo_mensagem: 'documento',
@@ -803,6 +806,7 @@ class BotCore {
             const resultado = await this.apiClient.processMessage({
                 usuario: nome,
                 numero: numeroReal,
+                pushName: nome,
                 mensagem: texto,
                 tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                 tipo_mensagem: foiAudio ? 'audio' : 'texto',

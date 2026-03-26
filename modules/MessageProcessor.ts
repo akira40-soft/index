@@ -71,6 +71,17 @@ class MessageProcessor {
     }
 
     /**
+    * Extrai o nome de exibição (pushName) do usuário
+    */
+    extractPushName(message: any): string {
+        try {
+            return message.pushName || 'Usuário';
+        } catch (e) {
+            return 'Usuário';
+        }
+    }
+
+    /**
     * Extrai texto de mensagem
     */
     extractText(message: any) {
@@ -267,7 +278,7 @@ class MessageProcessor {
                 }
             }
 
-            // Extract author number and name if available (name limited at API layer)
+            // Extract author number and name if available
             let quotedAuthorNumero = 'desconhecido';
             if (participantJidCitado) {
                 quotedAuthorNumero = this.extractUserNumber({ key: { participant: participantJidCitado } });
@@ -276,9 +287,12 @@ class MessageProcessor {
             // Check if reply is to bot
             const ehRespostaAoBot = this.isReplyToBot(participantJidCitado);
 
+            // Nome do autor citado (se disponível no contexto de algum lugar, ou 'Usuário')
+            // No Baileys v6+, o contextInfo não traz o pushName do citado, mas o CommandHandler pode saber
+            const quotedAuthorName = context.pushName || 'Usuário';
+
             // ═══════════════════════════════════════════════════════════════════
             // DETECÇÃO DE REPLY A MENSAGEM DE JOGO
-            // Verifica se a mensagem citada é uma mensagem de jogo do bot
             // ═══════════════════════════════════════════════════════════════════
             const isGameReply = this.detectGameMessage(quotedTextOriginal, textoMensagemCitada);
 
@@ -287,28 +301,22 @@ class MessageProcessor {
             const contextHint = this.extractContextHint(quotedTextOriginal, currentMessageText);
             const priorityLevel = this.calculateReplyPriority(true, ehRespostaAoBot, currentMessageText);
 
-            // Construção no formato esperado por CommandHandler/GroupManagement e API
+            // Construção no formato esperado pela API
             return {
-                // Compatível com GroupManagement._extractTargets
                 quemEscreveuCitacaoJid: participantJidCitado,
-
-                // Compatível com CommandHandler (uso geral)
-                textoMensagemCitada, // texto completo amigável
+                textoMensagemCitada,
                 tipoMidiaCitada: tipoMidia,
                 textoCitadoResumido: quotedTextOriginal,
-
-                // Metadados
                 participantJidCitado,
                 ehRespostaAoBot,
                 quemEscreveuCitacao: quotedAuthorNumero,
-                quemEscreveuCitacaoName: context.pushName || 'Usuário',
+                quemEscreveuCitacaoName: quotedAuthorName,
                 quotedAuthorNumero: quotedAuthorNumero,
                 quotedType: tipoMidia,
                 quotedTextOriginal: quotedTextOriginal,
                 contextHint: contextHint,
                 priorityLevel: priorityLevel,
                 isReply: true,
-                // Novas propriedades para detecção de jogos
                 isReplyToGame: isGameReply.isGame,
                 gameType: isGameReply.gameType
             };
