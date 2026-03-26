@@ -610,6 +610,9 @@ class BotCore {
         try {
             // CommandHandler primeiro - Comandos respondem INSTANTANEAMENTE sem delay
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
+                if (this.presenceSimulator) {
+                    await this.presenceSimulator.simulateTicks(m, true);
+                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
@@ -664,6 +667,9 @@ class BotCore {
             const caption = this.messageProcessor.extractText(m) || '';
 
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
+                if (this.presenceSimulator) {
+                    await this.presenceSimulator.simulateTicks(m, true);
+                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
@@ -706,6 +712,9 @@ class BotCore {
             const caption = this.messageProcessor.extractText(m) || '';
 
             if (this.commandHandler && this.messageProcessor.isCommand(caption)) {
+                if (this.presenceSimulator) {
+                    await this.presenceSimulator.simulateTicks(m, true);
+                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto: caption, replyInfo, ehGrupo });
                 if (handled) return;
             }
@@ -767,8 +776,12 @@ class BotCore {
 
     async handleTextMessage(m: any, nome: string, numeroReal: string, participantJid: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio = false): Promise<void> {
         try {
-            if (this.commandHandler) {
+            if (this.commandHandler && (this.messageProcessor.isCommand(texto) || texto.startsWith('#') || texto.startsWith('.'))) {
                 // Comandos não devem ter delay de presença (ex: *ping deve ser instantâneo)
+                // Mas DEVEM marcar como lido
+                if (this.presenceSimulator) {
+                    await this.presenceSimulator.simulateTicks(m, true);
+                }
                 const handled = await this.commandHandler.handle(m, { nome, numeroReal, participantJid, texto, replyInfo, ehGrupo });
                 if (handled) return;
             }

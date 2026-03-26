@@ -127,13 +127,13 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ba/b: Tenta pegar só o áudio. Se não conseguir, baixa o melhor vídeo+áudio e extrai
-            // Adicionamos --format-sort para priorizar extensões estáveis
-            actionFlags = `-f "ba/b" --format-sort "ext:m4a" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // ba/b: Tenta áudio. Se falhar, melhor vídeo+áudio.
+            // Format sort garante m4a/mp3 primeiro se possível.
+            actionFlags = `-f "ba/b" --format-sort "ext:m4a,ext:mp3,br" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // HACK 2026: Priorizamos MP4 nativo para evitar processamento pesado de merge no Railway
-            // se o vídeo for vertical (Shorts), o yt-dlp lida automaticamente com obv+oba
-            actionFlags = `-f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b" --merge-output-format mp4 --format-sort "res:720,vcodec:h264" -o "${options.output}"`;
+            // HACK UNIVERSAL: bestvideo+bestaudio/best. Prioriza MP4 via merge-output-format e format-sort.
+            // Isso evita erro "Requested format is not available" se um ID específico de extensão faltar.
+            actionFlags = `-f "bestvideo+bestaudio/best" --merge-output-format mp4 --format-sort "res:720,vcodec:h264,ext:mp4" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -199,7 +199,25 @@ class MediaProcessor {
                 return { sucesso: true, buffer, metadata };
             }
 
-            // Último recurso: ytdl-core
+            // FALLBACK 1: Piped Stream (Bypass IP via instâncias públicas)
+            this.logger?.warn('⚠️ [FALLBACK 1] Tentando Piped Stream...');
+            const pipedDl = await this._downloadStreamFromPiped(metadata.videoId, outputPath);
+            if (pipedDl.sucesso && fs.existsSync(outputPath)) {
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+            }
+
+            // FALLBACK 2: Invidious Proxy
+            this.logger?.warn('⚠️ [FALLBACK 2] Tentando Invidious Proxy...');
+            const invidiousDl = await this._downloadViaInvidiousProxy(metadata.videoId, outputPath, 'audio');
+            if (invidiousDl.sucesso && fs.existsSync(outputPath)) {
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+            }
+
+            // ÚLTIMA INSTÂNCIA: ytdl-core
             this.logger?.warn('⚠️ [LAST RESORT] ytdl-core...');
             return await this._downloadWithYtdlCore(finalUrl, 'audio', metadata);
 
@@ -261,7 +279,25 @@ class MediaProcessor {
                 return { sucesso: true, buffer, metadata };
             }
 
-            // Último recurso: ytdl-core
+            // FALLBACK 1: Piped VÍDEO Stream
+            this.logger?.warn('⚠️ [FALLBACK 1] Tentando Piped Vídeo Stream...');
+            const pipedDl = await this._downloadVideoStreamFromPiped(metadata.videoId, outputPath, quality);
+            if (pipedDl.sucesso && fs.existsSync(outputPath)) {
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+            }
+
+            // FALLBACK 2: Invidious VÍDEO Proxy
+            this.logger?.warn('⚠️ [FALLBACK 2] Tentando Invidious Vídeo Proxy...');
+            const invidiousDl = await this._downloadViaInvidiousProxy(metadata.videoId, outputPath, 'video', quality);
+            if (invidiousDl.sucesso && fs.existsSync(outputPath)) {
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+            }
+
+            // ÚLTIMA INSTÂNCIA: ytdl-core
             this.logger?.warn('⚠️ [LAST RESORT] ytdl-core...');
             return await this._downloadWithYtdlCore(finalUrl, 'video', metadata);
 
