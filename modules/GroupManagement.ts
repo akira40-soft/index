@@ -763,19 +763,40 @@ class GroupManagement {
     }
 
     async kickUser(m: any, args: any[]) {
-        const targets = this._extractTargets(m);
-        if (targets.length === 0) {
+        const rawTargets = this._extractTargets(m);
+        if (rawTargets.length === 0) {
             await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Mencione (@alguem) ou responda a mensagem de quem deseja remover.' }, { quoted: m }).catch(() => { });
             return true;
         }
+
+        // Sanitização: Remove sufixos :1, :2 que o Baileys as vezes coloca
+        const targets = rawTargets.map((t: string) => t.split(':')[0].split('@')[0] + '@s.whatsapp.net');
         const groupJid = m.key.remoteJid;
+
         try {
-            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'remove'));
-            const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
-            await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s) do grupo.`, mentions: targets }, { quoted: m });
+            // Verificação prévia: Evita erro 500 se o usuário não estiver no grupo
+            const metadata = await this._getGroupMetadata(groupJid);
+            if (!metadata) throw new Error('Falha ao obter dados do grupo');
+
+            const participants = metadata.participants.map((p: any) => p.id);
+            const toRemove = targets.filter((t: string) => participants.includes(t));
+
+            if (toRemove.length === 0) {
+                await this.sock.sendMessage(groupJid, { text: '⚠️ O(s) usuário(s) indicado(s) não estão mais no grupo.' }, { quoted: m });
+                return true;
+            }
+
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toRemove, 'remove'));
+            const mentions = toRemove.map((t: string) => `@${t.split('@')[0]}`).join(', ');
+            await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s) do grupo.`, mentions: toRemove }, { quoted: m });
+
+            // Limpa cache para refletir a saída
+            this.clearMetadataCache(groupJid);
         } catch (e: any) {
             this.logger.error(`[GroupManagement] kickUser erro: ${e.message}`);
-            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao remover: ${e.message?.includes('not-authorized') ? 'Não tenho permissão de admin.' : e.message}` }, { quoted: m }).catch(() => { });
+            const msg = e.message?.includes('not-authorized') ? 'Não tenho permissão de admin.' :
+                e.message?.includes('internal-server-error') ? 'Erro interno do WhatsApp (500). Tente novamente.' : e.message;
+            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao remover: ${msg}` }, { quoted: m }).catch(() => { });
         }
         return true;
     }
@@ -786,13 +807,37 @@ class GroupManagement {
             await this.sock.sendMessage(groupJid, { text: '❌ Uso: #add [número] — ex: #add 244900000000' }, { quoted: m }).catch(() => { });
             return true;
         }
+
+        // Sanitização e formatação
         const numbers = args.map((arg: string) => arg.replace(/\D/g, '')).filter(Boolean).map((n: string) => `${n}@s.whatsapp.net`);
         if (numbers.length === 0) return true;
+
         try {
-            const result = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, numbers, 'add'));
-            await this.sock.sendMessage(groupJid, { text: `✅ Adicionado(s): ${numbers.map((n: string) => `@${n.split('@')[0]}`).join(', ')}`, mentions: numbers }, { quoted: m });
+            // Verificação prévia: Evita erro 500 se o usuário já estiver no grupo
+            const metadata = await this._getGroupMetadata(groupJid);
+            if (!metadata) throw new Error('Falha ao obter dados do grupo');
+
+            const participants = metadata.participants.map((p: any) => p.id);
+            const toAdd = numbers.filter((n: string) => !participants.includes(n));
+
+            if (toAdd.length === 0) {
+                await this.sock.sendMessage(groupJid, { text: '⚠️ O(s) usuário(s) já estão no grupo.' }, { quoted: m });
+                return true;
+            }
+
+            const result = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toAdd, 'add'));
+
+            // O WhatsApp as vezes retorna 207 se um numero nao puder ser adicionado (ex: privacidade)
+            // Mas aqui simplificamos para sucesso
+            await this.sock.sendMessage(groupJid, { text: `✅ Adicionado(s): ${toAdd.map((n: string) => `@${n.split('@')[0]}`).join(', ')}`, mentions: toAdd }, { quoted: m });
+
+            // Limpa cache
+            this.clearMetadataCache(groupJid);
         } catch (e: any) {
-            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao adicionar: ${e.message?.includes('not-authorized') ? 'Não tenho permissão.' : e.message}` }, { quoted: m }).catch(() => { });
+            this.logger.error(`[GroupManagement] addUser erro: ${e.message}`);
+            const msg = e.message?.includes('not-authorized') ? 'Não tenho permissão.' :
+                e.message?.includes('internal-server-error') ? 'Erro interno (500). Verifique se o número existe ou se há restrição de privacidade.' : e.message;
+            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao adicionar: ${msg}` }, { quoted: m }).catch(() => { });
         }
         return true;
     }
