@@ -12,5 +12,16 @@ echo "📁 Configurando persistência em: $BASE_PATH"
 mkdir -p "$BASE_PATH/auth_info_baileys" "$BASE_PATH/database" "$BASE_PATH/logs" "$BASE_PATH/temp"
 chmod -R 755 "$BASE_PATH"
 
+# ─── Gerar cookies.txt a partir de Base64 (Railway Variable) ───
+if [ -n "$YT_COOKIES_BASE64" ] && [ ! -f "/app/cookies.txt" ]; then
+    echo "🍪 Gerando /app/cookies.txt a partir de YT_COOKIES_BASE64..."
+    echo "$YT_COOKIES_BASE64" | base64 -d > /app/cookies.txt
+    echo "✅ cookies.txt criado em /app/cookies.txt"
+elif [ -f "/app/cookies.txt" ]; then
+    echo "🍪 cookies.txt encontrado em /app/cookies.txt"
+else
+    echo "⚠️  Sem cookies.txt — downloads do YouTube podem ser limitados"
+fi
+
 echo "🚀 Iniciando Akira Bot..."
 exec npm start
