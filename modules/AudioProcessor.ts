@@ -30,28 +30,27 @@ class AudioProcessor {
         this.sttCache = new Map();
         this.ttsCache = new Map();
 
-        // Filtros de Áudio (Legacy + Novos)
+        // Filtros de Áudio - Refinados para Alta Fidelidade (Premium & Estável)
         this.AUDIO_FILTERS = {
-            'bass': 'firequalizer=gain_entry=\'entry(0,10);entry(250,20);entry(4000,-10)\'',
-            'bassboost': 'firequalizer=gain_entry=\'entry(0,12);entry(200,15);entry(4000,-8)\'',
-            'esquilo': 'asetrate=44100*2,atempo=0.5',
-            'gemuk': 'asetrate=44100*0.5,atempo=2.0',
-            'nightcore': 'asetrate=44100*1.25,atempo=1.0',
-            'earrape': 'volume=100',
-            'fast': 'atempo=1.63,atempo=1.63',
-            'fat': 'atempo=1.6,asetrate=22100',
+            'bass': 'lowshelf=f=150:g=8:w=0.5,volume=0.9',
+            'bassboost': 'lowshelf=f=100:g=10:w=0.5,volume=0.8',
+            'esquilo': 'aresample=44100,asetrate=44100*1.5,atempo=1.0',
+            'gemuk': 'aresample=44100,asetrate=44100*0.75,atempo=1.2',
+            'nightcore': 'aresample=44100,asetrate=44100*1.15,atempo=1.0',
+            'earrape': 'volume=5,equalizer=f=1000:width_type=h:width=200:g=15',
+            'fast': 'atempo=1.5',
+            'fat': 'aresample=44100,asetrate=44100*0.8,atempo=1.2',
             'reverse': 'areverse',
             'robot': 'afftfilt=real=\'hypot(re,im)*sin(0)\':imag=\'hypot(re,im)*cos(0)\':win_size=512:overlap=0.75',
-            'slow': 'atempo=0.7,atempo=0.7',
-            'smooth': 'minterpolate=\'mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=120\'',
-            'tupai': 'atempo=0.5,asetrate=65100',
-            'treble': 'treble=g=10',
-            'echo': 'aecho=0.8:0.9:1000:0.3',
-            'deep': 'asetrate=44100*0.7,atempo=0.8,lowpass=f=2000',
-            'squirrel': 'asetrate=44100*2.5,atempo=0.5',
-            // 8D Audio Effect - Cria sensação de áudio 360 graus
-            // Usa filtros de reverb e delay para criar efeito surround
-            '8d': 'aecho=0.8:0.88:60:0.4,aecho=0.8:0.88:30:0.3,aecho=0.8:0.88:15:0.2,apulsator=hz=0.5'
+            'slow': 'atempo=0.8',
+            'smooth': 'chorus=0.7:0.9:55:0.4:0.25:2,stereowiden=level=0.5',
+            'tupai': 'aresample=44100,asetrate=44100*1.8,atempo=1.0',
+            'treble': 'highshelf=f=4000:g=8:w=0.5',
+            'echo': 'aecho=0.8:0.9:400:0.3',
+            'deep': 'aresample=44100,asetrate=44100*0.83,lowpass=f=2000',
+            'squirrel': 'aresample=44100,asetrate=44100*1.9,atempo=1.0',
+            // 8D Audio Effect - Sensação 360° Suave (8.3s por ciclo)
+            '8d': 'apulsator=hz=0.12:amount=0.8:panning=1,stereowiden=levelin=1:levelout=1:delay=25:width=0.6'
         };
     }
 
@@ -192,123 +191,117 @@ class AudioProcessor {
     async textToSpeech(text: string, language: string = 'pt'): Promise<any> {
         try {
             if (!text || text.length === 0) {
-                return {
-                    sucesso: false,
-                    error: 'Texto vazio'
-                };
+                return { sucesso: false, error: 'Texto vazio' };
             }
 
+            // Novo limite de 4000 caracteres conforme solicitado
+            const maxChars = 4000;
+            const textToProcess = text.substring(0, maxChars);
+
             // Verifica cache
-            const cacheKey = `${text.substring(0, 50)}_${language}`;
+            const cacheKey = `${textToProcess.substring(0, 100)}_${language}`;
             if (this.ttsCache?.has(cacheKey)) {
                 this.logger?.debug('💾 TTS from cache');
                 return this.ttsCache.get(cacheKey);
             }
 
-            this.logger?.info('🔊 Iniciando TTS (Google)...');
+            this.logger?.info(`🔊 Iniciando TTS (Google) para ${textToProcess.length} caracteres...`);
 
-            // Trunca texto se necessário (Google TTS tem limite)
-            const maxChars = 500;
-            const textTruncated = text.substring(0, maxChars);
-
-            const audioUrl = googleTTS.getAudioUrl(textTruncated, {
-                lang: language || this.config?.TTS_LANGUAGE,
-                slow: this.config?.TTS_SLOW,
-                host: 'https://translate.google.com'
-            });
-
-            const outputPath = this.generateRandomFilename('mp3');
-
-            // Download do áudio
-            const response = await axios({
-                url: audioUrl,
-                method: 'GET',
-                responseType: 'arraybuffer',
-                timeout: 15000
-            });
-
-            const audioBuffer = Buffer.from(response.data);
-
-            if (audioBuffer.length === 0) {
-                throw new Error('Audio buffer vazio');
+            // Google TTS tem limite de ~200 chars por requisição.
+            // Vamos dividir em chunks de aproximadamente 200 caracteres, respeitando espaços.
+            const chunks: string[] = [];
+            let currentText = textToProcess;
+            while (currentText.length > 0) {
+                if (currentText.length <= 200) {
+                    chunks.push(currentText);
+                    break;
+                }
+                let cutAt = currentText.lastIndexOf(' ', 200);
+                if (cutAt <= 0) cutAt = 200;
+                chunks.push(currentText.substring(0, cutAt).trim());
+                currentText = currentText.substring(cutAt).trim();
             }
 
-            await fs.promises.writeFile(outputPath, audioBuffer);
+            const tempFiles: string[] = [];
 
-            const stats = await fs.promises.stat(outputPath);
-            if (stats.size > this.config?.MAX_AUDIO_SIZE_MB * 1024 * 1024) {
-                await this.cleanupFile(outputPath);
-                return {
-                    sucesso: false,
-                    error: 'Áudio TTS muito grande'
-                };
-            }
-
-            // 🛠️ CONVERSÃO PARA OGG OPUS (VOICE NOTE STYLE)
-            this.logger?.info('🛠️ Convertendo TTS para Ogg Opus para compatibilidade mobile...');
-            const opusPath = this.generateRandomFilename('opus');
-
-            try {
-                await new Promise((resolve, reject) => {
-                    ffmpeg(outputPath)
-                        .toFormat('opus')
-                        .audioCodec('libopus')
-                        .audioBitrate('32k')
-                        .audioFrequency(48000)
-                        .audioChannels(1)
-                        .on('end', resolve)
-                        .on('error', reject)
-                        .save(opusPath);
+            // Processa cada chunk
+            for (let i = 0; i < chunks.length; i++) {
+                const audioUrl = googleTTS.getAudioUrl(chunks[i], {
+                    lang: language || this.config?.TTS_LANGUAGE,
+                    slow: this.config?.TTS_SLOW,
+                    host: 'https://translate.google.com'
                 });
 
-                const finalBuffer = await fs.promises.readFile(opusPath);
+                const tempPath = this.generateRandomFilename(`part${i}.mp3`);
+                const response = await axios({
+                    url: audioUrl,
+                    method: 'GET',
+                    responseType: 'arraybuffer',
+                    timeout: 15000
+                });
 
-                await Promise.all([
-                    this.cleanupFile(outputPath),
-                    this.cleanupFile(opusPath)
-                ]);
-
-                const result = {
-                    sucesso: true,
-                    buffer: finalBuffer,
-                    fonte: 'Google TTS (Ogg Opus)',
-                    size: finalBuffer.length,
-                    mimetype: 'audio/ogg; codecs=opus'
-                };
-
-                // Cache
-                this.ttsCache.set(cacheKey, result);
-                if (this.ttsCache.size > 50) {
-                    const firstKey = this.ttsCache.keys().next().value;
-                    this.ttsCache.delete(firstKey);
-                }
-
-                this.logger?.info(`🔊 TTS Completo (Opus): ${textTruncated.substring(0, 50)}... (${finalBuffer.length} bytes)`);
-                return result;
-
-            } catch (opusError) {
-                this.logger?.error('⚠️ Erro na conversão para Opus, enviando MP3 original:', opusError.message);
-                const finalBuffer = await fs.promises.readFile(outputPath);
-                await this.cleanupFile(outputPath);
-                return {
-                    sucesso: true,
-                    buffer: finalBuffer,
-                    fonte: 'Google TTS (MP3)',
-                    size: finalBuffer.length,
-                    mimetype: 'audio/mpeg'
-                };
+                await fs.promises.writeFile(tempPath, Buffer.from(response.data));
+                tempFiles.push(tempPath);
             }
+
+            // Concatena os arquivos MP3 usando FFmpeg
+            const combinedMp3Path = this.generateRandomFilename('combined.mp3');
+            const opusPath = this.generateRandomFilename('opus');
+
+            await new Promise((resolve, reject) => {
+                const merging = ffmpeg();
+                tempFiles.forEach(f => merging.input(f));
+                merging
+                    .on('error', reject)
+                    .on('end', resolve)
+                    .mergeToFile(combinedMp3Path, this.tempFolder);
+            });
+
+            // Converte para OGG Opus (Voice Note)
+            await new Promise((resolve, reject) => {
+                ffmpeg(combinedMp3Path)
+                    .toFormat('opus')
+                    .audioCodec('libopus')
+                    .audioBitrate('32k')
+                    .audioFrequency(48000)
+                    .audioChannels(1)
+                    .on('end', resolve)
+                    .on('error', reject)
+                    .save(opusPath);
+            });
+
+            const finalBuffer = await fs.promises.readFile(opusPath);
+
+            // Cleanup
+            await Promise.all([
+                ...tempFiles.map(f => this.cleanupFile(f)),
+                this.cleanupFile(combinedMp3Path),
+                this.cleanupFile(opusPath)
+            ]);
+
+            const result = {
+                sucesso: true,
+                buffer: finalBuffer,
+                fonte: 'Google TTS (Merged Ogg Opus)',
+                size: finalBuffer.length,
+                mimetype: 'audio/ogg; codecs=opus'
+            };
+
+            // Cache
+            this.ttsCache.set(cacheKey, result);
+            if (this.ttsCache.size > 50) {
+                const firstKey = this.ttsCache.keys().next().value;
+                this.ttsCache.delete(firstKey);
+            }
+
+            this.logger?.info(`🔊 TTS Completo: ${chunks.length} partes, total ${finalBuffer.length} bytes`);
+            return result;
 
         } catch (error: any) {
-            this.logger?.error('❌ Erro TTS (Google):', error.message);
-            if (error.response) {
-                this.logger?.error(`Status: ${error.response.status}`);
-                this.logger?.error(`Headers: ${JSON.stringify(error.response.headers)}`);
-            }
-
+            this.logger?.error('❌ Erro TTS (Google Multi-chunk):', error.message);
             return {
                 sucesso: false,
-                error: 'Erro ao gerar TTS: ' + error.message
+                error: 'Erro ao gerar TTS longo: ' + error.message
             };
         }
     }

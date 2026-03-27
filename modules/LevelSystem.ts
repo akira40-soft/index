@@ -1,6 +1,7 @@
 ﻿import fs from 'fs';
 import path from 'path';
 import ConfigManager from './ConfigManager.js';
+import JidUtils from './JidUtils.js';
 
 class LevelSystem {
     private static instance: LevelSystem;
@@ -65,20 +66,27 @@ class LevelSystem {
     }
 
     getGroupRecord(gid: string, uid: string, createIfMissing: boolean = false) {
-        const rec = this.data.find(r => r.gid === gid && r.uid === uid);
+        const normUid = JidUtils.normalize(uid);
+        const rec = this.data.find(r => r.gid === gid && JidUtils.normalize(r.uid) === normUid);
         if (rec) return rec;
         if (createIfMissing) {
-            const n = { gid, uid, level: 0, xp: 0 };
+            const n = { gid, uid: normUid, level: 0, xp: 0 };
             this.data.push(n);
             this._save(this.dbPath, this.data);
             return n;
         }
-        return { gid, uid, level: 0, xp: 0 };
+        return { gid, uid: normUid, level: 0, xp: 0 };
     }
 
     saveRecord(rec: any) {
-        const i = this.data.findIndex(r => r.gid === rec.gid && r.uid === rec.uid);
-        if (i === -1) this.data.push(rec); else this.data[i] = rec;
+        const normUid = JidUtils.normalize(rec.uid);
+        const i = this.data.findIndex(r => r.gid === rec.gid && JidUtils.normalize(r.uid) === normUid);
+        if (i === -1) {
+            rec.uid = normUid;
+            this.data.push(rec);
+        } else {
+            this.data[i] = rec;
+        }
         this._save(this.dbPath, this.data);
     }
 
@@ -143,6 +151,7 @@ class LevelSystem {
     // Se falhar, NUNCA mais poderá tentar novamente para se tornar ADM
     registerMaxLevelUser(gid: string, uid: string, userName: string, sock: any) {
         try {
+            const normUid = JidUtils.normalize(uid);
             const failedPath = path.join(this.config.DATABASE_FOLDER, 'datauser', 'level_adm_failed.json');
 
             // ═══ VERIFICA SE JÁ FALHOU ANTES ═══
@@ -150,7 +159,7 @@ class LevelSystem {
             try {
                 if (fs.existsSync(failedPath)) {
                     const failedData = JSON.parse(fs.readFileSync(failedPath, 'utf8') || '{}');
-                    if (failedData[uid] && failedData[uid].failed === true) {
+                    if (failedData[normUid] && failedData[normUid].failed === true) {
                         const failedDate = new Date(failedData[uid].failedAt).toLocaleDateString('pt-BR');
                         return {
                             success: false,
@@ -227,14 +236,14 @@ class LevelSystem {
             }
 
             // ═══ VERIFICAÇÕES ═══
-            if (window.promotedToADM.includes(uid)) {
+            if (window.promotedToADM.includes(normUid)) {
                 return { success: false, message: '❌ Você já foi promovido a ADM nesta janela.' };
             }
 
             // Adiciona usuário à lista de max level users
-            if (!window.maxLevelUsers.find((u: any) => u.uid === uid)) {
+            if (!window.maxLevelUsers.find((u: any) => JidUtils.normalize(u.uid) === normUid)) {
                 window.maxLevelUsers.push({
-                    uid,
+                    uid: normUid,
                     userName,
                     timestamp: Date.now(),
                     position: window.maxLevelUsers.length + 1
@@ -248,10 +257,10 @@ class LevelSystem {
 
             // ═══ PROMOÇÃO A ADM ═══
             if (auto && window.maxLevelUsers.length <= this.topForAdm) {
-                const position = window.maxLevelUsers.findIndex((u: any) => u.uid === uid) + 1;
+                const position = window.maxLevelUsers.findIndex((u: any) => JidUtils.normalize(u.uid) === normUid) + 1;
                 if (position <= this.topForAdm) {
                     try {
-                        window.promotedToADM.push(uid);
+                        window.promotedToADM.push(normUid);
                         this._save(this.promoPath, this.promos);
 
                         // Verifica se o socket está disponível antes de tentar usar

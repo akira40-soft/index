@@ -311,6 +311,8 @@ class BotCore {
                 const { id, participants, action } = update;
                 if (!id || !participants || participants.length === 0) return;
 
+                this.logger.info(`👥 [GROUP-EVENT] ${action} em ${id} para ${participants.length} participantes.`);
+
                 // Limpa todos os JIDs de participantes (remove :1, :2 etc)
                 const cleanParticipants = participants.map((p: string) => {
                     const [user, domain] = p.split('@');
@@ -341,11 +343,15 @@ class BotCore {
                 if (action === 'add' && this.groupManagement && validParticipants.length > 0) {
                     try {
                         const isWelcomeOn = this.groupManagement.getWelcomeStatus(id);
+                        this.logger.debug(`👋 Welcome status para ${id}: ${isWelcomeOn}`);
+
                         if (isWelcomeOn) {
                             for (const p of validParticipants) {
                                 const template = this.groupManagement.getCustomMessage(id, 'welcome') || 'Olá @user, bem-vindo ao @group!';
                                 const formatted = await this.groupManagement.formatMessage(id, p, template);
-                                await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch(() => { });
+                                await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch((err: any) => {
+                                    this.logger.error(`[Welcome] Falha ao enviar msg: ${err.message}`);
+                                });
                             }
                         }
                     } catch (e: any) {
@@ -357,6 +363,8 @@ class BotCore {
                 if (action === 'remove' && this.groupManagement && cleanParticipants.length > 0) {
                     try {
                         const isGoodbyeOn = this.groupManagement.getGoodbyeStatus(id);
+                        this.logger.debug(`👋 Goodbye status para ${id}: ${isGoodbyeOn}`);
+
                         if (isGoodbyeOn) {
                             for (const p of cleanParticipants) {
                                 const template = this.groupManagement.getCustomMessage(id, 'goodbye') || 'Adeus @user!';
@@ -409,8 +417,11 @@ class BotCore {
             if (!this.messageProcessor) return;
 
             const nome = m.pushName || 'Usuário';
-            const participantJid = this.messageProcessor.extractParticipantJid(m);
+            let participantJidRaw = this.messageProcessor.extractParticipantJid(m);
             const numeroReal = this.messageProcessor.extractUserNumber(m);
+
+            // NORMALIZAÇÃO DE JID: Remove :1, :2 etc para consistência com DB e Moderação
+            const participantJid = participantJidRaw?.split(':')[0]?.split('@')[0] + '@s.whatsapp.net';
 
             if (this.moderationSystem?.isBlacklisted(numeroReal)) return;
 
@@ -759,7 +770,7 @@ class BotCore {
         try {
             const transcricao = await this.audioProcessor.speechToText(await this.mediaProcessor.downloadMedia(m.message, 'audio'));
             if (transcricao.sucesso) {
-                await this.handleTextMessage(m, nome, numeroReal, transcricao.texto, replyInfo, ehGrupo, true);
+                await this.handleTextMessage(m, nome, numeroReal, participantJid, transcricao.texto, replyInfo, ehGrupo, true);
             }
         } catch (e) { }
     }
@@ -767,14 +778,21 @@ class BotCore {
     private shouldRespondToAI(m: any, texto: string, replyInfo: any, ehGrupo: boolean): boolean {
         if (!ehGrupo) return true; // PV sempre responde
 
-        const textoLower = texto.toLowerCase();
+        const textoLower = (texto || '').toLowerCase();
         const isReplyToBot = replyInfo?.ehRespostaAoBot || false;
-        const hasAkiraMention = textoLower.includes('akira') || textoLower.includes('bot');
+
+        // Verifica se é dono (apenas donos podem usar "bot" ou "morena" para ativar)
+        const numeroReal = this.messageProcessor?.extractUserNumber?.(m) || '';
+        const isOwner = this.config.isDono(numeroReal);
+
+        // Palavras de ativação
+        const hasAkiraMention = textoLower.includes('akira');
+        const hasSpecialMention = (textoLower.includes('pretinha') || textoLower.includes('morena')) && isOwner;
 
         const mentions = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
         const isMentioned = mentions.some((jid: string) => jid === this.BOT_JID);
 
-        return isReplyToBot || hasAkiraMention || isMentioned;
+        return isReplyToBot || hasAkiraMention || hasSpecialMention || isMentioned;
     }
 
     async handleTextMessage(m: any, nome: string, numeroReal: string, participantJid: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio = false): Promise<void> {

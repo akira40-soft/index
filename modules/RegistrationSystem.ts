@@ -1,6 +1,7 @@
-﻿import fs from 'fs';
+import fs from 'fs';
 import path from 'path';
 import ConfigManager from './ConfigManager.js';
+import JidUtils from './JidUtils.js';
 
 interface RegisteredUser {
     id: string;
@@ -127,19 +128,18 @@ class RegistrationSystem {
     }
 
     public isRegistered(uid: string): boolean {
-        // Normaliza UID para multi-device
-        const normalizedUid = uid.split(':')[0] + (uid.includes('@') ? '' : '@s.whatsapp.net');
-        return !!this.users.find(u => u.id.split(':')[0] === normalizedUid.split(':')[0]);
+        const normalizedUid = JidUtils.normalize(uid);
+        return !!this.users.find(u => JidUtils.normalize(u.id) === normalizedUid);
     }
 
     public getUser(uid: string): RegisteredUser | undefined {
-        const normalizedUid = uid.split(':')[0];
-        return this.users.find(u => u.id.split(':')[0] === normalizedUid);
+        const normalizedUid = JidUtils.normalize(uid);
+        return this.users.find(u => JidUtils.normalize(u.id) === normalizedUid);
     }
 
     public unregisterUser(uid: string): boolean {
-        const normalizedUid = uid.split(':')[0];
-        const index = this.users.findIndex(u => u.id.split(':')[0] === normalizedUid);
+        const normalizedUid = JidUtils.normalize(uid);
+        const index = this.users.findIndex(u => JidUtils.normalize(u.id) === normalizedUid);
         if (index > -1) {
             this.users.splice(index, 1);
             this._save();

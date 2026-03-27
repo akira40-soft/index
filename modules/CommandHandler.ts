@@ -145,22 +145,18 @@ class CommandHandler {
             }
             // Extrai comando e argumentos
             let mp = this.messageProcessor || this.bot?.messageProcessor;
-
-            if (!mp) {
-                // Tentativa desesperada de recuperar do bot
-                if (this.bot?.messageProcessor) {
-                    this.messageProcessor = this.bot.messageProcessor;
-                    mp = this.messageProcessor;
-                }
-            }
-
-            if (!mp) {
-                console.error(`❌ [CRITICAL] messageProcessor não acessível. Bot: ${!!this.bot}, MP Reference: ${!!this.messageProcessor}, Bot.MP: ${!!this.bot?.messageProcessor}`);
-                return false;
-            }
-
             const chatJid = m.key.remoteJid;
             const senderId = numeroReal;
+
+            if (!mp && this.bot?.messageProcessor) {
+                this.messageProcessor = this.bot.messageProcessor;
+                mp = this.messageProcessor;
+            }
+
+            if (!mp) {
+                console.error(`❌ [CRITICAL] messageProcessor não acessível.`);
+                return false;
+            }
 
             // ═══════════════════════════════════════════════════════════════════════
             // INTERCEPTAÇÃO DE JOGADAS ATIVAS (SEM PREFIXO OU VIA REPLY)
@@ -168,25 +164,62 @@ class CommandHandler {
             const isGameReply = replyInfo && replyInfo.isReplyToGame;
             const gameType = replyInfo?.gameType;
             const msgTexto = (texto || '').trim();
+            const quotedText = m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
+                m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || "";
 
-            // Se for reply a uma mensagem de jogo OU se for um input que parece jogada em chat ativo (RESTRITO A REPLY E JOGADORES TTT/GRID)
-            if (isGameReply && /^\d+$/.test(msgTexto)) {
-                const gameModule = this.gameSystem;
-                if (gameModule) {
-                    // Verifica se o usuário é um dos jogadores do jogo ativo no chat
-                    const gameData = gameModule.games.get(chatJid) || gameModule.games.get(`${chatJid}_gridtactics`);
-                    const normSender = (gameModule as any)._normalizeId(senderId);
+            // Se for um input puramente numérico ou opção de jogo (ex: pedra, papel) em resposta a um jogo
+            if (isGameReply && msgTexto) {
+                const lowInput = msgTexto.toLowerCase();
 
-                    if (gameData && (gameData.players?.includes(normSender) || gameData.player === normSender)) {
-                        const gameRes = await gameModule.processActiveGameInput(chatJid, senderId, msgTexto, replyInfo);
-                        if (gameRes) {
+                // 1. GRID TACTICS (4x4) - Prioridade Máxima
+                if (gameType === 'grid' || quotedText?.includes("GRID TACTICS")) {
+                    try {
+                        const parts = lowInput.split(/\s+/);
+                        const gameRes = await GridTacticsGame.handleGridTactics(chatJid, senderId, parts[0], parts.slice(1));
+                        if (gameRes && !gameRes.text.includes("Comando inválido")) {
                             await this._reply(m, gameRes.text, { mentions: [senderId] });
                             return true;
+                        }
+                    } catch (e) {
+                        console.error('Erro no Grid via reply:', e);
+                    }
+                }
+
+                // 2. OUTROS JOGOS (Guess, Hangman, TTT, etc)
+                const isNumeric = /^\d+$/.test(lowInput);
+                const isOption = ['pedra', 'papel', 'tesoura', 'hit', 'stay', 'parar'].includes(lowInput);
+
+                if (isNumeric || isOption || gameType === 'blackjack' || gameType === 'roulette' || gameType === 'hangman') {
+                    const handlerMap: any = {
+                        'guess': 'handleGuess',
+                        'hangman': 'handleHangman',
+                        'rps': 'handleRPS',
+                        'blackjack': 'handleBlackjack',
+                        'roulette': 'handleRussianRoulette',
+                        'ttt': 'handleTicTacToe'
+                    };
+
+                    const detectedType = gameType || (quotedText?.includes("ADVINHA") ? 'guess' :
+                        quotedText?.includes("FORCA") ? 'hangman' :
+                            quotedText?.includes("PEDRA, PAPEL") ? 'rps' :
+                                quotedText?.includes("TIC-TAC-TOE") ? 'ttt' : "");
+
+                    const method = handlerMap[detectedType];
+                    if (method && this.gameSystem && (this.gameSystem as any)[method]) {
+                        try {
+                            const gameRes = await (this.gameSystem as any)[method](chatJid, senderId, lowInput);
+                            if (gameRes && gameRes.text) {
+                                await this._reply(m, gameRes.text, { mentions: [senderId] });
+                                return true;
+                            }
+                        } catch (e: any) {
+                            console.error(`Erro no jogo ${detectedType} via reply:`, e.message);
                         }
                     }
                 }
             }
 
+            // Tenta dar parse no comando se não for jogada
             const parsed = mp.parseCommand(texto);
             if (!parsed) return false;
 
@@ -194,86 +227,16 @@ class CommandHandler {
             const args = parsed.args;
             const fullArgs = parsed.textoCompleto;
 
-            // Log de comando
-            // this.logger?.debug(`[CMD] ${command} por ${nome} em ${chatJid}`);
-
-            // Simulador de presença (digitação) removido dos comandos para garantir latência instantânea (< 1s)
-
-            // ═══════════════════════════════════════════════════════════════════════
-            // DETECÇÃO DE JOGADAS VIA REPLY
-            // Se o usuário responde em reply a uma mensagem de jogo com uma jogada válida
-            // processa como jogada automaticamente sem enviar para a IA
-            // ═══════════════════════════════════════════════════════════════════════
-
-            // Detecta se é uma resposta a uma mensagem de jogo (re-uso de variáveis acima)
-            if (isGameReply && fullArgs && command !== 'ping') {
-                // Verifica se o texto é uma jogada válida
-                const trimmedArgs = fullArgs.trim();
-
-                // TTT - números 1-9
-                if ((gameType === 'ttt' || (gameType === 'ttt' && /^[1-9]$/.test(trimmedArgs)))) {
-                    try {
-                        const gameRes = await GameSystem.handleTicTacToe(chatJid, senderId, trimmedArgs, undefined);
-                        return await this._reply(m, gameRes.text, { mentions: [senderId] });
-                    } catch (e) {
-                        console.error('Erro no TTT via reply:', e);
-                    }
-                }
-
-                // Grid Tactics - números
-                if (gameType === 'grid' && /^\d+$/.test(trimmedArgs)) {
-                    try {
-                        const parts = trimmedArgs.split(/\s+/);
-                        const gameRes = await GridTacticsGame.handleGridTactics(chatJid, senderId, parts[0], parts.slice(1));
-                        return await this._reply(m, gameRes.text);
-                    } catch (e) {
-                        console.error('Erro no Grid via reply:', e);
-                    }
-                }
-
-                // RPS - pedra, papel, tesoura
-                if (gameType === 'rps' && ['pedra', 'papel', 'tesoura'].includes(trimmedArgs.toLowerCase())) {
-                    try {
-                        const gameRes = await GameSystem.handleGame(chatJid, senderId, 'rps', [trimmedArgs.toLowerCase()], undefined);
-                        return await this._reply(m, gameRes.text, { mentions: [senderId] });
-                    } catch (e) {
-                        console.error('Erro no RPS via reply:', e);
-                    }
-                }
-
-                // Guess - números
-                if (gameType === 'guess' && /^\d+$/.test(trimmedArgs)) {
-                    try {
-                        const gameRes = await GameSystem.handleGame(chatJid, senderId, 'guess', [trimmedArgs]);
-                        return await this._reply(m, gameRes.text);
-                    } catch (e) {
-                        console.error('Erro no Guess via reply:', e);
-                    }
-                }
-
-                // Forca - letras
-                if (gameType === 'hangman' && /^[a-zA-Z]$/.test(trimmedArgs)) {
-                    try {
-                        const gameRes = await GameSystem.handleGame(chatJid, senderId, 'forca', [trimmedArgs.toLowerCase()]);
-                        return await this._reply(m, gameRes.text);
-                    } catch (e) {
-                        console.error('Erro no Hangman via reply:', e);
-                    }
-                }
-            }
-
-            // Verifica permissões de dono
+            // NORMALIZAÇÃO CRÍTICA DE ID (Remove sufixos de dispositivo)
+            const userId = (participantJid || m.key.participant || numeroReal)?.split(':')[0]?.split('@')[0] + '@s.whatsapp.net';
             const isOwner = this.config.isDono(numeroReal, nome);
-            const userId = participantJid || m.key.participant || numeroReal;
 
             // VERIFICAÇÃO DE REGISTRO GLOBAL - APENAS NO PV, NÃO EM GRUPOS
-            // Grupos permitem usuários não registrados usarem comandos
             const isReg = this.registrationSystem.isRegistered(userId);
             const publicCommands = ['registrar', 'register', 'reg', 'menu', 'help', 'ajuda', 'comandos', 'dono', 'owner', 'criador', 'creator', 'ping',
                 'level', 'lvl', 'nivel', 'rank', 'ranking', 'top'];
 
-            // Only require registration in private chats (PV), not in groups
-            if (!isReg && !isOwner && !ehGrupo && !publicCommands.includes(command.toLowerCase())) {
+            if (!isReg && !isOwner && !ehGrupo && !publicCommands.includes(command)) {
                 await this.bot.reply(m, '❌ *ACESSO NEGADO!*\n\nVocê precisa se registrar para usar os comandos do bot.\n\nUse: *#registrar SeuNome|SuaIdade*');
                 return true;
             }
@@ -284,17 +247,12 @@ class CommandHandler {
                 isAdminUsers = await this.groupManagement.isUserAdmin(chatJid, userId);
             }
 
-            // ══════════════════════════════════════════
-            // VERIFICAÇÃO DE PERMISSÕES
-            // ══════════════════════════════════════════
-            const groupJid = ehGrupo ? chatJid : null;
-
             const permissionCheck = this.permissionManager.canExecuteCommand(
                 command,
                 userId,
                 nome,
                 ehGrupo,
-                groupJid
+                ehGrupo ? chatJid : null
             );
 
             if (!permissionCheck.allowed) {
@@ -442,6 +400,40 @@ class CommandHandler {
                 case 'informacoes':
                 case 'about':
                     return await this._showMenu(m, command);
+
+                // 🎮 NOVOS COMANDOS DE JOGOS
+                case 'ttt':
+                case 'velha':
+                case 'jogodavelha':
+                    return await this._reply(m, (await this.gameSystem.handleTicTacToe(chatJid, senderId, args[0] || 'start', m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0])).text);
+
+                case 'rps':
+                case 'ppt':
+                case 'pedrapapeltesoura':
+                    return await this._reply(m, (await this.gameSystem.handleRPS(chatJid, senderId, args[0] || 'start', m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0])).text);
+
+                case 'guess':
+                case 'advinha':
+                case 'adivinha':
+                    return await this._reply(m, (await this.gameSystem.handleGuess(chatJid, senderId, args[0] || 'start')).text);
+
+                case 'forca':
+                case 'hangman':
+                    return await this._reply(m, (await this.gameSystem.handleHangman(chatJid, senderId, args[0] || 'start', args.slice(1).join(' '))).text);
+
+                case 'bj':
+                case '21':
+                case 'blackjack':
+                    return await this._reply(m, (await this.gameSystem.handleBlackjack(chatJid, senderId, args[0] || 'start')).text);
+
+                case 'roleta':
+                case 'roulette':
+                    return await this._reply(m, (await this.gameSystem.handleRussianRoulette(chatJid, senderId, args[0] || 'start')).text);
+
+                case 'grid':
+                case 'gt':
+                case 'gridtactics':
+                    return await this._reply(m, (await GridTacticsGame.handleGridTactics(chatJid, senderId, args[0] || 'start', args.slice(1))).text);
 
                 case 'pinterest':
                 case 'pin':
@@ -1510,7 +1502,8 @@ ${P}menu osint — Comandos OSINT avançados`,
 
     public async _handleProfile(m: any, meta: any): Promise<boolean> {
         const { nome, numeroReal } = meta;
-        const uid = m.key.participant || m.key.remoteJid;
+        let uidRaw = m.key.participant || m.key.remoteJid;
+        const uid = uidRaw?.split(':')[0]?.split('@')[0] + '@s.whatsapp.net';
 
         try {
             if (!this.bot?.levelSystem) {
@@ -1809,26 +1802,33 @@ ${P}menu osint — Comandos OSINT avançados`,
         // Se usuario quer ver info
         if (args.length === 0) {
             const plans = this.bot.paymentManager.getPlans();
-            let msg = `💎 *SEJA PREMIUM NO AKIRA BOT*\n\n`;
-            msg += `Desbloqueie recursos exclusivos, remova limites e suporte o projeto!\n\n`;
+            let msg = `💎 *UPGRADE PARA AKIRA PREMIUM* 💎\n\n`;
+            msg += `_Eleve sua experiência ao máximo e suporte o desenvolvimento da Akira V21 Ultimate._\n\n`;
+
+            msg += `🌟 *VANTAGENS EXCLUSIVAS:*\n`;
+            msg += `✅ Sem limites de uso (Rate Limit OFF)\n`;
+            msg += `✅ Acesso a ferramentas de OSINT avançadas\n`;
+            msg += `✅ Módulos de Cybersecurity liberados\n`;
+            msg += `✅ Prioridade máxima no processamento\n`;
+            msg += `✅ Suporte VIP direto com criadores\n\n`;
+
+            msg += `📊 *NOSSOS PLANOS:*\n`;
+            msg += `══════════════════════════════\n`;
 
             for (const [key, plan] of Object.entries(plans) as [string, any][]) {
-                msg += `🏷️ *${plan.name}*\n`;
-                msg += `💰 Valor: R$ ${plan.price.toFixed(2)}\n`;
+                const icon = key.includes('vip') ? '⭐' : '🏷️';
+                msg += `${icon} *${plan.name.toUpperCase()}*\n`;
+                msg += `💰 Investimento: *Kz ${plan.price.toLocaleString('pt-AO')}*\n`;
                 msg += `📅 Duração: ${plan.days} dias\n`;
                 msg += `👉 Use: *${this.config.PREFIXO}buy ${key}*\n\n`;
             }
-
-            msg += `💡 *Vantagens:*\n`;
-            msg += `✅ Acesso a ferramentas de Cybersecurity\n`;
-            msg += `✅ Comandos de OSINT avançados\n`;
-            msg += `✅ Prioridade no processamento\n`;
-            msg += `✅ Suporte VIP\n\n`;
+            msg += `══════════════════════════════\n\n`;
 
             if (this.bot.paymentManager.payConfig.kofiPage) {
-                msg += `☕ *Apoie no Ko-fi:*\nhttps://ko-fi.com/${this.bot.paymentManager.payConfig.kofiPage}\n`;
-                msg += `⚠️ *IMPORTANTE:* Ao doar, escreva seu número de WhatsApp na mensagem para ativar o VIP automaticamente!`;
+                msg += `☕ *APOIE O PROJETO:* https://ko-fi.com/${this.bot.paymentManager.payConfig.kofiPage}\n\n`;
             }
+
+            msg += `💡 _Para pagamentos via transferência (Angola - IBAN), entre em contato usando o comando *#dono*._`;
 
             await this._reply(m, msg);
             return true;
@@ -1837,16 +1837,13 @@ ${P}menu osint — Comandos OSINT avançados`,
         const planKey = args[0].toLowerCase().trim();
         const userId = m.key.participant || m.key.remoteJid;
 
-        // Gera link
         const res = this.bot.paymentManager.generatePaymentLink(userId, planKey);
 
         if (res.success) {
-            await this._reply(m, `⏳ *Gerando Pagamento...*`);
-
-            // Envia QR Code se disponível
-            await this._reply(m, `✅ *Pedido Criado!*\n\n${res.message}\n\n_Assim que o pagamento for confirmado, seu plano será ativado automaticamente._`);
+            await this._reply(m, `⏳ *PROCESSANDO PEDIDO...*`);
+            await this._reply(m, `✅ *PEDIDO GERADO COM SUCESSO!*\n\n${res.message}\n\n_Assim que o pagamento for confirmado, seu tempo Premium será ativado automaticamente pelo sistema._`);
         } else {
-            await this._reply(m, `❌ ${res.message}`);
+            await this._reply(m, `❌ *FALHA:* ${res.message}`);
         }
         return true;
     }

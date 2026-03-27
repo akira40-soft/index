@@ -80,7 +80,7 @@ class ImageEffects {
                 newHeight = Math.round(newHeight * scale);
             }
 
-            // Aplicar melhorias
+            // Aplicar melhorias profissionais
             let processed = sharp(imageBuffer)
                 .resize(newWidth, newHeight, {
                     fit: 'inside',
@@ -88,19 +88,20 @@ class ImageEffects {
                     kernel: 'lanczos3'
                 });
 
-            // Aumentar nitidez
+            // Aumentar nitidez (Sharpen agressivo mas limpo para look "Premium")
             processed = processed.sharpen({
                 sigma: 1.5,
-                m1: 0.5,
-                m2: 0.5
+                m1: 1.0,
+                m2: 3.0
             });
 
-            // Ajustar contraste e brilho
-            processed = processed.linear(1.05, -10);
+            // HDR-like Pro: Ajustar contraste, brilho e curvas de tom
+            processed = processed.linear(1.2, -10);
 
-            // Aumentar saturação ligeiramente
+            // Aumentar saturação para cores mais vibrantes e profissionais
             processed = processed.modulate({
-                saturation: 1.1
+                saturation: 1.4,
+                brightness: 1.02
             });
 
             const outputBuffer = await processed.toBuffer();
@@ -508,23 +509,25 @@ class ImageEffects {
 
             const wastedSvg = Buffer.from(
                 `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="0" y="${rectY}" width="${width}" height="${rectHeight}" fill="black" fill-opacity="0.6"/>
+                    <!-- Faixa Cinza Escura Semitransparente -->
+                    <rect x="0" y="${rectY}" width="${width}" height="${rectHeight}" fill="#000000" fill-opacity="0.75"/>
+                    <!-- Texto WASTED em Vermelho Vibrante com Sombra -->
                     <text x="50%" y="50%" 
                           font-family="Impact, Arial, sans-serif" 
                           font-weight="bold" 
                           font-size="${fontSize}px" 
-                          fill="#ff0000" 
+                          fill="#FF0000" 
                           text-anchor="middle" 
                           dominant-baseline="central"
-                          stroke="black"
-                          stroke-width="${Math.max(1, width / 200)}">WASTED</text>
+                          filter="drop-shadow(0px 0px 10px rgba(0,0,0,0.9))">WASTED</text>
                 </svg>`
             );
 
             return {
                 success: true,
                 buffer: await sharp(imageBuffer)
-                    .greyscale()
+                    .blur(5) // Desfoque dramático no fundo
+                    .greyscale() // Mantém o estilo clássico de morte do GTA
                     .composite([{ input: wastedSvg, blend: 'over', gravity: 'centre' }])
                     .toBuffer()
             };

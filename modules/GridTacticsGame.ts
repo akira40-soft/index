@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════════════
  * GRID TACTICS - JOGO HÍBRIDO ÚNICO
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -497,70 +497,66 @@ Números em sequência (1-2-3-4) dão ponto extra!
     /**
      * Handler principal para GridTactics (compatível com CommandHandler)
      */
-    public async handleGridTactics(chatJid: string, userId: string, action: string, args: string[]): Promise<{ text: string, finished: boolean }> {
+    public async handleGridTactics(chatJid: string, senderId: string, action: string, args: string[]): Promise<{ text: string, finished: boolean }> {
         const gameKey = `${chatJid}_gridtactics`;
+        let game = this.games.get(gameKey);
+
+        const normSender = this._normalizeId(senderId);
+
+        // Comandos de controle
+        if (game) {
+            const lowInput = action.trim().toLowerCase();
+            if (['sair', 'fechar', 'stop'].includes(lowInput)) {
+                this.games.delete(gameKey);
+                return { text: '🚪 Você saiu da partida de *Grid Tactics*.', finished: true };
+            }
+            if (['reset', 'reiniciar'].includes(lowInput)) {
+                this.games.delete(gameKey);
+                return await this.handleGridTactics(chatJid, normSender, 'start', []);
+            }
+        }
 
         // Iniciar novo jogo
-        if (action === 'start' || !this.games.has(gameKey)) {
+        if (action === 'start' || !game) {
             const difficulty = args[0] || 'medio';
-            const game = this.createGame(chatJid, userId, null, difficulty);
+            game = this.createGame(chatJid, normSender, null, difficulty);
 
             return {
-                text: `🎮 *GRID TACTICS - NOVO JOGO!*\n\n` +
-                    `Você começará contra a IA (Dificuldade: ${difficulty.toUpperCase()})\n\n` +
+                text: `🟩 *GRID TACTICS - MODO ESTRATÉGICO* 🟩\n\n` +
+                    `🤖 Dificuldade: *${difficulty.toUpperCase()}*\n` +
+                    `👤 Jogador: @${normSender.split('@')[0]}\n\n` +
                     `${this.renderBoard(game.board)}\n\n` +
-                    `Digite um número de 1-4 e a posição (ex: *#gridtactics 1 1*)\n` +
-                    `Ou use: *#gridtactics ajuda* para ver as regras`,
+                    `💡 Como jogar: *#grid <num> <pos>*\n` +
+                    `Ex: *#grid 2 5* (coloca o 2 na posição 5)\n` +
+                    `Ou use *#grid ajuda* para ver as regras.`,
                 finished: false
             };
         }
 
-        const game = this.games.get(gameKey);
-        if (!game || game.type !== 'gridtactics') {
-            return {
-                text: '❌ Nenhum jogo ativo. Use *#gridtactics start* para começar!',
-                finished: false
-            };
+        if (normSender !== game.players[0]) {
+            return { text: '❌ Este jogo pertence a outro jogador!', finished: false };
         }
 
         // Comando "ajuda"
         if (action === 'ajuda' || action === 'help') {
             return {
-                text: `📋 *REGRAS DO GRID TACTICS*\n\n` +
-                    `🎯 OBJETIVO:\n` +
-                    `Formar 4 em linha (horizontal, vertical ou diagonal)\n\n` +
-                    `🎮 COMO JOGAR:\n` +
-                    `1. Escolha um número (1-4)\n` +
-                    `2. Escolha uma posição (1-16)\n` +
-                    `Exemplo: *#gridtactics 3 5*\n\n` +
-                    `⚙️ RESTRIÇÕES:\n` +
-                    `- Sem números repetidos na mesma linha\n` +
-                    `- Sem números repetidos na mesma coluna\n` +
-                    `- Sem números repetidos no mesmo bloco 2x2\n\n` +
-                    `${this.renderBoard(game.board)}`,
+                text: this.getHelpMessage() + `\n\n${this.renderBoard(game.board)}`,
                 finished: false
             };
         }
 
         // Processar jogada
-        if (!isNaN(parseInt(action))) {
-            const number = action;
-            const positionRaw = args[0];
+        let numStr = action;
+        let posStr = args[0];
 
-            if (!positionRaw) {
-                return {
-                    text: `💡 *DICA:* Para jogar, você precisa enviar o número desejado e a posição.\n` +
-                        `Exemplo: *#grid ${number} 5* (coloca o ${number} na posição 5)\n\n` +
-                        `${this.renderBoard(game.board)}`,
-                    finished: false
-                };
-            }
-
-            const position = parseInt(positionRaw);
+        // Tentar extrair de formato "numero posicao" se o action for apenas o numero
+        if (!isNaN(parseInt(numStr))) {
+            const number = numStr;
+            const position = parseInt(posStr);
 
             if (parseInt(number) < 1 || parseInt(number) > 4 || isNaN(position) || position < 1 || position > 16) {
                 return {
-                    text: '❌ Jogada inválida! Número deve ser 1-4 e posição de 1 a 16.\n\n' + this.renderBoard(game.board),
+                    text: '❌ *JOGADA INVÁLIDA!*\n\nO número deve ser de *1 a 4* e a posição de *1 a 16*.\n\n' + this.renderBoard(game.board),
                     finished: false
                 };
             }
@@ -572,7 +568,10 @@ Números em sequência (1-2-3-4) dão ponto extra!
             // 1. Validar jogada do jogador
             const validation = this.validateMove(game.board, row, col, number, 0);
             if (!validation.valid) {
-                return { text: `❌ Jogada inválida: ${validation.reason}\n\n${this.renderBoard(game.board)}`, finished: false };
+                return {
+                    text: `⚠️ *MOVIMENTO BLOQUEADO:*\n${validation.reason}\n\n${this.renderBoard(game.board)}`,
+                    finished: false
+                };
             }
 
             // 2. Executar jogada do jogador
@@ -584,12 +583,12 @@ Números em sequência (1-2-3-4) dão ponto extra!
             game.lastActivity = Date.now();
             game.turn++;
 
-            // 3. Verificar se o jogador ganhou
+            // 3. Verificar vitória/empate
             let winCheck = this.checkWinner(game.board);
             if (winCheck.winner !== null) {
                 this.deleteGame(chatJid);
                 return {
-                    text: `🎉 *VITÓRIA EXPLOSIVA!* 🏆\n\n${this.renderBoard(game.board)}\n\nParabéns! Você venceu a IA com um padrão de ${winCheck.pattern === 'line' ? 'Linha' : 'Sequência'}!`,
+                    text: `🎉 *VITÓRIA BRILHANTE!* 🏆\n\n${this.renderBoard(game.board)}\n\nParabéns! Você venceu a Akira-AI com um padrão de *${winCheck.pattern.toUpperCase()}*!`,
                     finished: true
                 };
             }
@@ -598,9 +597,9 @@ Números em sequência (1-2-3-4) dão ponto extra!
             if (game.isAIMode) {
                 const aiMoveIndex = this.calculateAIMove(game.board, game.difficulty);
                 if (aiMoveIndex !== -1) {
-                    // Escolher um número válido para a IA naquela posição
                     let aiNumber = '1';
-                    for (let n of ['1', '2', '3', '4']) {
+                    const nums = ['1', '2', '3', '4'].sort(() => Math.random() - 0.5);
+                    for (let n of nums) {
                         const aiVal = this.validateMove(game.board, Math.floor(aiMoveIndex / 4), aiMoveIndex % 4, n, 1);
                         if (aiVal.valid) {
                             aiNumber = n;
@@ -615,12 +614,11 @@ Números em sequência (1-2-3-4) dão ponto extra!
                     };
                     game.turn++;
 
-                    // Verificar se a IA ganhou
                     winCheck = this.checkWinner(game.board);
                     if (winCheck.winner !== null) {
                         this.deleteGame(chatJid);
                         return {
-                            text: `🤖 *VITÓRIA DA IA!* 💻\n\n${this.renderBoard(game.board)}\n\nA Akira-AI venceu desta vez com um padrão ${winCheck.pattern}. Tente novamente!`,
+                            text: `🤖 *VITÓRIA DA AKIRA-AI!* 💻\n\n${this.renderBoard(game.board)}\n\nEu venci desta vez! Sua estratégia falhou contra meu processamento. 😈`,
                             finished: true
                         };
                     }
@@ -643,9 +641,16 @@ Números em sequência (1-2-3-4) dão ponto extra!
         }
 
         return {
-            text: `❌ Comando inválido!\n\nUse: *#gridtactics start*, *#gridtactics <número> <posição>* ou *#gridtactics ajuda*`,
+            text: `❌ Comando inválido!\n\nUse: *#grid <número> <posição>* (ex: #grid 1 5)\nOu peça *ajuda*.`,
             finished: false
         };
+    }
+
+    /**
+     * Normaliza ID do usuário (remove sufixos)
+     */
+    private _normalizeId(id: string): string {
+        return id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
     }
 }
 

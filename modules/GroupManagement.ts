@@ -372,33 +372,37 @@ class GroupManagement {
             case 'antidoc':
             case 'antidocumento':
                 return await this.toggleSetting(m, 'antidoc', args[0]);
-            case 'blacklist':
-                if (args[0] === 'add') {
+            case 'blacklist': {
+                const isAdd = args[0] === 'add';
+                const isRemove = args[0] === 'remove';
+
+                if (isAdd || isRemove) {
                     const targets = this._extractTargets(m);
-                    const targetInfo = args[1] || targets[0];
-                    if (targetInfo) {
-                        const num = targetInfo.replace(/\D/g, '').replace(/@.*/, '') + '@s.whatsapp.net';
-                        if (this.moderationSystem) this.moderationSystem.addToBlacklist(num, 'Manual', num, 'Adicionado por admin', 0);
-                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `🚫 Número cadastrado na Blacklist Global!` }, { quoted: m });
-                    } else {
-                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `⚠️ Responda ou mencione para dar Blacklist.` }, { quoted: m });
+                    // Pega o primeiro alvo (seja reply ou menção) ou tenta pegar do argumento texto
+                    const targetJid = targets[0] || (args[1] ? args[1].replace(/\D/g, '') + '@s.whatsapp.net' : null);
+
+                    if (!targetJid) {
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `⚠️ Uso: #${command} add/remove [mencione ou responda]` }, { quoted: m });
+                        return true;
                     }
-                    return true;
-                } else if (args[0] === 'remove') {
-                    const targets = this._extractTargets(m);
-                    const targetInfo = args[1] || targets[0];
-                    if (targetInfo) {
-                        const num = targetInfo.replace(/\D/g, '').replace(/@.*/, '') + '@s.whatsapp.net';
-                        if (this.moderationSystem) this.moderationSystem.removeFromBlacklist(num);
-                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `✅ Número libertado da Blacklist.` }, { quoted: m });
+
+                    if (isAdd) {
+                        if (this.moderationSystem) this.moderationSystem.addToBlacklist(targetJid, 'Manual', targetJid, 'Adicionado por admin', 0);
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `🚫 @${targetJid.split('@')[0]} cadastrado na Blacklist Global!`, mentions: [targetJid] }, { quoted: m });
+                    } else {
+                        if (this.moderationSystem) this.moderationSystem.removeFromBlacklist(targetJid);
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `✅ @${targetJid.split('@')[0]} libertado da Blacklist.`, mentions: [targetJid] }, { quoted: m });
                     }
                     return true;
                 }
-                if (typeof (this as any).getBlacklistInfo === 'function') {
-                    const report = await (this as any).getBlacklistInfo(m.key.remoteJid);
+
+                // Se não for add/remove, apenas mostra o relatório
+                if (typeof (this as any).getBlacklistInfo === 'function' || true) {
+                    const report = await this.getBlacklistInfo(m.key.remoteJid);
                     if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: report }, { quoted: m });
                 }
                 return true;
+            }
 
             case 'setwelcome': {
                 const welcomeMsg = args.join(' ');
@@ -856,36 +860,56 @@ class GroupManagement {
             return true;
         }
 
-        // Sanitização e formatação
-        const numbers = args.map((arg: string) => arg.replace(/\D/g, '')).filter(Boolean).map((n: string) => `${n}@s.whatsapp.net`);
-        if (numbers.length === 0) return true;
+        // Sanitização e formatação agressiva
+        // Remove +, espaços, parênteses e garante o sufixo @s.whatsapp.net
+        const numbers = args.map((arg: string) => arg.replace(/\D/g, '')).filter(n => n.length >= 8).map((n: string) => `${n}@s.whatsapp.net`);
+
+        if (numbers.length === 0) {
+            await this.sock.sendMessage(groupJid, { text: '❌ Forneça um número válido com código do país (DDI).' }, { quoted: m });
+            return true;
+        }
 
         try {
-            // Verificação prévia: Evita erro 500 se o usuário já estiver no grupo
+            this.logger.info(`[GroupManagement] Tentando adicionar: ${JSON.stringify(numbers)}`);
+
             const metadata = await this._getGroupMetadata(groupJid);
             if (!metadata) throw new Error('Falha ao obter dados do grupo');
 
             const participants = metadata.participants.map((p: any) => p.id);
-            const toAdd = numbers.filter((n: string) => !participants.includes(n));
+            const toAdd = numbers.filter((n: string) => !participants.some(p => p.startsWith(n.split('@')[0])));
 
             if (toAdd.length === 0) {
-                await this.sock.sendMessage(groupJid, { text: '⚠️ O(s) usuário(s) já estão no grupo.' }, { quoted: m });
+                await this.sock.sendMessage(groupJid, { text: '⚠️ Este(s) usuário(s) já estão no grupo.' }, { quoted: m });
                 return true;
             }
 
-            const result = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toAdd, 'add'));
+            // Ação de ADIÇÃO via socket
+            const response = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toAdd, 'add'));
 
-            // O WhatsApp as vezes retorna 207 se um numero nao puder ser adicionado (ex: privacidade)
-            // Mas aqui simplificamos para sucesso
-            await this.sock.sendMessage(groupJid, { text: `✅ Adicionado(s): ${toAdd.map((n: string) => `@${n.split('@')[0]}`).join(', ')}`, mentions: toAdd }, { quoted: m });
+            // Verificação de resposta detalhada
+            // O Baileys retorna um array de objetos [{status: '200', jid: '...'}, ...]
+            if (Array.isArray(response)) {
+                for (const res of response) {
+                    if (res.status === '403') {
+                        await this.sock.sendMessage(groupJid, { text: `⚠️ Não pude adicionar @${res.jid.split('@')[0]} devido às configurações de privacidade dele. Link de convite enviado via PV (se disponível).`, mentions: [res.jid] });
+                    } else if (res.status === '408') {
+                        await this.sock.sendMessage(groupJid, { text: `❌ Falha ao adicionar @${res.jid.split('@')[0]}: O número não existe ou não usa WhatsApp.`, mentions: [res.jid] });
+                    } else if (res.status === '409') {
+                        await this.sock.sendMessage(groupJid, { text: `⚠️ @${res.jid.split('@')[0]} já é um participante.`, mentions: [res.jid] });
+                    }
+                }
+            }
 
-            // Limpa cache
+            await this.sock.sendMessage(groupJid, { text: `✅ Processo de adição concluído para: ${toAdd.map((n: string) => `@${n.split('@')[0]}`).join(', ')}`, mentions: toAdd }, { quoted: m });
+
             this.clearMetadataCache(groupJid);
         } catch (e: any) {
             this.logger.error(`[GroupManagement] addUser erro: ${e.message}`);
-            const msg = e.message?.includes('not-authorized') ? 'Não tenho permissão.' :
-                e.message?.includes('internal-server-error') ? 'Erro interno (500). Verifique se o número existe ou se há restrição de privacidade.' : e.message;
-            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao adicionar: ${msg}` }, { quoted: m }).catch(() => { });
+            let errorMsg = e.message;
+            if (e.message?.includes('not-authorized')) errorMsg = 'Não sou admin ou não tenho permissão.';
+            if (e.message?.includes('bad-request')) errorMsg = 'Formato do número inválido ou erro de protocolo. Tente sem o sinal de "+".';
+
+            await this.sock.sendMessage(groupJid, { text: `❌ Falha ao adicionar: ${errorMsg}` }, { quoted: m }).catch(() => { });
         }
         return true;
     }
