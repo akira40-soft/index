@@ -104,15 +104,19 @@ class MediaProcessor {
         const cookieArg = (options.useCookies !== false && cookiePath) ? `--cookies "${cookiePath}"` : '';
         const poToken = this.config?.YT_PO_TOKEN;
 
-        const jsRuntime = fs.existsSync('/usr/local/bin/deno') || fs.existsSync('/root/.deno/bin/deno') ? '--js-runtime deno' : '';
+        // FORÇAR RUNTIME JS (Essencial para resolver assinaturas no YouTube V3/2026)
+        // No Railway/Docker, o binário 'node' sempre está no PATH.
+        const jsRuntime = '--js-runtime node';
 
-        const clients = options.clientOverride || 'tv_embedded';
+        const clients = options.clientOverride || 'android,ios,web';
 
         // SEM formats=missing_pot quando não temos POT - causa bugs de formato
         let extractorArgs = `youtube:player_client=${clients}`;
         if (poToken) {
             extractorArgs += `;formats=missing_pot;po_token=web+${poToken}`;
         }
+        // Gambiarra para vídeos que forçam SABR
+        extractorArgs += ';skip=hls,dash';
 
         const ua = options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
 
@@ -142,12 +146,11 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // --format-sort força o melhor áudio primeiro sem se prender a streams combinados que dam erro
-            actionFlags = `-f "bestaudio/best" --format-sort "hasaud" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Relaxamos o filtro: melhor áudio que puder baixar, sem frescura de formato inicialmente
+            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Tolerância máxima: baixa melhor até 720p ou pior, mas que tenha VÍDEO E ÁUDIO juntos,
-            // ou funde eles na marra.
-            actionFlags = `-f "bestvideo[height<=720]+bestaudio/best[height<=720]/best" --merge-output-format mp4 -o "${options.output}"`;
+            // Se o merge falhar (falta de ffmpeg ou formatos), tenta baixar o melhor arquivo único (single file)
+            actionFlags = `-f "bv*[height<=720]+ba/b[height<=720] / b[height<=720] / bv+ba/b" --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -182,18 +185,16 @@ class MediaProcessor {
             // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1. App Android Nativo s/ Cookies (Chrome 132/Android 15)
-                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR; SM-S928B) gzip', sleepMs: 0, useCookies: false },
-                // 2. App iOS Nativo s/ Cookies (iOS 18.2)
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR) gzip', sleepMs: 200, useCookies: false },
-                // 3. Web Mobile (mweb) - Frequentemente ignora desafios bot
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 400, useCookies: false },
-                // 4. Android Music (Preferencia p/ Audio)
-                { cliente: 'android_music', ua: 'com.google.android.apps.youtube.music/7.24.52 (Linux; U; Android 15; pt_BR) gzip', sleepMs: 600, useCookies: false },
-                // 5. Android VR (Imune a blocos de datacenter em muitos casos)
-                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR) gzip', sleepMs: 800, useCookies: false },
-                // 6. tv_embedded (Último recurso pra videos restritos c/ cookies)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 1000, useCookies: true }
+                // 1. Android (Mais resistente a IP de datacenter)
+                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
+                // 2. iOS
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 200, useCookies: false },
+                // 3. Web Safari (Frequentemente usado como fallback de sucesso no log)
+                { cliente: 'web_safari', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15', sleepMs: 400, useCookies: false },
+                // 4. Android VR
+                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 600, useCookies: false },
+                // 5. TV (Substituindo tv_embedded por tv)
+                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 800, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
