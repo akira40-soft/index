@@ -114,22 +114,30 @@ class MediaProcessor {
             extractorArgs += `;formats=missing_pot;po_token=web+${poToken}`;
         }
 
-        const ua = options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+        const ua = options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
-            // Removemos --force-ipv4 para permitir IPv6 (Railway/Datacenters têm IPv6 limpos!)
             '--no-check-certificates',
             `--user-agent "${ua}"`,
+            '--add-header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"',
             '--add-header "Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"',
-            '--rm-cache-dir', // Limpa cache de tokens do yt-dlp
+            '--add-header "Sec-Ch-Ua: \"Not A(Brand\";v=\"8\", \"Chromium\";v=\"134\", \"Google Chrome\";v=\"134\""',
+            '--add-header "Sec-Ch-Ua-Mobile: ?0"',
+            '--add-header "Sec-Ch-Ua-Platform: \"Windows\""',
+            '--add-header "Sec-Fetch-Dest: document"',
+            '--add-header "Sec-Fetch-Mode: navigate"',
+            '--add-header "Sec-Fetch-Site: cross-site"',
+            '--add-header "Upgrade-Insecure-Requests: 1"',
+            '--rm-cache-dir',
             '--ignore-config',
-            '--no-warnings',
             '--no-playlist',
             '--geo-bypass',
             '--socket-timeout 30',
-            '--retries 5'
+            '--retries 5',
+            '--buffer-size 16K',
+            '--verbose'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
@@ -174,16 +182,18 @@ class MediaProcessor {
             // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1. App Android Nativo s/ Cookies (Imune ao bloqueio Datacenter inicial)
-                { cliente: 'android', ua: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; pt_BR)', sleepMs: 0, useCookies: false },
-                // 2. App iOS Nativo s/ Cookies
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.29.1 (iPhone14,5; U; CPU iOS 17_5_1 like Mac OS X; pt_BR)', sleepMs: 500, useCookies: false },
-                // 3. Web Embedded (Guest) para vídeos abertos
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000, useCookies: false },
-                // 4. Android Music (Ideal p/ audio, imune a idade na maioria)
-                { cliente: 'android_music', ua: 'com.google.android.apps.youtube.music/7.10.51 (Linux; U; Android 14; pt_BR)', sleepMs: 1500, useCookies: false },
-                // 5. tv_embedded c/ Cookies (Último recurso pra videos restritos por idade)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 2000, useCookies: true }
+                // 1. App Android Nativo s/ Cookies (Chrome 132/Android 15)
+                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR; SM-S928B) gzip', sleepMs: 0, useCookies: false },
+                // 2. App iOS Nativo s/ Cookies (iOS 18.2)
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR) gzip', sleepMs: 200, useCookies: false },
+                // 3. Web Mobile (mweb) - Frequentemente ignora desafios bot
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 400, useCookies: false },
+                // 4. Android Music (Preferencia p/ Audio)
+                { cliente: 'android_music', ua: 'com.google.android.apps.youtube.music/7.24.52 (Linux; U; Android 15; pt_BR) gzip', sleepMs: 600, useCookies: false },
+                // 5. Android VR (Imune a blocos de datacenter em muitos casos)
+                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR) gzip', sleepMs: 800, useCookies: false },
+                // 6. tv_embedded (Último recurso pra videos restritos c/ cookies)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 1000, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -202,8 +212,8 @@ class MediaProcessor {
                 try {
                     await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
                 } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.warn(`⚠️ [${t.cliente}] ${msg.substring(0, 100)}`);
+                    const fullErr = e.stderr || e.message || '';
+                    this.logger?.warn(`⚠️ [yt-dlp ${t.cliente}] FALHOU. Comando: \n${cmd}\n\n=== LOG DETALHADO ERROR ===\n${fullErr}\n==========================\n`);
                 }
             }
 
@@ -257,16 +267,16 @@ class MediaProcessor {
             // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1. App Android Nativo s/ Cookies (Imune ao bloqueio Datacenter inicial)
-                { cliente: 'android', ua: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; pt_BR)', sleepMs: 0, useCookies: false },
+                // 1. App Android Nativo s/ Cookies
+                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR; SM-S928B)', sleepMs: 0, useCookies: false },
                 // 2. App iOS Nativo s/ Cookies
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.29.1 (iPhone14,5; U; CPU iOS 17_5_1 like Mac OS X; pt_BR)', sleepMs: 500, useCookies: false },
-                // 3. Web Embedded (Guest) para vídeos abertos
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', sleepMs: 1000, useCookies: false },
-                // 4. Android VR (Excelente para vídeos restritos no datacenter)
-                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.54.34 (Linux; U; Android 14; pt_BR)', sleepMs: 1500, useCookies: false },
-                // 5. tv_embedded c/ Cookies (Último recurso pra videos restritos por idade)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1', sleepMs: 2000, useCookies: true }
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 200, useCookies: false },
+                // 3. Android VR (Excelente para bypass em datacenter)
+                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 400, useCookies: false },
+                // 4. mweb (Navegador Mobile)
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 600, useCookies: false },
+                // 5. tv_embedded c/ Cookies (Último recurso)
+                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 1000, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -285,8 +295,8 @@ class MediaProcessor {
                 try {
                     await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
                 } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.warn(`⚠️ [${t.cliente}] ${msg.substring(0, 100)}`);
+                    const fullErr = e.stderr || e.message || '';
+                    this.logger?.warn(`⚠️ [yt-dlp ${t.cliente}] FALHOU. Comando: \n${cmd}\n\n=== LOG DETALHADO ERROR ===\n${fullErr}\n==========================\n`);
                 }
             }
 
