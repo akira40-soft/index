@@ -124,6 +124,7 @@ class MediaProcessor {
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
             '--remote-components ejs:github', // GAMBIARRA CRUCIAL: Baixa o decifrador de assinaturas dinamicamente
+            '--allow-unplayable-formats',     // Permite ler metadados mesmo se o player falhar
             '--cache-dir "/tmp/yt-dlp-cache"', // Garante permissão de escrita para plugins
             '--no-check-certificates',
             `--user-agent "${ua}"`,
@@ -140,9 +141,9 @@ class MediaProcessor {
             '--ignore-config',
             '--no-playlist',
             '--geo-bypass',
-            '--socket-timeout 30',
+            '--socket-timeout 45',
             '--retries 5',
-            '--buffer-size 16K',
+            '--buffer-size 1M',
             '--verbose'
         ].filter(Boolean).join(' ');
 
@@ -187,16 +188,16 @@ class MediaProcessor {
             // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1. Android s/ Cookies
-                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
-                // 2. iOS c/ Cookies (iOS costuma aceitar cookies melhor sem travar bot)
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 200, useCookies: true },
-                // 3. Web Safari c/ Cookies (Fallback que quase funcionou no log)
-                { cliente: 'web_safari', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15', sleepMs: 400, useCookies: true },
-                // 4. mweb (Navegador Mobile)
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 600, useCookies: false },
-                // 5. tv (Cliente TV é o mais estável para vídeos protegidos)
-                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 800, useCookies: true }
+                // 1. Android VR Nativo (Mais resiliente a datacenters)
+                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
+                // 2. Client TV (Estável para áudio)
+                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 200, useCookies: true },
+                // 3. Android Nativo (Com Agent simulado)
+                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 400, useCookies: false },
+                // 4. iOS Nativo (Com Cookie para Bypass)
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 600, useCookies: true },
+                // 5. Web Safari c/ Cookies (Último recurso yt-dlp)
+                { cliente: 'web_safari', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15', sleepMs: 800, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -270,16 +271,16 @@ class MediaProcessor {
             // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1. App Android Nativo s/ Cookies
-                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR; SM-S928B)', sleepMs: 0, useCookies: false },
-                // 2. App iOS Nativo s/ Cookies
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 200, useCookies: false },
-                // 3. Android VR (Excelente para bypass em datacenter)
-                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 400, useCookies: false },
-                // 4. mweb (Navegador Mobile)
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 600, useCookies: false },
-                // 5. tv_embedded c/ Cookies (Último recurso)
-                { cliente: 'tv_embedded', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 1000, useCookies: true }
+                // 1. Android VR (Excelente para bypass em datacenter)
+                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
+                // 2. Client TV (Geralmente tem payloads de vídeo mais limpos)
+                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 200, useCookies: true },
+                // 3. App iOS Nativo s/ Cookies
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 400, useCookies: false },
+                // 4. App Android Nativo s/ Cookies
+                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR; SM-S928B)', sleepMs: 600, useCookies: false },
+                // 5. mweb (Navegador Mobile)
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 800, useCookies: false }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
