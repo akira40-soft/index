@@ -123,6 +123,7 @@ class MediaProcessor {
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
+            '--remote-components ejs:github', // GAMBIARRA CRUCIAL: Baixa o decifrador de assinaturas dinamicamente
             '--no-check-certificates',
             `--user-agent "${ua}"`,
             '--add-header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"',
@@ -146,11 +147,11 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Relaxamos o filtro: melhor áudio que puder baixar, sem frescura de formato inicialmente
-            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Tentativa de melhor áudio, com fallback para o formato mais comum (140)
+            actionFlags = `-f "ba/ba*[asr=44100]/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Se o merge falhar (falta de ffmpeg ou formatos), tenta baixar o melhor arquivo único (single file)
-            actionFlags = `-f "bv*[height<=720]+ba/b[height<=720] / b[height<=720] / bv+ba/b" --merge-output-format mp4 -o "${options.output}"`;
+            // GAMBIARRA DE FORMATO: Tenta 720p, depois 480p, e por fim o ITAG 18 (360p mp4) que quase nunca falha
+            actionFlags = `-f "bv*[height<=720]+ba/b[height<=720] / 18 / b[height<=720]" --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -185,15 +186,15 @@ class MediaProcessor {
             // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
             // ================================================================
             const tentativas = [
-                // 1. Android (Mais resistente a IP de datacenter)
+                // 1. Android s/ Cookies
                 { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
-                // 2. iOS
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 200, useCookies: false },
-                // 3. Web Safari (Frequentemente usado como fallback de sucesso no log)
-                { cliente: 'web_safari', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15', sleepMs: 400, useCookies: false },
-                // 4. Android VR
-                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 600, useCookies: false },
-                // 5. TV (Substituindo tv_embedded por tv)
+                // 2. iOS c/ Cookies (iOS costuma aceitar cookies melhor sem travar bot)
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 200, useCookies: true },
+                // 3. Web Safari c/ Cookies (Fallback que quase funcionou no log)
+                { cliente: 'web_safari', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15', sleepMs: 400, useCookies: true },
+                // 4. mweb (Navegador Mobile)
+                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 600, useCookies: false },
+                // 5. tv (Cliente TV é o mais estável para vídeos protegidos)
                 { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 800, useCookies: true }
             ];
 
