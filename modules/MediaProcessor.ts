@@ -124,6 +124,7 @@ class MediaProcessor {
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
             '--remote-components ejs:github', // GAMBIARRA CRUCIAL: Baixa o decifrador de assinaturas dinamicamente
+            '--cache-dir "/tmp/yt-dlp-cache"', // Garante permissão de escrita para plugins
             '--no-check-certificates',
             `--user-agent "${ua}"`,
             '--add-header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"',
