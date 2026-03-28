@@ -137,7 +137,6 @@ class MediaProcessor {
             '--add-header "Sec-Fetch-Site: cross-site"',
             '--add-header "Upgrade-Insecure-Requests: 1"',
             options.type === 'video' ? '--allow-unplayable-formats' : '',
-            '--no-update-check',
             '--ignore-config',
             '--no-playlist',
             '--geo-bypass',
