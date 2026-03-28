@@ -111,9 +111,9 @@ class MediaProcessor {
         const clients = options.clientOverride || 'android,ios,web';
 
         // SEM formats=missing_pot quando não temos POT - causa bugs de formato
-        let extractorArgs = `youtube:player_client=${clients}`;
+        let extractorArgs = `youtube:player_client=${clients};formats=missing_pot`;
         if (poToken) {
-            extractorArgs += `;formats=missing_pot;po_token=web+${poToken}`;
+            extractorArgs += `;po_token=web+${poToken}`;
         }
         // Gambiarra para vídeos que forçam SABR
         extractorArgs += ';skip=hls,dash';
@@ -274,12 +274,12 @@ class MediaProcessor {
                 { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
                 // 2. Client TV (Geralmente tem payloads de vídeo mais limpos e funcionou no áudio)
                 { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 400, useCookies: true },
-                // 3. Web Embedded (Mais permissivo para vídeos musicais)
-                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', sleepMs: 800, useCookies: true },
-                // 4. App iOS Nativo c/ Cookies
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 1200, useCookies: true },
-                // 5. Android Test (Usado para debugging interno do YT)
-                { cliente: 'android_test', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 1600, useCookies: false }
+                // 3. Web Nativo (Bom para resolver assinaturas com cookies)
+                { cliente: 'web', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', sleepMs: 800, useCookies: true },
+                // 4. App iOS Nativo (NUNCA usar cookies aqui, causa skip)
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 1200, useCookies: false },
+                // 5. App Android Nativo (Com Agent simulado)
+                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 1600, useCookies: true }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
