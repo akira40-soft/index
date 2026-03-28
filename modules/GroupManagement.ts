@@ -61,7 +61,7 @@ class GroupManagement {
     /**
      * Resiliência para conexões instáveis com o WebSocket.
      */
-    private async _withRetry<T>(action: () => Promise<T>, retries = 3): Promise<T> {
+    private async _withRetry<T>(action: () => Promise<T>, groupJid?: string, retries = 3): Promise<T> {
         let lastError;
         for (let i = 0; i < retries; i++) {
             if (!await this._checkSocket()) throw new Error('Socket offline');
@@ -69,21 +69,29 @@ class GroupManagement {
                 return await action();
             } catch (e: any) {
                 lastError = e;
-                // Erros transitórios que valem retry: conexão, timeout, e internal-server-error do WA
-                const isRetryable =
+                // ERRO 500 / INTERNAL-SERVER-ERROR: Limpa cache IMEDIATAMENTE
+                const isInternalError = e.message?.includes('internal-server-error') ||
+                    e.message?.includes('500') ||
+                    e.message?.includes('Server Timeout');
+
+                if (isInternalError && groupJid) {
+                    this.logger.warn(`[GroupManagement] Erro 500 detectado. Limpando cache de ${groupJid} e tentando novamente...`);
+                    this.clearMetadataCache(groupJid);
+                }
+
+                const isRetryable = isInternalError ||
                     e.message?.includes('Connection Closed') ||
                     e.message?.includes('timeout') ||
-                    e.message?.includes('Server Timeout') ||
-                    e.message?.includes('internal-server-error') ||
                     e.message?.includes('503') ||
                     e.message?.includes('rate-overlimit');
+
                 if (isRetryable) {
-                    const waitMs = 2000 * (i + 1); // backoff exponencial: 2s, 4s, 6s
+                    const waitMs = 2000 * (i + 1);
                     this.logger.warn(`[GroupManagement] Retry ${i + 1}/${retries} em ${waitMs}ms (${e.message?.substring(0, 40)})...`);
                     await new Promise(resolve => setTimeout(resolve, waitMs));
                     continue;
                 }
-                throw e; // Lança imediatamente se for erro definitivo (not-authorized, etc.)
+                throw e;
             }
         }
         throw lastError;
@@ -177,9 +185,9 @@ class GroupManagement {
         return admins;
     }
 
-    private async _getGroupMetadata(groupJid: string, retries = 2): Promise<any | null> {
+    private async _getGroupMetadata(groupJid: string, force = false, retries = 2): Promise<any | null> {
         const cached = this.metadataCache.get(groupJid);
-        if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) return cached.data;
+        if (!force && cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) return cached.data;
 
         if (!this.sock) return cached?.data || null;
 
@@ -342,8 +350,12 @@ class GroupManagement {
             case 'listadmins':
                 return await this.listAdmins(m);
             case 'welcome':
+            case 'saudar':
+            case 'saudacao':
                 return await this.toggleSetting(m, 'welcome', args[0]);
             case 'goodbye':
+            case 'despedir':
+            case 'despedida':
                 return await this.toggleSetting(m, 'goodbye', args[0]);
             case 'antifake':
                 if (args[0] === 'add' && args[1]) {
@@ -404,7 +416,9 @@ class GroupManagement {
                 return true;
             }
 
-            case 'setwelcome': {
+            case 'setwelcome':
+            case 'setsaudar':
+            case 'setsaudacao': {
                 const welcomeMsg = args.join(' ');
                 if (!welcomeMsg) {
                     await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Uso: #setwelcome [texto]\n\nVariáveis disponíveis:\n@user — Etiqueta a pessoa\n@group — Nome do grupo\n@desc — Descrição do grupo\n\nExemplo: #setwelcome Olá @user, bem vindo ao @group!' }, { quoted: m });
@@ -415,7 +429,9 @@ class GroupManagement {
                 return true;
             }
 
-            case 'setgoodbye': {
+            case 'setgoodbye':
+            case 'setdespedir':
+            case 'setdespedida': {
                 const goodbyeMsg = args.join(' ');
                 if (!goodbyeMsg) {
                     await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Uso: #setgoodbye [texto]\n\nVariáveis disponíveis:\n@user — Etiqueta a pessoa\n@group — Nome do grupo\n@desc — Descrição do grupo\n\nExemplo: #setgoodbye Adeus @user, nos vemos em breve!' }, { quoted: m });
@@ -438,7 +454,7 @@ class GroupManagement {
                 const warns = this.moderationSystem.addWarning(m.key.remoteJid, target, reason);
 
                 if (warns >= 3) {
-                    await this._withRetry(() => this.sock.groupParticipantsUpdate(m.key.remoteJid, [target], 'remove'));
+                    await this._withRetry(() => this.sock.groupParticipantsUpdate(m.key.remoteJid, [target], 'remove'), m.key.remoteJid);
                     await this.sock.sendMessage(m.key.remoteJid, { text: `🚨 *@${target.split('@')[0]}* atingiu 3 advertências e foi automaticamente banido da organização!`, mentions: [target] });
                     this.moderationSystem.resetWarnings(m.key.remoteJid, target);
                 } else {
@@ -551,7 +567,7 @@ class GroupManagement {
     async getGroupLink(m: any): Promise<boolean> {
         const groupJid = m.key.remoteJid;
         try {
-            const code = await this._withRetry(() => this.sock.groupInviteCode(groupJid));
+            const code = await this._withRetry(() => this.sock.groupInviteCode(groupJid), groupJid);
             const link = `https://chat.whatsapp.com/${code}`;
             if (this.sock) await this.sock.sendMessage(groupJid, { text: `🔗 *LINK DO GRUPO*\n\n${link}` }, { quoted: m });
         } catch (e: any) {
@@ -564,7 +580,7 @@ class GroupManagement {
     async revokeGroupLink(m: any): Promise<boolean> {
         const groupJid = m.key.remoteJid;
         try {
-            await this._withRetry(() => this.sock.groupRevokeInvite(groupJid));
+            await this._withRetry(() => this.sock.groupRevokeInvite(groupJid), groupJid);
             if (this.sock) await this.sock.sendMessage(groupJid, { text: '🔄 Link revogado com sucesso!' }, { quoted: m });
         } catch (e: any) {
             if (this.sock) await this.sock.sendMessage(groupJid, { text: '❌ Erro ao revogar link.' }, { quoted: m });
@@ -654,7 +670,7 @@ class GroupManagement {
     async closeGroup(groupJid: string): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this._withRetry(() => this.sock.groupSettingUpdate(groupJid, 'announcement'));
+            await this._withRetry(() => this.sock.groupSettingUpdate(groupJid, 'announcement'), groupJid);
             this.clearMetadataCache(groupJid);
             this.logger.info(`✅ Grupo ${groupJid} fechado`);
             return { success: true, message: '🔒 Grupo fechado. Apenas admins.' };
@@ -667,7 +683,7 @@ class GroupManagement {
     async openGroup(groupJid: string): Promise<{ success: boolean; message?: string; error?: string }> {
         if (!await this._checkSocket()) return { success: false, error: 'Socket offline' };
         try {
-            await this._withRetry(() => this.sock.groupSettingUpdate(groupJid, 'not_announcement'));
+            await this._withRetry(() => this.sock.groupSettingUpdate(groupJid, 'not_announcement'), groupJid);
             this.clearMetadataCache(groupJid);
             this.logger.info(`✅ Grupo ${groupJid} aberto`);
             return { success: true, message: '🔓 Grupo aberto. Todos.' };
@@ -699,7 +715,7 @@ class GroupManagement {
             if (muteInfo.muteCount >= 3) {
                 // Ao 3º Strike no mesmo dia, auto-ban!
                 if (this.sock) {
-                    await this.sock.groupParticipantsUpdate(groupJid, [target], 'remove');
+                    await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, [target], 'remove'), groupJid);
                     await this.sock.sendMessage(groupJid, { text: `🚨 @${target.split('@')[0]} recebeu o seu 3º MUTE hoje e foi banido permanentemente por infrações repetidas!`, mentions: [target] }, { quoted: m });
                 }
                 return true;
@@ -840,14 +856,16 @@ class GroupManagement {
                 return true;
             }
 
-            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toRemove, 'remove'));
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toRemove, 'remove'), groupJid);
             const mentions = toRemove.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s) do grupo.`, mentions: toRemove }, { quoted: m });
             this.clearMetadataCache(groupJid);
         } catch (e: any) {
             this.logger.error(`[GroupManagement] kickUser erro: ${e.message}`);
+            // Se falhou mesmo com retry, limpa cache forçado para o próximo comando
+            this.clearMetadataCache(groupJid);
             const msg = e.message?.includes('not-authorized') ? 'Não tenho permissão de admin.' :
-                e.message?.includes('internal-server-error') ? 'Erro interno do WhatsApp (500). Tente novamente.' : e.message;
+                e.message?.includes('internal-server-error') ? 'Erro interno (500). Verifique se o alvo ainda está no grupo ou se o bot é admin.' : e.message;
             await this.sock.sendMessage(groupJid, { text: `❌ Falha ao remover: ${msg}` }, { quoted: m }).catch(() => { });
         }
         return true;
@@ -883,8 +901,8 @@ class GroupManagement {
                 return true;
             }
 
-            // Ação de ADIÇÃO via socket
-            const response = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toAdd, 'add'));
+            // Ação de ADIÇÃO via socket com Retry e Cache Flush
+            const response = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toAdd, 'add'), groupJid);
 
             // Verificação de resposta detalhada
             // O Baileys retorna um array de objetos [{status: '200', jid: '...'}, ...]
@@ -922,7 +940,7 @@ class GroupManagement {
         }
         const groupJid = m.key.remoteJid;
         try {
-            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'promote'));
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'promote'), groupJid);
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `👑 ${mentions} promovido(s) a admin!`, mentions: targets }, { quoted: m });
         } catch (e: any) {
@@ -939,7 +957,7 @@ class GroupManagement {
         }
         const groupJid = m.key.remoteJid;
         try {
-            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'demote'));
+            await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'demote'), groupJid);
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `⬇️ ${mentions} rebaixado(s) de admin.`, mentions: targets }, { quoted: m });
         } catch (e: any) {

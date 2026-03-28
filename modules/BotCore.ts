@@ -313,7 +313,9 @@ class BotCore {
 
                 this.logger.info(`👥 [GROUP-EVENT] ${action} em ${id} para ${participants.length} participantes.`);
 
-                // Limpa todos os JIDs de participantes (remove :1, :2 etc)
+                // Limpeza de cache para garantir dados frescos no welcome/goodbye
+                if (this.groupManagement) this.groupManagement.clearMetadataCache(id);
+
                 const cleanParticipants = participants.map((p: string) => {
                     const [user, domain] = p.split('@');
                     return `${user.split(':')[0]}@${domain || 's.whatsapp.net'}`;
@@ -339,18 +341,17 @@ class BotCore {
                     }
                 }
 
-                // Welcome Trigger
+                // Welcome Trigger (Saudação)
                 if (action === 'add' && this.groupManagement && validParticipants.length > 0) {
                     try {
                         const isWelcomeOn = this.groupManagement.getWelcomeStatus(id);
-                        this.logger.debug(`👋 Welcome status para ${id}: ${isWelcomeOn}`);
-
                         if (isWelcomeOn) {
+                            this.logger.info(`👋 Saudando ${validParticipants.length} novos membros em ${id}`);
                             for (const p of validParticipants) {
                                 const template = this.groupManagement.getCustomMessage(id, 'welcome') || 'Olá @user, bem-vindo ao @group!';
                                 const formatted = await this.groupManagement.formatMessage(id, p, template);
                                 await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch((err: any) => {
-                                    this.logger.error(`[Welcome] Falha ao enviar msg: ${err.message}`);
+                                    this.logger.error(`[Welcome] Falha ao enviar: ${err.message}`);
                                 });
                             }
                         }
@@ -359,13 +360,12 @@ class BotCore {
                     }
                 }
 
-                // Goodbye Trigger
-                if (action === 'remove' && this.groupManagement && cleanParticipants.length > 0) {
+                // Goodbye Trigger (Despedida)
+                if ((action === 'remove' || action === 'leave') && this.groupManagement && cleanParticipants.length > 0) {
                     try {
                         const isGoodbyeOn = this.groupManagement.getGoodbyeStatus(id);
-                        this.logger.debug(`👋 Goodbye status para ${id}: ${isGoodbyeOn}`);
-
                         if (isGoodbyeOn) {
+                            this.logger.info(`👋 Despedindo de ${cleanParticipants.length} membros em ${id}`);
                             for (const p of cleanParticipants) {
                                 const template = this.groupManagement.getCustomMessage(id, 'goodbye') || 'Adeus @user!';
                                 const formatted = await this.groupManagement.formatMessage(id, p, template);
