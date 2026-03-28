@@ -123,9 +123,8 @@ class MediaProcessor {
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
-            '--remote-components ejs:github', // GAMBIARRA CRUCIAL: Baixa o decifrador de assinaturas dinamicamente
-            '--allow-unplayable-formats',     // Permite ler metadados mesmo se o player falhar
-            '--cache-dir "/tmp/yt-dlp-cache"', // Garante permissão de escrita para plugins
+            '--remote-components ejs:github', // GAMBIARRA CRUCIAL
+            '--cache-dir "/tmp/yt-dlp-cache"',
             '--no-check-certificates',
             `--user-agent "${ua}"`,
             '--add-header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"',
@@ -137,7 +136,8 @@ class MediaProcessor {
             '--add-header "Sec-Fetch-Mode: navigate"',
             '--add-header "Sec-Fetch-Site: cross-site"',
             '--add-header "Upgrade-Insecure-Requests: 1"',
-            '--rm-cache-dir',
+            options.type === 'video' ? '--allow-unplayable-formats' : '',
+            '--no-update-check',
             '--ignore-config',
             '--no-playlist',
             '--geo-bypass',
@@ -273,14 +273,14 @@ class MediaProcessor {
             const tentativas = [
                 // 1. Android VR (Excelente para bypass em datacenter)
                 { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
-                // 2. Client TV (Geralmente tem payloads de vídeo mais limpos)
-                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 200, useCookies: true },
-                // 3. App iOS Nativo s/ Cookies
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 400, useCookies: false },
-                // 4. App Android Nativo s/ Cookies
-                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR; SM-S928B)', sleepMs: 600, useCookies: false },
-                // 5. mweb (Navegador Mobile)
-                { cliente: 'mweb', ua: 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36', sleepMs: 800, useCookies: false }
+                // 2. Client TV (Geralmente tem payloads de vídeo mais limpos e funcionou no áudio)
+                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 400, useCookies: true },
+                // 3. Web Embedded (Mais permissivo para vídeos musicais)
+                { cliente: 'web_embedded', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', sleepMs: 800, useCookies: true },
+                // 4. App iOS Nativo c/ Cookies
+                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 1200, useCookies: true },
+                // 5. Android Test (Usado para debugging interno do YT)
+                { cliente: 'android_test', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 1600, useCookies: false }
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
