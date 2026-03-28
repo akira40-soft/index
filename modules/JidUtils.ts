@@ -24,10 +24,11 @@ export class JidUtils {
         }
 
         // Divide por : e @ para extrair apenas o número puro
-        // Ex: "5511999999999:2@s.whatsapp.net"
-        // parts[0] = "5511999999999"
+        // Ex: "244900000000:2@s.whatsapp.net"
+        // parts[0] = "244999999999"
+        const domain = jid.split('@')[1] || 's.whatsapp.net';
         const parts = jid.split('@')[0].split(':');
-        return `${parts[0]}@s.whatsapp.net`;
+        return `${parts[0]}@${domain}`;
     }
 
     /**

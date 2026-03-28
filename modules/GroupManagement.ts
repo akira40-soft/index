@@ -857,14 +857,23 @@ class GroupManagement {
             this.logger.info(`[kickUser] Iniciando remoção de ${toRemove.length} alvos em ${groupJid}`);
 
             // Verificação explícita de admin do bot usando os metadados frescos
-            const myJid = this.sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
-            const me = metadata.participants.find((p: any) => p.id?.split(':')[0] + '@s.whatsapp.net' === myJid);
+            // Verificação de admin mais robusta: Procura por prefixo numérico (LID/JID)
+            const myNum = this.sock?.user?.id?.split(':')[0]?.split('@')[0];
+            const me = metadata.participants.find((p: any) => p.id?.split(':')[0]?.split('@')[0] === myNum);
             const isBotAdmin = me?.admin === 'admin' || me?.admin === 'superadmin';
 
-            this.logger.info(`[kickUser] Bot JID: ${myJid} | Status Admin: ${isBotAdmin ? 'SIM' : 'NÃO'}`);
+            this.logger.info(`[kickUser] Bot ID: ${myNum} | Status Admin: ${isBotAdmin ? 'SIM' : 'NÃO'}`);
+
+            // Dump de Admins para depuração profunda conforme pedido pelo usuário
+            const groupAdmins = metadata.participants.filter((p: any) => p.admin).map((p: any) => p.id);
+            this.logger.info(`[kickUser] Todos os Admins detectados: ${JSON.stringify(groupAdmins)}`);
 
             if (!isBotAdmin) {
-                await this.sock.sendMessage(groupJid, { text: '❌ Não posso remover membros: eu não sou administrador deste grupo.' }, { quoted: m });
+                const adminList = groupAdmins.map((a: string) => '@' + a.split('@')[0]).join(', ');
+                await this.sock.sendMessage(groupJid, {
+                    text: `❌ Não posso remover membros: eu (@${myNum}) não sou administrador deste grupo.\n\n🛡️ *Admins atuais:* ${adminList}`,
+                    mentions: [me?.id, ...groupAdmins].filter(Boolean)
+                }, { quoted: m });
                 return true;
             }
 
@@ -958,7 +967,19 @@ class GroupManagement {
         }
         const groupJid = m.key.remoteJid;
         this.logger.info(`[promoteUser] Alvos para admin: ${JSON.stringify(targets)} em ${groupJid}`);
+
         try {
+            // Check Bot Admin Status explicitly
+            const metadata = await this._getGroupMetadata(groupJid, true);
+            const myJid = this.sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
+            const me = metadata?.participants?.find((p: any) => p.id?.split(':')[0] + '@s.whatsapp.net' === myJid);
+            const isBotAdmin = me?.admin === 'admin' || me?.admin === 'superadmin';
+
+            if (!isBotAdmin) {
+                await this.sock.sendMessage(groupJid, { text: '❌ Não posso promover membros: eu não sou administrador deste grupo.' }, { quoted: m });
+                return true;
+            }
+
             await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'promote'), groupJid);
             this.logger.info(`[promoteUser] Sucesso na promoção.`);
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
@@ -977,7 +998,19 @@ class GroupManagement {
         }
         const groupJid = m.key.remoteJid;
         this.logger.info(`[demoteUser] Alvos para rebaixar: ${JSON.stringify(targets)} em ${groupJid}`);
+
         try {
+            // Check Bot Admin Status explicitly
+            const metadata = await this._getGroupMetadata(groupJid, true);
+            const myJid = this.sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
+            const me = metadata?.participants?.find((p: any) => p.id?.split(':')[0] + '@s.whatsapp.net' === myJid);
+            const isBotAdmin = me?.admin === 'admin' || me?.admin === 'superadmin';
+
+            if (!isBotAdmin) {
+                await this.sock.sendMessage(groupJid, { text: '❌ Não posso rebaixar membros: eu não sou administrador deste grupo.' }, { quoted: m });
+                return true;
+            }
+
             await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'demote'), groupJid);
             this.logger.info(`[demoteUser] Sucesso no rebaixamento.`);
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');

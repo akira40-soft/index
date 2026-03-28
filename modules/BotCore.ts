@@ -34,6 +34,7 @@ import ImageEffects from './ImageEffects.js';
 import StickerViewOnceHandler from './StickerViewOnceHandler.js';
 import PermissionManager from './PermissionManager.js';
 import RateLimiter from './RateLimiter.js';
+import JidUtils from './JidUtils.js';
 
 class BotCore {
     public config: any;
@@ -420,8 +421,8 @@ class BotCore {
             let participantJidRaw = this.messageProcessor.extractParticipantJid(m);
             const numeroReal = this.messageProcessor.extractUserNumber(m);
 
-            // NORMALIZAÇÃO DE JID: Remove :1, :2 etc para consistência com DB e Moderação
-            const participantJid = participantJidRaw?.split(':')[0]?.split('@')[0] + '@s.whatsapp.net';
+            // NORMALIZAÇÃO DE JID: Usando JidUtils para suporte a Multi-Device e LID
+            const participantJid = JidUtils.normalize(participantJidRaw);
 
             if (this.moderationSystem?.isBlacklisted(numeroReal)) return;
 
@@ -485,14 +486,17 @@ class BotCore {
             const replyInfo = this.messageProcessor.extractReplyInfo(m);
 
             // ═══ GANHO DE XP POR MENSAGEM (SISTEMA DE NÍVEIS) ═══
-            const levelingAtivo = ehGrupo && this.groupManagement?.groupSettings?.[remoteJid]?.leveling === true;
+            const levelingAtivo = ehGrupo && (this.groupManagement?.groupSettings?.[remoteJid]?.leveling === true || this.groupManagement?.groupSettings?.[remoteJid]?.leveling === 'on');
+            
             if (levelingAtivo && this.levelSystem) {
                 try {
                     const resultXp = this.levelSystem.awardXp(remoteJid, participantJid, 10);
-                    if (resultXp.leveled) {
+                    this.logger.debug(`[LVL] XP processado para ${participantJid} em ${remoteJid}. Nível Atual: ${resultXp?.rec?.level}`);
+                    
+                    if (resultXp && resultXp.leveled) {
                         const newLevel = resultXp.rec.level;
                         const patente = this.levelSystem.getPatente(newLevel);
-                        const msgLvl = `🎉 LEVEL UP! 🔥\n\n@${participantJid.split('@')[0]} subiu para o Nível ${newLevel}!\n\n👑 *Nova Patente:* ${patente}`;
+                        const msgLvl = `🎉 *LEVEL UP!* 🔥\n\n@${participantJid.split('@')[0]} subiu para o Nível *${newLevel}*!\n\n👑 *Nova Patente:* ${patente}`;
                         await this.sock.sendMessage(remoteJid, { text: msgLvl, mentions: [participantJid] });
 
                         // Verifica Auto-ADM
@@ -509,8 +513,11 @@ class BotCore {
                         }
                     }
                 } catch (e: any) {
-                    this.logger.error(`Erro no LevelSystem: ${e.message}`);
+                    this.logger.error(`🚨 [LVL] Erro ao atribuir XP: ${e.message}`);
                 }
+            } else if (ehGrupo && this.levelSystem) {
+                // Log opcional para debug se o leveling está desligado mas deveria estar ligado
+                this.logger.debug(`[LVL] Ignorado para ${remoteJid}: Status=${this.groupManagement?.groupSettings?.[remoteJid]?.leveling}`);
             }
 
             // ═══ NOVO RATE LIMIT CHECK (SELETIVO) ═══
