@@ -2278,18 +2278,22 @@ ${P}menu osint — Comandos OSINT avançados`,
             const patente = this.levelSystem.getPatente(rec.level || 0);
             const xpNeeded = this.levelSystem.requiredXp(rec.level || 0);
             const xpAtual = rec.xp || 0;
-            const progress = (xpNeeded > 0 && isFinite(xpNeeded))
-                ? ((xpAtual / xpNeeded) * 100).toFixed(1)
+
+            // Garantir que xpNeeded seja pelo menos o baseXP se for zero (segurança extra)
+            const safeXpNeeded = (xpNeeded > 0) ? xpNeeded : 100;
+
+            const progress = (isFinite(safeXpNeeded))
+                ? ((xpAtual / safeXpNeeded) * 100).toFixed(1)
                 : '100.0';
-            const faltam = (isFinite(xpNeeded) && xpNeeded > xpAtual)
-                ? xpNeeded - xpAtual
+            const faltam = (isFinite(safeXpNeeded) && safeXpNeeded > xpAtual)
+                ? safeXpNeeded - xpAtual
                 : 0;
 
             await this.bot.reply(m,
                 `📊 *Seu Nível*\n\n` +
                 `🏅 *Patente:* ${patente}\n` +
                 `🏆 *Level:* ${rec.level || 0}\n` +
-                `⭐ *XP:* ${xpAtual}/${isFinite(xpNeeded) ? xpNeeded : '∞'}\n` +
+                `⭐ *XP:* ${xpAtual}/${isFinite(safeXpNeeded) ? safeXpNeeded : '∞'}\n` +
                 `📈 *Progresso:* ${progress}%\n\n` +
                 `🎯 Faltam *${faltam} XP* para o próximo nível!`
             );

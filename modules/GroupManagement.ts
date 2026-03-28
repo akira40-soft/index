@@ -834,18 +834,16 @@ class GroupManagement {
         this.logger.info(`[kickUser] Alvos extraídos: ${JSON.stringify(targets)}`);
 
         try {
-            const metadata = await this._getGroupMetadata(groupJid);
+            const metadata = await this._getGroupMetadata(groupJid, true);
             if (!metadata) throw new Error('Falha ao obter dados do grupo');
 
             const participants = metadata.participants.map((p: any) => p.id);
             this.logger.info(`[kickUser] Participantes no grupo: ${participants.length}. Procurando: ${JSON.stringify(targets)}`);
 
             // Comparação numérica parcial: remove @ e : para evitar mismatch de formato
-            // Ex: "40755431264474@s.whatsapp.net" bate com "40755431264474:17@s.whatsapp.net"
             const getNum = (jid: string) => jid.split(':')[0].split('@')[0];
             const toRemove = targets.map(target => {
                 const targetNum = getNum(target);
-                // Procura o JID real do participante que tenha o mesmo número
                 const realJid = participants.find((p: string) => getNum(p) === targetNum);
                 return realJid || null;
             }).filter(Boolean) as string[];
@@ -856,12 +854,28 @@ class GroupManagement {
                 return true;
             }
 
+            this.logger.info(`[kickUser] Iniciando remoção de ${toRemove.length} alvos em ${groupJid}`);
+
+            // Verificação explícita de admin do bot usando os metadados frescos
+            const myJid = this.sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
+            const me = metadata.participants.find((p: any) => p.id?.split(':')[0] + '@s.whatsapp.net' === myJid);
+            const isBotAdmin = me?.admin === 'admin' || me?.admin === 'superadmin';
+
+            this.logger.info(`[kickUser] Bot JID: ${myJid} | Status Admin: ${isBotAdmin ? 'SIM' : 'NÃO'}`);
+
+            if (!isBotAdmin) {
+                await this.sock.sendMessage(groupJid, { text: '❌ Não posso remover membros: eu não sou administrador deste grupo.' }, { quoted: m });
+                return true;
+            }
+
+            this.logger.info(`[kickUser] Enviando JIDs para remoção: ${JSON.stringify(toRemove)}`);
             await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toRemove, 'remove'), groupJid);
             const mentions = toRemove.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `👢 ${mentions} removido(s) do grupo.`, mentions: toRemove }, { quoted: m });
             this.clearMetadataCache(groupJid);
         } catch (e: any) {
-            this.logger.error(`[GroupManagement] kickUser erro: ${e.message}`);
+            this.logger.error(`[kickUser] ERRO CRÍTICO (500 ou Outro): ${e.message}`);
+            this.logger.error(`[kickUser] Detalhes do erro: ${e.stack}`);
             // Se falhou mesmo com retry, limpa cache forçado para o próximo comando
             this.clearMetadataCache(groupJid);
             const msg = e.message?.includes('not-authorized') ? 'Não tenho permissão de admin.' :
@@ -901,8 +915,12 @@ class GroupManagement {
                 return true;
             }
 
+            this.logger.info(`[addUser] Tentando adicionar números: ${JSON.stringify(toAdd)}`);
+            this.logger.info(`[addUser] Socket Status: ${this.sock ? 'Conectado' : 'Nulo'}`);
+
             // Ação de ADIÇÃO via socket com Retry e Cache Flush
             const response = await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, toAdd, 'add'), groupJid);
+            this.logger.info(`[addUser] Resposta do WhatsApp: ${JSON.stringify(response)}`);
 
             // Verificação de resposta detalhada
             // O Baileys retorna um array de objetos [{status: '200', jid: '...'}, ...]
@@ -939,8 +957,10 @@ class GroupManagement {
             return true;
         }
         const groupJid = m.key.remoteJid;
+        this.logger.info(`[promoteUser] Alvos para admin: ${JSON.stringify(targets)} em ${groupJid}`);
         try {
             await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'promote'), groupJid);
+            this.logger.info(`[promoteUser] Sucesso na promoção.`);
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `👑 ${mentions} promovido(s) a admin!`, mentions: targets }, { quoted: m });
         } catch (e: any) {
@@ -956,8 +976,10 @@ class GroupManagement {
             return true;
         }
         const groupJid = m.key.remoteJid;
+        this.logger.info(`[demoteUser] Alvos para rebaixar: ${JSON.stringify(targets)} em ${groupJid}`);
         try {
             await this._withRetry(() => this.sock.groupParticipantsUpdate(groupJid, targets, 'demote'), groupJid);
+            this.logger.info(`[demoteUser] Sucesso no rebaixamento.`);
             const mentions = targets.map((t: string) => `@${t.split('@')[0]}`).join(', ');
             await this.sock.sendMessage(groupJid, { text: `⬇️ ${mentions} rebaixado(s) de admin.`, mentions: targets }, { quoted: m });
         } catch (e: any) {

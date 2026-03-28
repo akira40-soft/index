@@ -97,6 +97,8 @@ class LevelSystem {
         const base = this.config.LEVEL_BASE_XP || 100;
         const multiplier = this.config.LEVEL_XP_MULTIPLIER || 10;
         if (level >= this.maxLevel) return Infinity;
+        // Se nível for 0, o XP necessário para o nível 1 é o baseXP para evitar 0/0
+        if (level === 0) return base;
         // Fórmula polinomial otimizada: (level * base) + (level^2 * multiplier)
         return Math.floor((level * base) + (Math.pow(level, 2) * multiplier));
     }
