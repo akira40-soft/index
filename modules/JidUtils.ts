@@ -33,10 +33,20 @@ export class JidUtils {
 
     /**
      * Extrai apenas o número puro (sem @s.whatsapp.net)
+     * Alias para toNumeric para manter consistência com o plano de estabilização.
      */
     public static getNumber(jid: string | null | undefined): string {
+        if (!jid) return "";
         const norm = this.normalize(jid);
         return norm.split('@')[0];
+    }
+
+    /**
+     * Retorna apenas os dígitos do JID/LID.
+     * Útil para chaves de banco de dados que devem ser independentes de JID/LID.
+     */
+    public static toNumeric(jid: string | null | undefined): string {
+        return this.getNumber(jid);
     }
 }
 
