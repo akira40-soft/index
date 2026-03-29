@@ -36,9 +36,13 @@ class ModerationSystem {
     private antiImageGroups: Set<string>;
     private antiStickerGroups: Set<string>;
     private antiVideoGroups: Set<string>;
+    private x9Groups: Set<string>;
     private warningsPath: string;
     private antiFakePath: string;
     private antiFakeExceptionsPath: string;
+    private antiFakePrefixesPath: string;
+    private antiFakePrefixes: Map<string, string[]>;
+    private x9Path: string;
     private antiImagePath: string;
     private antiStickerPath: string;
     private antiVideoPath: string;
@@ -77,17 +81,22 @@ class ModerationSystem {
         // ═══ SISTEMA DE AVISOS E FILTROS ADICIONAIS ═══
         this.warnings = new Map();
         this.antiFakeGroups = new Set();
+        this.antiFakeExceptions = new Set();
+        this.antiFakePrefixes = new Map();
         this.antiImageGroups = new Set();
         this.antiStickerGroups = new Set();
         this.antiVideoGroups = new Set();
+        this.x9Groups = new Set();
 
         // Persistência
         this.warningsPath = '/tmp/akira_data/data/warnings.json';
         this.antiFakePath = '/tmp/akira_data/data/antifake.json';
         this.antiFakeExceptionsPath = '/tmp/akira_data/data/antifake_exceptions.json';
+        this.antiFakePrefixesPath = '/tmp/akira_data/data/antifake_prefixes.json';
         this.antiImagePath = '/tmp/akira_data/data/antiimage.json';
         this.antiStickerPath = '/tmp/akira_data/data/antisticker.json';
         this.antiVideoPath = '/tmp/akira_data/data/antivideo.json';
+        this.x9Path = '/tmp/akira_data/data/x9.json';
 
         this._loadAllSettings();
 
@@ -520,15 +529,32 @@ class ModerationSystem {
         return enable;
     }
 
-    public isFakeNumber(jid: string): boolean {
+    public isFakeNumber(groupId: string, jid: string): boolean {
         // Formato esperado Baileys: 244XXXXXXXXX@s.whatsapp.net ou 244XXXXXXXXX:1@s.whatsapp.net
         const cleanId = jid.split(':')[0].split('@')[0];
 
         // Se estiver na lista de exceções, não é fake
         if (this.antiFakeExceptions.has(jid) || this.antiFakeExceptions.has(cleanId + '@s.whatsapp.net')) return false;
 
-        // Se não começar com 244 (Angola), é considerado fake para este bot (regra do usuário)
-        return !cleanId.startsWith('244');
+        // Recupera prefixos permitidos para este grupo (Padrão: 244 para manter legado, ou 55 opcional)
+        const allowedPrefixes = this.antiFakePrefixes.get(groupId) || ['244'];
+
+        // Se começar com QUALQUER um dos prefixos permitidos, NÃO é fake
+        return !allowedPrefixes.some(prefix => cleanId.startsWith(prefix));
+    }
+
+    public setAntiFakePrefix(groupId: string, prefixes: string | string[]): void {
+        const prefixList = Array.isArray(prefixes) ? prefixes : [prefixes];
+        // Limpa espaços e formata
+        const cleanList = prefixList.map(p => p.trim().replace('+', '')).filter(p => p.length > 0);
+        if (cleanList.length > 0) {
+            this.antiFakePrefixes.set(groupId, cleanList);
+            this._saveAllSettings();
+        }
+    }
+
+    public getAntiFakePrefixes(groupId: string): string[] {
+        return this.antiFakePrefixes.get(groupId) || ['244'];
     }
 
     public addFakeException(jid: string): void {
@@ -588,6 +614,17 @@ class ModerationSystem {
         return this.antiVideoGroups.has(groupId);
     }
 
+    public toggleX9(groupId: string, enable: boolean = true): boolean {
+        if (enable) this.x9Groups.add(groupId);
+        else this.x9Groups.delete(groupId);
+        this._saveAllSettings();
+        return enable;
+    }
+
+    public isX9Active(groupId: string): boolean {
+        return this.x9Groups.has(groupId);
+    }
+
     private _loadAllSettings(): void {
         this._loadSettingsSet(this.antiLinkPath, this.antiLinkGroups);
         this._loadSettingsSet(this.antiFakePath, this.antiFakeGroups);
@@ -595,7 +632,9 @@ class ModerationSystem {
         this._loadSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._loadSettingsSet(this.antiStickerPath, this.antiStickerGroups);
         this._loadSettingsSet(this.antiVideoPath, this.antiVideoGroups);
+        this._loadSettingsSet(this.x9Path, this.x9Groups);
         this._loadSettingsMap(this.warningsPath, this.warnings);
+        this._loadSettingsMap(this.antiFakePrefixesPath, this.antiFakePrefixes);
     }
 
     private _saveAllSettings(): void {
@@ -746,15 +785,20 @@ class ModerationSystem {
     */
 
     /**
-    * Verifica se usuário está na blacklist
-    */
+     * Verifica se usuário está na blacklist
+     */
     public isBlacklisted(userId: string): boolean {
         const list = this.loadBlacklistDataSync();
         if (!Array.isArray(list)) return false;
 
-        // Limpeza de JID para comparação robusta
-        const cleanUserId = typeof userId === 'string' ? userId.split(':')[0] : userId;
-        const found = list.find(entry => entry && (entry.id === cleanUserId || entry.id === userId));
+        // Limpeza de JID para comparação robusta (aceita 244...:1@s.whatsapp.net ou apenas o numericId)
+        const cleanUserId = typeof userId === 'string' ? userId.split(':')[0].split('@')[0] : String(userId);
+
+        const found = list.find(entry => {
+            if (!entry) return false;
+            const entryId = typeof entry.id === 'string' ? entry.id.split(':')[0].split('@')[0] : String(entry.id);
+            return entryId === cleanUserId;
+        });
 
         if (found) {
             if (found.expiresAt && found.expiresAt !== 'PERMANENT') {
@@ -767,6 +811,34 @@ class ModerationSystem {
         }
 
         return false;
+    }
+
+    /**
+     * Retorna um relatório formatado da Blacklist Global
+     */
+    public getBlacklistReport(): string {
+        const list = this.loadBlacklistDataSync();
+        if (!Array.isArray(list) || list.length === 0) {
+            return "✅ *A Blacklist Global está vazia.*";
+        }
+
+        let report = `🏴 *LISTA NEGRA GLOBAL (AKIRA)*\n`;
+        report += `_Total de banidos: ${list.length}_\n\n`;
+
+        list.forEach((entry, idx) => {
+            const date = entry.addedAt ? new Date(entry.addedAt).toLocaleDateString('pt-BR') : 'N/A';
+            const expires = entry.expiresAt === 'PERMANENT' ? '♾️ Permanente' : new Date(entry.expiresAt).toLocaleDateString('pt-BR');
+            const name = entry.name || 'Desconhecido';
+            const num = entry.number || entry.id.split('@')[0];
+
+            report += `${idx + 1}. 👤 *${name}*\n`;
+            report += `   📞 \`${num}\`\n`;
+            report += `   🛡️ *Motivo:* ${entry.reason || 'Não informado'}\n`;
+            report += `   📅 *Expira:* ${expires}\n\n`;
+        });
+
+        report += `_Para remover use: #blacklist remove @user_`;
+        return report;
     }
 
     /**

@@ -326,8 +326,8 @@ class BotCore {
 
                 // Anti-Fake Check
                 if (action === 'add' && this.moderationSystem?.isAntiFakeActive(id)) {
-                    const fakeParticipants = validParticipants.filter((p: string) => this.moderationSystem.isFakeNumber(p));
-                    validParticipants = validParticipants.filter((p: string) => !this.moderationSystem.isFakeNumber(p));
+                    const fakeParticipants = validParticipants.filter((p: string) => this.moderationSystem.isFakeNumber(id, p));
+                    validParticipants = validParticipants.filter((p: string) => !this.moderationSystem.isFakeNumber(id, p));
 
                     if (fakeParticipants.length > 0) {
                         for (const p of fakeParticipants) {
@@ -342,22 +342,62 @@ class BotCore {
                     }
                 }
 
-                // Welcome Trigger (Saudação)
+                // X9 - Promote/Demote
+                if (this.moderationSystem?.isX9Active(id)) {
+                    if (action === 'promote') {
+                        for (const p of participants) {
+                            await this.sock.sendMessage(id, {
+                                text: `⚡ [X9 - PROMOÇÃO]\n@${p.split('@')[0]} foi promovido a administrador!`,
+                                mentions: [p]
+                            }).catch(() => { });
+                        }
+                    } else if (action === 'demote') {
+                        for (const p of participants) {
+                            await this.sock.sendMessage(id, {
+                                text: `📉 [X9 - REBAIXAMENTO]\n@${p.split('@')[0]} perdeu o cargo de administrador.`,
+                                mentions: [p]
+                            }).catch(() => { });
+                        }
+                    }
+                }
+
+                // Welcome Trigger (Saudação Visual Premium)
                 if (action === 'add' && this.groupManagement && validParticipants.length > 0) {
                     try {
                         const isWelcomeOn = this.groupManagement.getWelcomeStatus(id);
                         if (isWelcomeOn) {
-                            this.logger.info(`👋 Saudando ${validParticipants.length} novos membros em ${id}`);
+                            this.logger.info(`👋 Gerando Welcome Visual para ${validParticipants.length} novos membros em ${id}`);
+                            const metadata = await this.sock.groupMetadata(id);
+                            const groupName = metadata.subject;
+                            const memberCount = metadata.participants.length;
+
                             for (const p of validParticipants) {
+                                let ppUrl: string;
+                                try {
+                                    ppUrl = await this.sock.profilePictureUrl(p, 'image');
+                                } catch {
+                                    ppUrl = 'https://i.ibb.co/0Q9Sv9m/avatar-placeholder.png';
+                                }
+
+                                // API de Card de Boas-vindas (Estética Premium)
+                                const welcomeCardUrl = `https://api.popcat.xyz/welcomecard?background=https://i.ibb.co/XyS1DLw/cdfbdf66f07b.jpg&text1=${encodeURIComponent('BEM-VINDO!')}&text2=${encodeURIComponent(groupName)}&text3=${encodeURIComponent('Membro #' + memberCount)}&avatar=${encodeURIComponent(ppUrl)}`;
+
                                 const template = this.groupManagement.getCustomMessage(id, 'welcome') || 'Olá @user, bem-vindo ao @group!';
                                 const formatted = await this.groupManagement.formatMessage(id, p, template);
-                                await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch((err: any) => {
-                                    this.logger.error(`[Welcome] Falha ao enviar: ${err.message}`);
+
+                                await this.sock.sendMessage(id, {
+                                    image: { url: welcomeCardUrl },
+                                    caption: formatted,
+                                    mentions: [p]
+                                }).catch(async (err: any) => {
+                                    this.logger.error(`[Welcome] Falha ao enviar card visual: ${err.message}`);
+                                    // Fallback para texto
+                                    await this.sock.sendMessage(id, { text: formatted, mentions: [p] }).catch(() => { });
                                 });
                             }
                         }
                     } catch (e: any) {
-                        this.logger.error(`Erro no Welcome: ${e.message}`);
+                        this.logger.error(`Erro no Welcome Visual: ${e.message}`);
                     }
                 }
 
@@ -375,6 +415,36 @@ class BotCore {
                         }
                     } catch (e: any) {
                         this.logger.error(`Erro no Goodbye: ${e.message}`);
+                    }
+                }
+            });
+
+            // X9 - Group Update (Metadata)
+            this.sock.ev.on('groups.update', async (groups: any) => {
+                for (const update of groups) {
+                    const id = update.id;
+                    if (id && this.moderationSystem?.isX9Active(id)) {
+                        if (update.subject) {
+                            await this.sock.sendMessage(id, { text: `🏷️ [X9 - NOME]\nO nome do grupo foi alterado para: *${update.subject}*` }).catch(() => { });
+                        }
+                        if (update.desc) {
+                            await this.sock.sendMessage(id, { text: `📝 [X9 - DESCRIÇÃO]\nA descrição do grupo foi atualizada.` }).catch(() => { });
+                        }
+                        if (update.announce !== undefined) {
+                            const status = update.announce ? 'FECHADO 🔐 (apenas admins)' : 'ABERTO 🔓 (todos podem falar)';
+                            await this.sock.sendMessage(id, { text: `⚙️ [X9 - CONFIGURAÇÃO]\nO grupo agora está: *${status}*` }).catch(() => { });
+                        }
+                    }
+                }
+            });
+
+            // Auto-Block Call
+            this.sock.ev.on('call', async (call: any) => {
+                for (const c of call) {
+                    if (c.status === 'offer') {
+                        this.logger.warn(`📞 [AUTO-BLOCK] Chamada de ${c.from}`);
+                        await this.sock.sendMessage(c.from, { text: '❌ O bot não aceita chamadas. Você foi bloqueado automaticamente.' }).catch(() => { });
+                        await this.sock.updateBlockStatus(c.from, 'block').catch(() => { });
                     }
                 }
             });
@@ -486,13 +556,14 @@ class BotCore {
             const replyInfo = this.messageProcessor.extractReplyInfo(m);
 
             // ═══ GANHO DE XP POR MENSAGEM (SISTEMA DE NÍVEIS) ═══
-            const levelingAtivo = ehGrupo && (this.groupManagement?.groupSettings?.[remoteJid]?.leveling === true || this.groupManagement?.groupSettings?.[remoteJid]?.leveling === 'on');
-            
+            const levelingSetting = this.groupManagement?.groupSettings?.[remoteJid]?.leveling;
+            const levelingAtivo = ehGrupo && (levelingSetting === true || levelingSetting === 'on' || levelingSetting === 1);
+
             if (levelingAtivo && this.levelSystem) {
                 try {
                     const resultXp = this.levelSystem.awardXp(remoteJid, participantJid, 10);
-                    this.logger.debug(`[LVL] XP processado para ${participantJid} em ${remoteJid}. Nível Atual: ${resultXp?.rec?.level}`);
-                    
+                    this.logger.info(`✨ [LevelSystem] +10 XP para @${participantJid.split('@')[0]} em ${remoteJid}. Level: ${resultXp?.rec?.level}`);
+
                     if (resultXp && resultXp.leveled) {
                         const newLevel = resultXp.rec.level;
                         const patente = this.levelSystem.getPatente(newLevel);
@@ -501,7 +572,7 @@ class BotCore {
 
                         // Verifica Auto-ADM
                         if (newLevel >= this.levelSystem.maxLevel) {
-                            const resultPromo = this.levelSystem.registerMaxLevelUser(
+                            const resultPromo = await this.levelSystem.registerMaxLevelUser(
                                 remoteJid,
                                 participantJid,
                                 m.pushName || 'Usuário',
@@ -517,7 +588,9 @@ class BotCore {
                 }
             } else if (ehGrupo && this.levelSystem) {
                 // Log opcional para debug se o leveling está desligado mas deveria estar ligado
-                this.logger.debug(`[LVL] Ignorado para ${remoteJid}: Status=${this.groupManagement?.groupSettings?.[remoteJid]?.leveling}`);
+                if (this.levelSystem.enableDetailedLogging) {
+                    this.logger.debug(`[LVL] Ignorado para ${remoteJid}: Status=${this.groupManagement?.groupSettings?.[remoteJid]?.leveling}`);
+                }
             }
 
             // ═══ NOVO RATE LIMIT CHECK (SELETIVO) ═══
@@ -670,10 +743,13 @@ class BotCore {
             }
 
             const resposta = resultado.resposta || 'Sem resposta.';
+            const shouldReply = ehGrupo || (replyInfo?.ehRespostaAoBot);
+            const sendOptions = shouldReply ? { quoted: m } : {};
+
             if (this.presenceSimulator) {
                 await this.presenceSimulator.simulateFullResponse(this.sock, m, resposta);
             }
-            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, ehGrupo ? { quoted: m } : {});
+            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, sendOptions);
         } catch (error: any) {
             this.logger.error('❌ Erro imagem:', error.message);
         }
@@ -719,10 +795,13 @@ class BotCore {
                 video_dados: { m: m }
             });
             const resposta = resultado.resposta || 'Vídeo recebido.';
+            const shouldReply = ehGrupo || (replyInfo?.ehRespostaAoBot);
+            const sendOptions = shouldReply ? { quoted: m } : {};
+
             if (this.presenceSimulator) {
                 await this.presenceSimulator.simulateFullResponse(this.sock, m, resposta);
             }
-            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
+            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, sendOptions);
         } catch (e) { }
     }
 
@@ -765,10 +844,13 @@ class BotCore {
                 documento_dados: { m: m }
             });
             const resposta = resultado.resposta || 'Doc recebido.';
+            const shouldReply = ehGrupo || (replyInfo?.ehRespostaAoBot);
+            const sendOptions = shouldReply ? { quoted: m } : {};
+
             if (this.presenceSimulator) {
                 await this.presenceSimulator.simulateFullResponse(this.sock, m, resposta);
             }
-            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
+            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, sendOptions);
         } catch (e) { }
     }
 
@@ -842,10 +924,35 @@ class BotCore {
             if (!resultado.success) return;
 
             const resposta = resultado.resposta || 'OK';
+            const shouldReply = ehGrupo || (replyInfo?.ehRespostaAoBot);
+            const sendOptions = shouldReply ? { quoted: m } : {};
+
+            // Resposta em Áudio se o input foi Áudio
+            if (foiAudio && this.audioProcessor) {
+                try {
+                    const tts = await this.audioProcessor.generateTTS(resposta);
+                    if (tts && tts.sucesso) {
+                        if (this.presenceSimulator) {
+                            await this.presenceSimulator.simulateFullResponse(this.sock, m, resposta, true);
+                        }
+                        await this.sock.sendMessage(m.key.remoteJid, {
+                            audio: tts.buffer,
+                            mimetype: 'audio/ogg; codecs=opus',
+                            ptt: true
+                        }, sendOptions);
+                        return;
+                    } else {
+                        this.logger.warn(`⚠️ [TTS] Falha ao gerar resposta em áudio: ${tts?.error || 'Erro desconhecido'}`);
+                    }
+                } catch (ttsErr: any) {
+                    this.logger.error(`🚨 [TTS] Exceção ao processar áudio: ${ttsErr.message}`);
+                }
+            }
+
             if (this.presenceSimulator) {
                 await this.presenceSimulator.simulateFullResponse(this.sock, m, resposta);
             }
-            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, ehGrupo ? { quoted: m } : {});
+            await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, sendOptions);
         } catch (e) { }
     }
 

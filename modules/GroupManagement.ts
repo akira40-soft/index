@@ -8,6 +8,7 @@
 import ConfigManager from './ConfigManager.js';
 import fs from 'fs';
 import path from 'path';
+import JidUtils from './JidUtils.js';
 
 declare const Buffer: any;
 
@@ -385,33 +386,42 @@ class GroupManagement {
             case 'antidocumento':
                 return await this.toggleSetting(m, 'antidoc', args[0]);
             case 'blacklist': {
-                const isAdd = args[0] === 'add';
-                const isRemove = args[0] === 'remove';
+                const subCommand = args[0]?.toLowerCase();
+                const isAdd = subCommand === 'add';
+                const isRemove = subCommand === 'remove';
+                const isList = subCommand === 'list' || !subCommand;
 
                 if (isAdd || isRemove) {
                     const targets = this._extractTargets(m);
-                    // Pega o primeiro alvo (seja reply ou menção) ou tenta pegar do argumento texto
                     const targetJid = targets[0] || (args[1] ? args[1].replace(/\D/g, '') + '@s.whatsapp.net' : null);
 
                     if (!targetJid) {
-                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `⚠️ Uso: #${command} add/remove [mencione ou responda]` }, { quoted: m });
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `⚠️ *Uso:* #blacklist add/remove [mencione ou responda]` }, { quoted: m });
                         return true;
                     }
 
                     if (isAdd) {
-                        if (this.moderationSystem) this.moderationSystem.addToBlacklist(targetJid, 'Manual', targetJid, 'Adicionado por admin', 0);
-                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `🚫 @${targetJid.split('@')[0]} cadastrado na Blacklist Global!`, mentions: [targetJid] }, { quoted: m });
+                        const pushName = m.message?.extendedTextMessage?.contextInfo?.quotedMessage ? 'Citado' : 'Mencionado';
+                        if (this.moderationSystem) {
+                            this.moderationSystem.addToBlacklist(targetJid, pushName, targetJid.split('@')[0], 'Adicionado manualmente por admin', 0);
+                        }
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `🚫 *@${targetJid.split('@')[0]}* foi adicionado à *Blacklist Global* e será banido de todos os meus setores!`, mentions: [targetJid] }, { quoted: m });
+
+                        // Opcional: Kick imediato
+                        await this._withRetry(() => this.sock.groupParticipantsUpdate(m.key.remoteJid, [targetJid], 'remove'), m.key.remoteJid);
                     } else {
                         if (this.moderationSystem) this.moderationSystem.removeFromBlacklist(targetJid);
-                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `✅ @${targetJid.split('@')[0]} libertado da Blacklist.`, mentions: [targetJid] }, { quoted: m });
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: `✅ *@${targetJid.split('@')[0]}* foi perdoado e removido da Blacklist.`, mentions: [targetJid] }, { quoted: m });
                     }
                     return true;
                 }
 
-                // Se não for add/remove, apenas mostra o relatório
-                if (typeof (this as any).getBlacklistInfo === 'function' || true) {
-                    const report = await this.getBlacklistInfo(m.key.remoteJid);
-                    if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: report }, { quoted: m });
+                if (isList) {
+                    if (this.moderationSystem) {
+                        const report = this.moderationSystem.getBlacklistReport();
+                        if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: report }, { quoted: m });
+                    }
+                    return true;
                 }
                 return true;
             }
@@ -773,34 +783,77 @@ class GroupManagement {
 
     async pinMessage(m: any, args: any[]) {
         const quotedMsg = m.message?.extendedTextMessage?.contextInfo;
-        if (!quotedMsg) {
-            if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Responda mensagem para fixar' }, { quoted: m });
+        if (!quotedMsg || !quotedMsg.stanzaId) {
+            if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Responda a uma mensagem para fixar ela no grupo.' }, { quoted: m });
             return true;
         }
-        let duration = 86400;
+
+        let duration = 86400; // 24h default
         if (args.length > 0) {
             const time = args[0].toLowerCase();
             if (time.endsWith('h')) duration = parseInt(time) * 3600;
             else if (time.endsWith('d')) duration = parseInt(time) * 86400;
             else if (time.endsWith('m')) duration = parseInt(time) * 60;
         }
+
         try {
-            await this.sock.sendMessage(m.key.remoteJid, { pin: quotedMsg.stanzaId, type: 1, time: duration });
-            await this.sock.sendMessage(m.key.remoteJid, { text: `📌 Fixada ${duration / 86400}d` }, { quoted: m });
-        } catch (e) { }
+            const myJid = (this.sock?.user?.id || this.sock?.authState?.creds?.me?.id || '').split(':')[0] + '@s.whatsapp.net';
+            const participant = quotedMsg.participant || m.key.remoteJid;
+
+            // Reconstrução da KEY completa exigida pelo Baileys/WhatsApp
+            const key = {
+                remoteJid: m.key.remoteJid,
+                fromMe: participant === myJid,
+                id: quotedMsg.stanzaId,
+                participant: participant
+            };
+
+            await this.sock.sendMessage(m.key.remoteJid, {
+                pin: {
+                    key: key,
+                    type: 1, // 1 = PIN
+                    time: duration
+                }
+            });
+
+            const dias = Math.floor(duration / 86400);
+            const horas = Math.floor(duration / 3600);
+            const tempoStr = dias > 0 ? `${dias}d` : `${horas}h`;
+            await this.sock.sendMessage(m.key.remoteJid, { text: `📌 Mensagem fixada com sucesso por ${tempoStr}!` }, { quoted: m });
+        } catch (e: any) {
+            this.logger.error(`❌ Erro ao fixar: ${e.message}`);
+            await this.sock.sendMessage(m.key.remoteJid, { text: `❌ Falha ao fixar. Verifique se sou admin.\nErro: ${e.message}` }, { quoted: m }).catch(() => { });
+        }
         return true;
     }
 
     async unpinMessage(m: any) {
         const quotedMsg = m.message?.extendedTextMessage?.contextInfo;
-        if (!quotedMsg) {
-            if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Responda mensagem fixada' }, { quoted: m });
+        if (!quotedMsg || !quotedMsg.stanzaId) {
+            if (this.sock) await this.sock.sendMessage(m.key.remoteJid, { text: '❌ Responda à mensagem que deseja desafixar.' }, { quoted: m });
             return true;
         }
         try {
-            await this.sock.sendMessage(m.key.remoteJid, { pin: quotedMsg.stanzaId, type: 0 });
-            await this.sock.sendMessage(m.key.remoteJid, { text: '📌 Desfixada' }, { quoted: m });
-        } catch (e) { }
+            const myJid = (this.sock?.user?.id || '').split(':')[0] + '@s.whatsapp.net';
+            const participant = quotedMsg.participant || m.key.remoteJid;
+
+            const key = {
+                remoteJid: m.key.remoteJid,
+                fromMe: participant === myJid,
+                id: quotedMsg.stanzaId,
+                participant: participant
+            };
+
+            await this.sock.sendMessage(m.key.remoteJid, {
+                pin: {
+                    key: key,
+                    type: 2 // 2 = UNPIN (Baileys/WA Protocol)
+                }
+            });
+            await this.sock.sendMessage(m.key.remoteJid, { text: '📌 Mensagem desafixada do grupo.' }, { quoted: m });
+        } catch (e: any) {
+            this.logger.error(`❌ Erro ao desafixar: ${e.message}`);
+        }
         return true;
     }
 
@@ -971,12 +1024,13 @@ class GroupManagement {
         try {
             // Check Bot Admin Status explicitly
             const metadata = await this._getGroupMetadata(groupJid, true);
-            const myJid = this.sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
-            const me = metadata?.participants?.find((p: any) => p.id?.split(':')[0] + '@s.whatsapp.net' === myJid);
+            const myId = JidUtils.toNumeric(this.sock?.user?.id);
+            const me = metadata?.participants?.find((p: any) => JidUtils.toNumeric(p.id) === myId);
             const isBotAdmin = me?.admin === 'admin' || me?.admin === 'superadmin';
 
             if (!isBotAdmin) {
-                await this.sock.sendMessage(groupJid, { text: '❌ Não posso promover membros: eu não sou administrador deste grupo.' }, { quoted: m });
+                const myNumber = this.sock?.user?.id?.split(':')[0]?.split('@')[0] || 'bot';
+                await this.sock.sendMessage(groupJid, { text: `❌ Não posso promover membros: eu (@${myNumber}) não sou administrador deste grupo.\n\n🛡️ *Admins atuais:* ${metadata.participants.filter((p: any) => p.admin).map((p: any) => '@' + p.id.split('@')[0]).join(', ')}`, mentions: metadata.participants.filter((p: any) => p.admin).map((p: any) => p.id) }, { quoted: m });
                 return true;
             }
 
@@ -1002,12 +1056,13 @@ class GroupManagement {
         try {
             // Check Bot Admin Status explicitly
             const metadata = await this._getGroupMetadata(groupJid, true);
-            const myJid = this.sock?.user?.id?.split(':')[0] + '@s.whatsapp.net';
-            const me = metadata?.participants?.find((p: any) => p.id?.split(':')[0] + '@s.whatsapp.net' === myJid);
+            const myId = JidUtils.toNumeric(this.sock?.user?.id);
+            const me = metadata?.participants?.find((p: any) => JidUtils.toNumeric(p.id) === myId);
             const isBotAdmin = me?.admin === 'admin' || me?.admin === 'superadmin';
 
             if (!isBotAdmin) {
-                await this.sock.sendMessage(groupJid, { text: '❌ Não posso rebaixar membros: eu não sou administrador deste grupo.' }, { quoted: m });
+                const myNumber = this.sock?.user?.id?.split(':')[0]?.split('@')[0] || 'bot';
+                await this.sock.sendMessage(groupJid, { text: `❌ Não posso rebaixar membros: eu (@${myNumber}) não sou administrador deste grupo.\n\n🛡️ *Admins atuais:* ${metadata.participants.filter((p: any) => p.admin).map((p: any) => '@' + p.id.split('@')[0]).join(', ')}`, mentions: metadata.participants.filter((p: any) => p.admin).map((p: any) => p.id) }, { quoted: m });
                 return true;
             }
 
@@ -1117,10 +1172,11 @@ class GroupManagement {
 
     async isUserAdmin(groupJid: string, userJid: string): Promise<boolean> {
         const admins = await this._getGroupAdmins(groupJid);
-        return admins.includes(userJid);
+        const normUser = JidUtils.toNumeric(userJid);
+        return admins.some(a => JidUtils.toNumeric(a) === normUser);
     }
 
-    async getBlacklistInfo(groupJid: string): Promise<string> {
+    async getGroupSecurityReport(groupJid: string): Promise<string> {
         const settings = this.groupSettings[groupJid] || {};
         const muted = Object.keys(settings.mutedUsers || {}).length;
         const antilink = settings.antilink ? '✅ ATIVO' : '❌ INATIVO';
@@ -1130,7 +1186,7 @@ class GroupManagement {
             `🚫 *Silenciados:* ${muted}\n` +
             `🔗 *Anti-Link:* ${antilink}\n` +
             `🏴 *Anti-Fake:* ${antifake}\n` +
-            `⚔️ *Moderação:* Sistema Operacional`;
+            `⚔️ *Moderação:* Sistema Operacional Ativo`;
     }
 }
 

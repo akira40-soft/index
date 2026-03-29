@@ -27,6 +27,9 @@ class AudioProcessor {
         this.config = ConfigManager.getInstance();
         this.logger = logger || console;
         this.tempFolder = this.config?.TEMP_FOLDER || './temp';
+        if (!fs.existsSync(this.tempFolder)) {
+            try { fs.mkdirSync(this.tempFolder, { recursive: true }); } catch (e) { }
+        }
         this.sttCache = new Map();
         this.ttsCache = new Map();
 

@@ -67,7 +67,7 @@ class PermissionManager {
             'top': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
 
             // Comandos PÚBLICOS (requerem registro se grupo configurado)
-            'donate': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            'donate': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
             'perfil': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'profile': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'level': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
@@ -105,6 +105,23 @@ class PermissionManager {
             'curiosidade': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'enquete': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5, grupo: true },
             'poll': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5, grupo: true },
+
+            // Anime Reactions (Entretenimento)
+            'abraco': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'hug': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'beijo': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'kiss': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'cafune': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'pat': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'tapa': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'slap': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'bully': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'kill': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'happy': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'smile': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'dance': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
+            'wink': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'poke': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
 
             // Aliases e comandos adicionais alinhados com CommandHandler
             // Conta & Economia
@@ -578,7 +595,7 @@ class PermissionManager {
         const permConfig = this.commandPermissions[comando];
 
         if (!permConfig) {
-            return { allowed: false, reason: 'Comando não encontrado.' };
+            return { allowed: true, reason: 'unregistered_command' };
         }
 
         // REGRA 1: Dono SEMPRE pode tudo
@@ -611,11 +628,22 @@ class PermissionManager {
             };
         }
 
-        // REGRA 5: Verificar registro (se comando requer E grupo exige)
+        // REGRA 5: Verificar registro (se comando requer)
         if (permConfig.requiresRegistration) {
-            // Se não está em grupo, sempre requer registro
-            // Se está em grupo, verifica se grupo exige
-            const mustCheckRegistration = !isGroup || (isGroup && groupJid && this.groupRequiresRegistration(groupJid));
+            // Categorias que SEMPRE requerem registro (Economia, Jogos, Perfil)
+            const personalCategories = [
+                'perfil', 'profile', 'daily', 'diario', 'atm', 'saldo', 'balance', 'banco',
+                'transfer', 'transferir', 'pagar', 'depositar', 'sacar',
+                'ttt', 'rps', 'guess', 'forca', 'grid', 'slot', 'dado', 'moeda'
+            ];
+
+            const isPersonalCommand = personalCategories.includes(comando);
+
+            // Requer registro se: 
+            // 1. Não está em grupo (PV)
+            // 2. É um comando pessoal (Economia/Jogos)
+            // 3. O grupo ativou a exigência de registro (#requireregister on)
+            const mustCheckRegistration = !isGroup || isPersonalCommand || (isGroup && groupJid && this.groupRequiresRegistration(groupJid));
 
             if (mustCheckRegistration) {
                 const isRegistered = this.registrationSystem.isRegistered(userId);

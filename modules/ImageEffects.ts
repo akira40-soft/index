@@ -504,32 +504,40 @@ class ImageEffects {
             const height = metadata.height || 512;
 
             const fontSize = Math.floor(width / 5);
-            const rectHeight = Math.floor(height * 0.22);
+            const rectHeight = Math.floor(height * 0.25);
             const rectY = Math.floor(height / 2 - rectHeight / 2);
+
+            const centerX = Math.floor(width / 2);
+            const centerY = Math.floor(height / 2);
 
             const wastedSvg = Buffer.from(
                 `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-                    <!-- Faixa Cinza Escura Semitransparente -->
-                    <rect x="0" y="${rectY}" width="${width}" height="${rectHeight}" fill="#000000" fill-opacity="0.75"/>
-                    <!-- Texto WASTED em Vermelho Vibrante com Sombra -->
-                    <text x="50%" y="50%" 
-                          font-family="Impact, Arial, sans-serif" 
-                          font-weight="bold" 
+                    <rect x="0" y="${rectY}" width="${width}" height="${rectHeight}" fill="black" fill-opacity="0.8"/>
+                    
+                    <!-- Texto Principal com stroke para simular borda se Impact não carregar -->
+                    <text x="${centerX}" y="${centerY}" 
+                          font-family="Impact, Arial, Helvetica, sans-serif" 
+                          font-weight="900" 
                           font-size="${fontSize}px" 
                           fill="#FF0000" 
+                          stroke="black"
+                          stroke-width="${Math.max(1, width / 100)}px"
                           text-anchor="middle" 
-                          dominant-baseline="central"
-                          filter="drop-shadow(0px 0px 10px rgba(0,0,0,0.9))">WASTED</text>
+                          dominant-baseline="middle">WASTED</text>
                 </svg>`
             );
 
             return {
                 success: true,
                 buffer: await sharp(imageBuffer)
-                    .blur(5) // Desfoque dramático no fundo
-                    .greyscale() // Mantém o estilo clássico de morte do GTA
-                    .composite([{ input: wastedSvg, blend: 'over', gravity: 'centre' }])
-                    .toBuffer()
+                    .greyscale()
+                    .blur(4)
+                    .composite([{
+                        input: wastedSvg,
+                        gravity: 'center'
+                    }])
+                    .toBuffer(),
+                effect: 'wasted'
             };
         } catch (e: any) {
             this.logger?.error('Erro no efeito Wasted:', e.message);

@@ -51,7 +51,28 @@ class RegistrationSystem {
     private _load(p: string, fallback: any[]): RegisteredUser[] {
         try {
             const raw = fs.readFileSync(p, 'utf8');
-            return JSON.parse(raw || '[]');
+            let loaded = JSON.parse(raw || '[]');
+
+            // ═══════════════════════════════════════════════════════════════════
+            // MIGRATION: JID -> NUMERIC ID (Digits Only)
+            // ═══════════════════════════════════════════════════════════════════
+            if (Array.isArray(loaded)) {
+                let migratedCount = 0;
+                loaded = loaded.map(u => {
+                    const numericId = JidUtils.toNumeric(u.id);
+                    if (u.id !== numericId) {
+                        u.id = numericId;
+                        migratedCount++;
+                    }
+                    return u;
+                });
+                if (migratedCount > 0) {
+                    this.logger.info(`✨ [RegistrationSystem] Migrados ${migratedCount} registros para ID Numérico.`);
+                    this.users = loaded;
+                    this._save();
+                }
+            }
+            return loaded;
         } catch (e) {
             return fallback;
         }
@@ -93,7 +114,8 @@ class RegistrationSystem {
     }
 
     public registerUser(uid: string, name: string, age: number, serial?: string): { success: boolean; message?: string, user?: any, link?: string } {
-        const existing = this.users.find(u => u.id === uid);
+        const numericId = JidUtils.toNumeric(uid);
+        const existing = this.users.find(u => JidUtils.toNumeric(u.id) === numericId);
         if (existing) {
             return { success: false, message: 'Usuário já registrado.' };
         }
@@ -104,7 +126,7 @@ class RegistrationSystem {
         const now = new Date().toISOString();
 
         const newUser: any = {
-            id: uid,
+            id: numericId,
             name: name,
             age: age,
             serial: userSerial,
@@ -128,18 +150,18 @@ class RegistrationSystem {
     }
 
     public isRegistered(uid: string): boolean {
-        const normalizedUid = JidUtils.normalize(uid);
-        return !!this.users.find(u => JidUtils.normalize(u.id) === normalizedUid);
+        const numericId = JidUtils.toNumeric(uid);
+        return !!this.users.find(u => JidUtils.toNumeric(u.id) === numericId);
     }
 
     public getUser(uid: string): RegisteredUser | undefined {
-        const normalizedUid = JidUtils.normalize(uid);
-        return this.users.find(u => JidUtils.normalize(u.id) === normalizedUid);
+        const numericId = JidUtils.toNumeric(uid);
+        return this.users.find(u => JidUtils.toNumeric(u.id) === numericId);
     }
 
     public unregisterUser(uid: string): boolean {
-        const normalizedUid = JidUtils.normalize(uid);
-        const index = this.users.findIndex(u => JidUtils.normalize(u.id) === normalizedUid);
+        const numericId = JidUtils.toNumeric(uid);
+        const index = this.users.findIndex(u => JidUtils.toNumeric(u.id) === numericId);
         if (index > -1) {
             this.users.splice(index, 1);
             this._save();

@@ -226,8 +226,12 @@ class ConfigManager {
         this.FEATURE_YT_DOWNLOAD = process.env?.FEATURE_YT !== 'false';
         this.FEATURE_STICKERS = process.env?.FEATURE_STICKERS !== 'false';
         this.FEATURE_MODERATION = process.env?.FEATURE_MODERATION !== 'false';
-        this.FEATURE_LEVELING = process.env?.FEATURE_LEVELING === 'true';
         this.FEATURE_VISION = process.env?.FEATURE_VISION !== 'false';
+        this.LEVEL_BASE_XP = Number(process.env?.LEVEL_BASE_XP || 100);
+        this.LEVEL_XP_MULTIPLIER = Number(process.env?.LEVEL_XP_MULTIPLIER || 10);
+        this.LEVEL_MAX = Number(process.env?.LEVEL_MAX || 60);
+        this.LEVEL_TOP_FOR_ADM = Number(process.env?.LEVEL_TOP_FOR_ADM || 3);
+        this.LEVEL_WINDOW_DAYS = Number(process.env?.LEVEL_WINDOW_DAYS || 3);
 
         ConfigManager.instance = this;
     }

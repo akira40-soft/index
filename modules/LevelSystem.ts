@@ -55,7 +55,49 @@ class LevelSystem {
     _load(p: string, fallback: any) {
         try {
             const raw = fs.readFileSync(p, 'utf8');
-            return JSON.parse(raw || (Array.isArray(fallback) ? '[]' : '{}'));
+            let loaded = JSON.parse(raw || (Array.isArray(fallback) ? '[]' : '{}'));
+
+            // ═══════════════════════════════════════════════════════════════════
+            // MIGRATION: JID -> NUMERIC ID (Digits Only)
+            // ═══════════════════════════════════════════════════════════════════
+            if (Array.isArray(loaded) && p.includes('group_levels.json')) {
+                let migratedCount = 0;
+                loaded = loaded.map(r => {
+                    const numericUid = JidUtils.toNumeric(r.uid);
+                    if (r.uid !== numericUid) {
+                        r.uid = numericUid;
+                        migratedCount++;
+                    }
+                    return r;
+                });
+                if (migratedCount > 0) {
+                    this.logger.info(`✨ [LevelSystem] Migrados ${migratedCount} registros para ID Numérico.`);
+                    this._save(p, loaded);
+                }
+            } else if (!Array.isArray(loaded) && p.includes('level_adm_promotion.json')) {
+                // Migração para os dicionários de promoção
+                let migrated = false;
+                for (const gid in loaded) {
+                    const window = loaded[gid];
+                    if (window.maxLevelUsers) {
+                        window.maxLevelUsers = window.maxLevelUsers.map((u: any) => {
+                            const num = JidUtils.toNumeric(u.uid);
+                            if (u.uid !== num) { migrated = true; u.uid = num; }
+                            return u;
+                        });
+                    }
+                    if (window.promotedToADM) {
+                        window.promotedToADM = window.promotedToADM.map((u: any) => {
+                            const num = JidUtils.toNumeric(u);
+                            if (u !== num) { migrated = true; return num; }
+                            return u;
+                        });
+                    }
+                }
+                if (migrated) this._save(p, loaded);
+            }
+
+            return loaded;
         } catch (e: any) {
             return fallback;
         }
@@ -66,8 +108,8 @@ class LevelSystem {
     }
 
     getGroupRecord(gid: string, uid: string, createIfMissing: boolean = false) {
-        const normUid = JidUtils.normalize(uid);
-        const rec = this.data.find(r => r.gid === gid && JidUtils.normalize(r.uid) === normUid);
+        const normUid = JidUtils.toNumeric(uid);
+        const rec = this.data.find(r => r.gid === gid && JidUtils.toNumeric(r.uid) === normUid);
         if (rec) return rec;
         if (createIfMissing) {
             const n = { gid, uid: normUid, level: 0, xp: 0 };
@@ -79,8 +121,8 @@ class LevelSystem {
     }
 
     saveRecord(rec: any) {
-        const normUid = JidUtils.normalize(rec.uid);
-        const i = this.data.findIndex(r => r.gid === rec.gid && JidUtils.normalize(r.uid) === normUid);
+        const normUid = JidUtils.toNumeric(rec.uid);
+        const i = this.data.findIndex(r => r.gid === rec.gid && JidUtils.toNumeric(r.uid) === normUid);
         if (i === -1) {
             rec.uid = normUid;
             this.data.push(rec);
@@ -94,13 +136,17 @@ class LevelSystem {
     // Ex.: level 1 -> 110 XP, level 2 -> 240 XP, level 3 -> 390 XP...
     // Esta fórmula é mais justa e permite subir níveis mais facilmente
     requiredXp(level: number) {
+        // Usa as variáveis da config (agora com defaults no ConfigManager)
         const base = this.config.LEVEL_BASE_XP || 100;
         const multiplier = this.config.LEVEL_XP_MULTIPLIER || 10;
+
         if (level >= this.maxLevel) return Infinity;
-        // Se nível for 0, o XP necessário para o nível 1 é o baseXP para evitar 0/0
-        if (level === 0) return base;
+
         // Fórmula polinomial otimizada: (level * base) + (level^2 * multiplier)
-        return Math.floor((level * base) + (Math.pow(level, 2) * multiplier));
+        // Se nível for 0, o XP necessário para o nível 1 é o baseXP (ex: 100)
+        // Se a config falhar, garantimos que nunca retorne 0
+        const req = Math.floor((level * base) + (Math.pow(level, 2) * multiplier));
+        return Math.max(req, base);
     }
 
     awardXp(gid: string, uid: string, xpAmount: number = 10) {
@@ -151,9 +197,9 @@ class LevelSystem {
     // Auto-ADM promotion window logic
     // REGRA: Cada usuário tem APENAS uma chance em 3 dias para chegar ao nível 60
     // Se falhar, NUNCA mais poderá tentar novamente para se tornar ADM
-    registerMaxLevelUser(gid: string, uid: string, userName: string, sock: any) {
+    async registerMaxLevelUser(gid: string, uid: string, userName: string, sock: any) {
+        let normUid = JidUtils.toNumeric(uid);
         try {
-            const normUid = JidUtils.normalize(uid);
             const failedPath = path.join(this.config.DATABASE_FOLDER, 'datauser', 'level_adm_failed.json');
 
             // ═══ VERIFICA SE JÁ FALHOU ANTES ═══
@@ -162,7 +208,7 @@ class LevelSystem {
                 if (fs.existsSync(failedPath)) {
                     const failedData = JSON.parse(fs.readFileSync(failedPath, 'utf8') || '{}');
                     if (failedData[normUid] && failedData[normUid].failed === true) {
-                        const failedDate = new Date(failedData[uid].failedAt).toLocaleDateString('pt-BR');
+                        const failedDate = new Date(failedData[normUid].failedAt).toLocaleDateString('pt-BR');
                         return {
                             success: false,
                             message: `❌ Você já teve sua chance e falhou em ${failedDate}.\n\n⚠️ Não há mais tentativas disponíveis para se tornar ADM via level.`,
@@ -243,7 +289,7 @@ class LevelSystem {
             }
 
             // Adiciona usuário à lista de max level users
-            if (!window.maxLevelUsers.find((u: any) => JidUtils.normalize(u.uid) === normUid)) {
+            if (!window.maxLevelUsers.find((u: any) => JidUtils.toNumeric(u.uid) === normUid)) {
                 window.maxLevelUsers.push({
                     uid: normUid,
                     userName,
@@ -259,32 +305,54 @@ class LevelSystem {
 
             // ═══ PROMOÇÃO A ADM ═══
             if (auto && window.maxLevelUsers.length <= this.topForAdm) {
-                const position = window.maxLevelUsers.findIndex((u: any) => JidUtils.normalize(u.uid) === normUid) + 1;
-                if (position <= this.topForAdm) {
+                const positionInMaxLevel = window.maxLevelUsers.findIndex((u: any) => JidUtils.toNumeric(u.uid) === normUid) + 1;
+
+                // Se o usuário está dentro do Top 3
+                if (positionInMaxLevel > 0 && positionInMaxLevel <= this.topForAdm) {
                     try {
+                        // Verifica se este usuário já foi promovido nesta janela para evitar loops
+                        if (window.promotedToADM.includes(normUid)) {
+                            return { success: true, promoted: true, message: `✅ Você já é um Auto-ADM nesta janela (Top ${positionInMaxLevel}).` };
+                        }
+
+                        // 1. Registra a promoção nos dados
                         window.promotedToADM.push(normUid);
                         this._save(this.promoPath, this.promos);
 
-                        // Verifica se o socket está disponível antes de tentar usar
+                        // 2. Realiza a promoção técnica no WhatsApp
                         if (this._checkSocket(sock)) {
-                            // Tenta atualizar descrição com tratamento de erro
-                            sock.groupUpdateDescription(gid, `Akira Auto-ADM: ${userName} (Nível ${this.maxLevel} - Top ${position}/${this.topForAdm})`)
+                            // Promoção Real
+                            await sock.groupParticipantsUpdate(gid, [uid], 'promote')
+                                .then(() => {
+                                    this.logger.info(`✨ [LevelSystem] Usuário @${normUid} promovido a ADM via Level em ${gid}`);
+                                })
                                 .catch((err: any) => {
-                                    this.logger.warn('⚠️ [LevelSystem] Erro ao atualizar descrição:', err.message);
+                                    this.logger.error(`🚨 [LevelSystem] Falha na promoção técnica: ${err.message}`);
                                 });
-                        } else {
-                            this.logger.warn('⚠️ [LevelSystem] Socket não disponível para atualizar descrição');
+
+                            // Atualiza Descrição (Histórico)
+                            sock.groupUpdateDescription(gid, `Akira Auto-ADM: ${userName} (Nível ${this.maxLevel} - Top ${positionInMaxLevel}/${this.topForAdm})`)
+                                .catch(() => { });
+
+                            // Notifica o grupo com menção
+                            const msgPromo = `👑 *NOVO ADMINISTRADOR DETECTADO!* 👑\n\n` +
+                                `🔥 [@${normUid}] atingiu o Nível Máximo (*${this.maxLevel}*) e conquistou sua vaga no **TOP ${positionInMaxLevel}** deste grupo!\n\n` +
+                                `🛡️ *Privilégios Administrativos Concedidos.*\n\n` +
+                                `🎯 *Janela:* 3 Dias\n` +
+                                `🏆 *Vagas Restantes:* ${this.topForAdm - positionInMaxLevel}/${this.topForAdm}`;
+
+                            await sock.sendMessage(gid, { text: msgPromo, mentions: [uid] });
                         }
 
                         return {
                             success: true,
                             promoted: true,
-                            position,
-                            message: `🎉 Parabéns! Você foi promovido a ADM! (Top ${position}/${this.topForAdm})`
+                            position: positionInMaxLevel,
+                            message: `🎉 PARABÉNS! Você conquistou sua vaga como ADM! (Top ${positionInMaxLevel}/${this.topForAdm})`
                         };
                     } catch (e: any) {
                         this.logger.error('❌ [LevelSystem] Erro ao promover ADM:', e.message);
-                        return { success: false, message: '❌ Erro ao promover ADM' };
+                        return { success: false, message: '❌ Erro ao processar promoção administrativa.' };
                     }
                 }
             }
@@ -379,6 +447,31 @@ class LevelSystem {
         if (!window) return { isActive: false };
         const daysRemaining = Math.max(0, Math.ceil((window.windowEnd - Date.now()) / (24 * 60 * 60 * 1000)));
         return { isActive: true, daysRemaining, maxLevelUsers: window.maxLevelUsers, promotedToADM: window.promotedToADM, failedUsers: window.failedUsers };
+    }
+    /**
+     * Ativa/Desativa o sistema de Auto-ADM por grupo
+     */
+    public setAutoADM(gid: string, enabled: boolean): boolean {
+        try {
+            const configPath = path.join(this.config.DATABASE_FOLDER, 'datauser', 'level_adm_config.json');
+            const cfg = this._load(configPath, {});
+
+            if (!cfg[gid]) cfg[gid] = {};
+            cfg[gid].autoADMEnabled = enabled;
+            cfg[gid].updatedAt = Date.now();
+
+            this._save(configPath, cfg);
+            return true;
+        } catch (e: any) {
+            this.logger.error(`🚨 [LevelSystem] Erro ao salvar config de Auto-ADM: ${e.message}`);
+            return false;
+        }
+    }
+
+    public isAutoADMEnabled(gid: string): boolean {
+        const configPath = path.join(this.config.DATABASE_FOLDER, 'datauser', 'level_adm_config.json');
+        const cfg = this._load(configPath, {});
+        return cfg[gid]?.autoADMEnabled === true;
     }
 }
 
