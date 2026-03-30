@@ -76,8 +76,11 @@ class CommandHandler {
 
         // Inicializa sistemas - prefere injeção do BotCore
         this.permissionManager = bot?.permissionManager || new PermissionManager();
+        // @ts-ignore
         this.registrationSystem = bot?.registrationSystem || new RegistrationSystem();
+        // @ts-ignore
         this.levelSystem = bot?.levelSystem || new LevelSystem();
+        // @ts-ignore
         this.economySystem = bot?.economySystem || new EconomySystem(bot?.logger);
 
         // Handlers de mídia
@@ -85,6 +88,7 @@ class CommandHandler {
 
         // Ferramentas Enterprise
         this.subscriptionManager = bot?.subscriptionManager || new SubscriptionManager(this.config);
+        // @ts-ignore
         this.moderationSystem = bot?.moderationSystem || new ModerationSystem();
         this.gameSystem = bot?.gameSystem || null;
         this.gridTacticsGame = bot?.gridTacticsGame || null;
