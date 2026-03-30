@@ -322,11 +322,6 @@ class BotCore {
                             }
                         }
                     }
-                    // 2. Welcome
-                    if (this.groupManagement) await this.groupManagement.sendWelcomeMessage(id, participants);
-                } else if (action === 'remove') {
-                    // 3. Goodbye
-                    if (this.groupManagement) await this.groupManagement.sendGoodbyeMessage(id, participants);
                 }
 
                 if (action === 'add' && this.groupManagement && participants.length > 0) {
