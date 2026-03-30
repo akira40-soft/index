@@ -1361,16 +1361,19 @@ ${P}menu osint — Comandos OSINT avançados`,
                 return true;
             }
 
-            // Converte para imagem
-            const res = await this.mediaProcessor.convertStickerToImage(buf);
+            // Em vez de converter para imagem, rouba a figurinha regerando com addStickerMetadata
+            const outBuf = await this.mediaProcessor.addStickerMetadata(
+                buf,
+                nome.split(' ')[0], // Pack
+                'Akira-Bot V21'     // Author
+            );
 
-            if (res.sucesso && res.buffer) {
+            if (outBuf) {
                 await this.sock.sendMessage(m.key.remoteJid, {
-                    image: res.buffer,
-                    caption: `✅ Figurinha "roubada" com sucesso por ${nome} !`
+                    sticker: outBuf
                 }, { quoted: m });
             } else {
-                await this._reply(m, `❌ Erro ao converter figurinha: ${res.error || 'falha interna'} `);
+                await this._reply(m, `❌ Erro ao processar os metadados da figurinha.`);
             }
         } catch (e: any) {
             console.error('Erro em _handleTakeSticker:', e);
