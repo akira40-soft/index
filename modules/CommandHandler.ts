@@ -75,35 +75,40 @@ class CommandHandler {
         this.messageProcessor = messageProcessor || bot?.messageProcessor;
 
         // Inicializa sistemas - prefere injeção do BotCore
-        this.permissionManager = bot?.permissionManager || new PermissionManager();
+        // Inicializa sistemas - prefere injeção do BotCore
+        const RegistrationClass = (RegistrationSystem as any).default || RegistrationSystem;
+        const LevelClass = (LevelSystem as any).default || LevelSystem;
+        const EconomyClass = (EconomySystem as any).default || EconomySystem;
+        const MediaClass = (MediaProcessor as any).default || MediaProcessor;
+
+        this.permissionManager = bot?.permissionManager || new PermissionManager(this.logger, bot?.registrationSystem);
         // @ts-ignore
-        this.registrationSystem = bot?.registrationSystem || new RegistrationSystem();
+        this.registrationSystem = bot?.registrationSystem || new RegistrationClass(this.logger);
         // @ts-ignore
-        this.levelSystem = bot?.levelSystem || new LevelSystem();
+        this.levelSystem = bot?.levelSystem || new LevelClass(this.logger);
         // @ts-ignore
-        this.economySystem = bot?.economySystem || new EconomySystem(bot?.logger);
+        this.economySystem = bot?.economySystem || new EconomyClass(this.logger);
 
         // Handlers de mídia
-        this.mediaProcessor = bot?.mediaProcessor || new MediaProcessor();
+        this.mediaProcessor = bot?.mediaProcessor || new MediaClass(this.logger);
 
         // Ferramentas Enterprise
         this.subscriptionManager = bot?.subscriptionManager || new SubscriptionManager(this.config);
         // @ts-ignore
-        this.moderationSystem = bot?.moderationSystem || new ModerationSystem();
+        this.moderationSystem = bot?.moderationSystem || new ModerationSystem(this.logger);
         this.gameSystem = bot?.gameSystem || null;
         this.gridTacticsGame = bot?.gridTacticsGame || null;
 
         // Inicializa módulos dependentes de sock
         if (sock) {
             this.stickerHandler = bot?.stickerViewOnceHandler || new StickerViewOnceHandler(sock, this.config);
-            this.groupManagement = bot?.groupManagement || new GroupManagement(sock, this.config, this.moderationSystem);
-            this.userProfile = bot?.userProfile || new UserProfile(sock, this.config);
-            this.botProfile = bot?.botProfile || new BotProfile(sock, this.config);
-            this.imageEffects = bot?.imageEffects || new ImageEffects(this.config);
+            this.groupManagement = bot?.groupManagement || new GroupManagement(sock, this.config, this.moderationSystem, this.mediaProcessor, this.levelSystem);
+            this.userProfile = bot?.userProfile || new UserProfile(sock, this.logger, this.config);
+            this.botProfile = bot?.botProfile || new BotProfile(sock, this.logger, this.config);
+            this.imageEffects = bot?.imageEffects || new ImageEffects(this.logger);
             this.presenceSimulator = bot?.presenceSimulator || new PresenceSimulator(sock);
         }
 
-        this.gridTacticsGame = GridTacticsGame;
         this.logger = config?.logger || bot?.logger || console;
     }
 

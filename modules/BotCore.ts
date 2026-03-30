@@ -170,27 +170,24 @@ class BotCore {
             this.economySystem = new EconomySystem(this.logger);
 
             try {
-                this.commandHandler = new CommandHandler(this.sock, this.config, this, this.messageProcessor);
-                this.commandHandler.economySystem = this.economySystem;
-                this.logger.debug('✅ CommandHandler inicializado raiz');
-            } catch (e: any) {
-                this.logger.warn(`⚠️ ERRO CRÍTICO NO COMMAND HANDLER: ${e.message}`);
-                this.commandHandler = null;
-            }
+                // Instanciação segura para ESM/CJS (evita erro "is not a constructor")
+                const GridTacticsClass = (GridTacticsGame as any).default || GridTacticsGame;
+                const GameSystemClass = (GameSystem as any).default || GameSystem;
+                const CommandHandlerClass = (CommandHandler as any).default || CommandHandler;
 
-            try {
-                // @ts-ignore
-                this.gridTacticsGame = typeof GridTacticsGame === 'function' ? new GridTacticsGame(this.logger, this.config) : (GridTacticsGame?.default ? new GridTacticsGame.default(this.logger, this.config) : null);
-                // @ts-ignore
-                this.gameSystem = typeof GameSystem === 'function' ? new GameSystem(this.logger, this.config, this.gridTacticsGame) : (GameSystem?.default ? new GameSystem.default(this.logger, this.config, this.gridTacticsGame) : null);
+                this.gridTacticsGame = typeof GridTacticsClass === 'function' ? new GridTacticsClass(this.logger, this.config) : null;
+                this.gameSystem = typeof GameSystemClass === 'function' ? new GameSystemClass(this.logger, this.config, this.gridTacticsGame) : null;
 
+                this.commandHandler = new CommandHandlerClass(this.sock, this.config, this, this.messageProcessor);
                 if (this.commandHandler) {
+                    this.commandHandler.economySystem = this.economySystem;
                     this.commandHandler.gameSystem = this.gameSystem;
                     this.commandHandler.gridTacticsGame = this.gridTacticsGame;
+                    this.logger.debug('✅ CommandHandler inicializado (ESM Safe)');
                 }
-                this.logger.debug('✅ Componentes de Jogo inicializados');
             } catch (err: any) {
-                this.logger.warn(`⚠️ Erro ao inicializar módulos de Jogos: ${err.message}`);
+                this.logger.error(`❌ Erro crítico no CommandHandler: ${err.message}`);
+                this.commandHandler = null;
             }
 
             const poToken = this.config?.YT_PO_TOKEN;
@@ -572,7 +569,13 @@ class BotCore {
             }
 
             const resposta = resultado.resposta || 'Sem resposta.';
-            await this.presenceSimulator.simulateTyping(m.key.remoteJid, this.presenceSimulator.calculateTypingDuration(resposta));
+
+            // ⚡ OTIMIZAÇÃO: Simulação não-bloqueante
+            if (this.presenceSimulator) {
+                this.presenceSimulator.simulateTyping(m.key.remoteJid, this.presenceSimulator.calculateTypingDuration(resposta)).catch(() => { });
+                await delay(200);
+            }
+
             const opcoes = ehGrupo ? { quoted: m } : (replyInfo?.ehRespostaAoBot) ? { quoted: m } : {};
             await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
             await this.presenceSimulator.simulateTicks(m, true, false);
@@ -730,20 +733,21 @@ class BotCore {
                 }
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m);
             } else {
+                // ⚡ OTIMIZAÇÃO: Simulação não-bloqueante para reduzir latência (Ping Baixo)
                 if (this.presenceSimulator) {
-                    try {
-                        await this.presenceSimulator.simulateFullResponse(this.sock, m, resposta, false);
-                    } catch (err: any) {
-                        this.logger.error(`❌ Simulação PV falhou: ${err.message}`);
+                    const isCommand = this.messageProcessor.isCommand(texto);
+                    if (isCommand) {
+                        // Para comandos (#), apenas avisa o servidor que está 'composing' sem esperar
+                        this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid).catch(() => { });
+                    } else {
+                        // Para IA, dispara a simulação completa em background
+                        this.presenceSimulator.simulateFullResponse(this.sock, m, resposta, false).catch(() => { });
+                        await delay(200); // Pequeno fôlego para o servidor registrar o status
                     }
-                } else {
-                    try {
-                        await this.simulateTyping(m.key.remoteJid, Math.min(resposta.length * 50, 5000));
-                    } catch (e) { }
                 }
 
-                // Sem restrições: forçar o quote sempre em PVs para garantir que chega certinho e não há objeto opções silenciosamente bugado
-                const opcoes = ehGrupo ? { quoted: m } : { quoted: m };
+                // Lógica de UX: Em grupos sempre usa quote. No PV, apenas se o usuário respondeu ao bot.
+                const opcoes = ehGrupo ? { quoted: m } : (replyInfo?.ehRespostaAoBot ? { quoted: m } : {});
 
                 this.logger.info(`🚀 [SENDING MSG] PV/Grupo Dispatch...`);
                 try {
@@ -832,19 +836,22 @@ class BotCore {
         const textoLower = (texto || '').toLowerCase();
         const botName = (this.config.BOT_NAME || 'akira').toLowerCase();
 
-        // 1. Responde se for menção direta ao bot (@244...)
+        // 1. Responde se for menção direta ao bot (marcado @244...)
         if (this.messageProcessor.isBotMentioned(m)) return true;
+
+        // 1.1 Verificação extra de menção por texto (@número ou número)
+        const myNum = this.sock?.user?.id?.split(':')[0];
+        if (myNum && (texto.includes(`@${myNum}`) || texto.includes(myNum))) return true;
 
         // 2. Responde se for resposta (reply) a uma mensagem do próprio bot
         if (replyInfo?.ehRespostaAoBot) return true;
 
-        // 3. Responde se o nome do bot for citado (ex: "Akira, como vai?")
-        if (textoLower.includes(botName)) return true;
+        // 3. Responde se o nome do bot for citado explicitamente
+        if (textoLower.includes(botName) || textoLower.includes('akira')) return true;
 
         // 4. Se for resposta a outra pessoa no grupo, ignora
         if (replyInfo?.isReply && !replyInfo?.ehRespostaAoBot) return false;
 
-        // Caso contrário, ignora papo de terceiros no grupo
         return false;
     }
 

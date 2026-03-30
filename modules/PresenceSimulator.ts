@@ -14,9 +14,9 @@ class PresenceSimulator {
     public sock: any;
     public logger: any;
 
-    constructor(sock: any, logger: any = null) {
+    constructor(sock: any) {
         this.sock = sock;
-        this.logger = logger || console;
+        this.logger = console;
     }
 
     /**
@@ -37,20 +37,24 @@ class PresenceSimulator {
      * Envia atualização de presença de forma segura, verificando se o socket está ativo
      */
     async safeSendPresenceUpdate(type: any, jid: string) {
-        const maxRetries = 3;
+        if (!jid || !this.sock) return false;
 
+        const maxRetries = 2;
         for (let i = 0; i < maxRetries; i++) {
             try {
-                if (this.sock) {
-                    await this.sock.sendPresenceUpdate(type, jid);
-                    return true;
+                // Verifica se o socket está realmente aberto (readyState 1 = OPEN)
+                if (this.sock?.ws?.readyState !== 1) {
+                    this.logger.warn(`⚠️ [PRESENCE] Socket não está OPEN (Estado: ${this.sock?.ws?.readyState})`);
+                    return false;
                 }
+
+                await this.sock.sendPresenceUpdate(type, jid);
+                return true;
             } catch (e: any) {
-                // Se falhar, espera um pouco e tenta de novo (pode ser reconexão rápida)
-                if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 1000));
+                this.logger.warn(`⚠️ [PRESENCE] Tentativa ${i + 1} falhou para ${jid}: ${e.message}`);
+                if (i < maxRetries - 1) await delay(1000);
             }
         }
-        // Falha silenciosa para não quebrar o fluxo chamador
         return false;
     }
 
@@ -70,7 +74,7 @@ class PresenceSimulator {
 
             // Step 2: Começar a digitar
             await this.safeSendPresenceUpdate('composing', jid);
-            this.logger.info(`⌨️  [DIGITANDO] Simulando digitação por ${(durationMs / 1000).toFixed(1)}s...`);
+            this.logger.log(`⌨️  [DIGITANDO] Simulando digitação por ${(durationMs / 1000).toFixed(1)}s...`);
 
             // Step 3: Aguardar conforme tamanho da mensagem
             await delay(durationMs);
@@ -81,7 +85,7 @@ class PresenceSimulator {
 
             // Step 5: Voltar ao normal
             await this.safeSendPresenceUpdate('available', jid);
-            this.logger.info('✅ [PRONTO] Digitação simulada concluída');
+            this.logger.log('✅ [PRONTO] Digitação simulada concluída');
 
             return true;
         } catch (e: any) {
@@ -98,7 +102,7 @@ class PresenceSimulator {
      */
     async simulateRecording(jid: string, durationMs: number = 2000) {
         try {
-            this.logger.info(`🎤 [GRAVANDO] Preparando áudio por ${(durationMs / 1000).toFixed(1)}s...`);
+            this.logger.log(`🎤 [GRAVANDO] Preparando áudio por ${(durationMs / 1000).toFixed(1)}s...`);
 
             // Step 1: Começar a "gravar"
             await this.safeSendPresenceUpdate('recording', jid);
@@ -109,7 +113,7 @@ class PresenceSimulator {
             // Step 3: Concluir gravação
             await this.safeSendPresenceUpdate('paused', jid);
 
-            this.logger.info('✅ [PRONTO] Áudio preparado para envio');
+            this.logger.log('✅ [PRONTO] Áudio preparado para envio');
 
             return true;
         } catch (e: any) {
@@ -144,8 +148,9 @@ class PresenceSimulator {
                 if (!wasActivated) {
                     // Não foi ativada: Apenas um tick (entregue)
                     try {
-                        await this.sock.sendReadReceipt(jid, participant, [messageId]);
-                        this.logger.info('✓ [ENTREGUE] Grupo');
+                        // EXPLICITAR 'delivered' PARA 2 TICKS CINZAS
+                        await this.sock.sendReadReceipt(jid, participant, [messageId], 'delivered');
+                        this.logger.log('✓✓ [ENTREGUE] Grupo');
                         return true;
                     } catch (err) {
                         return false;
@@ -154,7 +159,7 @@ class PresenceSimulator {
                     // Foi ativada: Dois ticks azuis (lido)
                     try {
                         await this.sock.readMessages([m.key]);
-                        this.logger.info('✓✓ [LIDO] Grupo');
+                        this.logger.log('✓✓ [LIDO] Grupo');
                         return true;
                     } catch (err) {
                         return false;
@@ -165,15 +170,16 @@ class PresenceSimulator {
                 if (wasActivated || isAudio) {
                     try {
                         await this.sock.readMessages([m.key]);
-                        this.logger.info(isAudio ? '▶️ [REPRODUZIDO] PV' : '✓✓ [LIDO] PV');
+                        this.logger.log(isAudio ? '▶️ [REPRODUZIDO] PV' : '✓✓ [LIDO] PV');
                         return true;
                     } catch (err) {
                         return false;
                     }
                 } else {
                     try {
-                        await this.sock.sendReadReceipt(jid, participant, [messageId]);
-                        this.logger.info('✓ [ENTREGUE] PV');
+                        // EXPLICITAR 'delivered' PARA 2 TICKS CINZAS
+                        await this.sock.sendReadReceipt(jid, participant, [messageId], 'delivered');
+                        this.logger.log('✓✓ [ENTREGUE] PV');
                         return true;
                     } catch (err) {
                         return false;
@@ -192,7 +198,7 @@ class PresenceSimulator {
         try {
             if (!this.sock) return false;
             await this.sock.readMessages([m.key]);
-            this.logger.info('✓✓ [LIDO] Mensagem marcada');
+            this.logger.log('✓✓ [LIDO] Mensagem marcada');
             return true;
         } catch (e: any) {
             return false;
@@ -210,7 +216,12 @@ class PresenceSimulator {
 
             if (isGroup) {
                 try {
-                    await this.sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id]);
+                    await this.sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id], 'delivered');
+                    await delay(300);
+                } catch (e) { }
+            } else {
+                try {
+                    await this.sock.sendReadReceipt(m.key.remoteJid, undefined, [m.key.id], 'delivered');
                     await delay(300);
                 } catch (e) { }
             }
@@ -244,9 +255,11 @@ class PresenceSimulator {
             const jid = m.key.remoteJid;
             const isGroup = String(jid || '').endsWith('@g.us');
 
-            // Step 1: Marcar como entregue (PV e Grupos)
-            await this.simulateTicks(m, false, false);
-            await delay(300);
+            // Step 1: Marcar como entregue (em grupos)
+            if (isGroup) {
+                await this.simulateTicks(m, false, false);
+                await delay(300);
+            }
 
             // Step 2: Simular digitação ou gravação
             if (isAudio) {
@@ -270,21 +283,21 @@ class PresenceSimulator {
 
     /**
      * Calcula duração realista de digitação baseado no tamanho da resposta
-     * Fórmula: 30-50ms por caractere, mínimo 1s, máximo 15s
+     * Fórmula: 20-30ms por caractere, mínimo 500ms, máximo 5s
      */
-    calculateTypingDuration(text: string, minMs: number = 500, maxMs: number = 8000) {
+    calculateTypingDuration(text: string, minMs: number = 500, maxMs: number = 5000) {
         if (!text) return minMs;
-        const estimatedMs = Math.max(text.length * 30, minMs);
+        const estimatedMs = Math.max(text.length * 25, minMs);
         return Math.min(estimatedMs, maxMs);
     }
 
     /**
      * Calcula duração realista de gravação de áudio
-     * Fórmula: 100ms por 10 caracteres, mínimo 2s, máximo 10s
+     * Fórmula: 80ms por 10 caracteres, mínimo 1s, máximo 6s
      */
-    calculateRecordingDuration(text: string, minMs: number = 500, maxMs: number = 2500) {
+    calculateRecordingDuration(text: string, minMs: number = 1000, maxMs: number = 6000) {
         if (!text) return minMs;
-        const estimatedMs = Math.max((text.length / 10) * 40, minMs);
+        const estimatedMs = Math.max((text.length / 10) * 80, minMs);
         return Math.min(estimatedMs, maxMs);
     }
 }

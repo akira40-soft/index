@@ -1,4 +1,3 @@
-/// <reference path="./declarations.d.ts" />
 /**
  * ═══════════════════════════════════════════════════════════════════════
  * CLASSE: MediaProcessor
@@ -65,13 +64,10 @@ class MediaProcessor {
      */
     private _findCookiePath(): string {
         const possiblePaths = [
-            this.config?.YT_COOKIES_PATH,
             './cookies.txt',
-            './cookie.txt',
             '/app/cookies.txt',
-            '/app/cookie.txt',
             './youtube_cookies.txt',
-            '/tmp/akira_data/cookies/youtube_cookies.txt',
+            path.join(this.config.DATABASE_FOLDER || './database', 'cookies', 'youtube_cookies.txt'),
             process.env.YT_COOKIES_PATH
         ].filter(Boolean);
 
@@ -88,77 +84,49 @@ class MediaProcessor {
      * Constrói o comando yt-dlp seguindo as NORMAS TÉCNICAS de 2026
      * Usa Deno como runtime JS para decifrar assinaturas complexas (SABR/DPI)
      */
-    private _buildYtdlpCommand(
-        url: string,
-        options: {
-            type: 'audio' | 'video' | 'json',
-            output?: string,
-            isSearch?: boolean,
-            clientOverride?: string,
-            userAgent?: string,
-            useCookies?: boolean // Permite desativar cookies por tentativa
-        }
-    ): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, clientOverride?: string }): string {
         const cookiePath = this._findCookiePath();
-        // Cookies OPCIONAIS por tentativa - cookies de conta + IP datacenter = bloqueio
-        const cookieArg = (options.useCookies !== false && cookiePath) ? `--cookies "${cookiePath}"` : '';
+        const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const poToken = this.config?.YT_PO_TOKEN;
 
-        // FORÇAR RUNTIME JS (Essencial para resolver assinaturas no YouTube V3/2026)
-        // No Railway/Docker, o binário 'node' sempre está no PATH.
-        const jsRuntime = '--js-runtime node';
+        // Padrão Industrial: Se houver Deno, use-o. Caso contrário, deixa o yt-dlp decidir.
+        const jsRuntime = fs.existsSync('/usr/local/bin/deno') || fs.existsSync('/root/.deno/bin/deno') ? '--js-runtime deno' : '';
 
-        const clients = options.clientOverride || 'android,ios,web';
+        // Clientes normatizados em ordem de prioridade
+        const clients = options.clientOverride || 'android_vr,ios,android,web_embedded,tv,web';
 
-        // SEM formats=missing_pot quando não temos POT - causa bugs de formato
-        let extractorArgs = `youtube:player_client=${clients};formats=missing_pot`;
-        if (poToken) {
-            extractorArgs += `;po_token=web+${poToken}`;
-        }
-        // Gambiarra para vídeos que forçam SABR
-        extractorArgs += ';skip=hls,dash';
-
-        const ua = options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+        let extractorArgs = `youtube:player_client=${clients}`;
+        if (poToken) extractorArgs += `;po_token=web+${poToken}`;
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
             jsRuntime,
-            '--remote-components ejs:github', // GAMBIARRA CRUCIAL
-            '--cache-dir "/tmp/yt-dlp-cache"',
+            '--force-ipv4',
             '--no-check-certificates',
-            `--user-agent "${ua}"`,
-            '--add-header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"',
-            '--add-header "Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"',
-            '--add-header "Sec-Ch-Ua: \'Not A(Brand\';v=\'8\', \'Chromium\';v=\'134\', \'Google Chrome\';v=\'134\'"',
-            '--add-header "Sec-Ch-Ua-Mobile: ?0"',
-            '--add-header "Sec-Ch-Ua-Platform: \'Windows\'"',
-            '--add-header "Sec-Fetch-Dest: document"',
-            '--add-header "Sec-Fetch-Mode: navigate"',
-            '--add-header "Sec-Fetch-Site: cross-site"',
-            '--add-header "Upgrade-Insecure-Requests: 1"',
-            options.type === 'video' ? '--allow-unplayable-formats' : '',
+            '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"',
+            '--add-header "Accept-Language:en-US,en;q=0.9"',
             '--ignore-config',
+            '--no-warnings',
             '--no-playlist',
             '--geo-bypass',
-            '--socket-timeout 45',
-            '--retries 5',
-            '--buffer-size 1M',
-            '--verbose'
+            '--socket-timeout 20',
+            '--retries 2'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Tentativa de melhor áudio, com fallback para o formato mais comum (140)
-            actionFlags = `-f "ba/ba*[asr=44100]/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // ba/b: Tenta pegar só o áudio. Se não conseguir, baixa o melhor vídeo+áudio e extrai
+            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // GAMBIARRA DE FORMATO: Tenta 720p, depois 480p, e por fim o ITAG 18 (360p mp4) que quase nunca falha
-            actionFlags = `-f "bv*[height<=720]+ba/b[height<=720] / 18 / b[height<=720]" --merge-output-format mp4 -o "${options.output}"`;
+            // SEM STRING DE FORMATO (-f): Deixa o yt-dlp usar o padrão oficial (bv*+ba/b)
+            // Apenas garantimos que o container final seja MP4 (compatível com WhatsApp)
+            // e forçamos o re-encode de áudio se for muito fora do padrão, mas "--merge-output-format" dá conta
+            actionFlags = `--merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
-        // Log do comando completo para debug (sem mostrar cookies)
         return `yt-dlp ${cookieArg} ${bypassFlags} ${actionFlags} "${target}"`;
     }
 
@@ -182,21 +150,16 @@ class MediaProcessor {
             const cookiePath = this._findCookiePath();
 
             // ================================================================
-            // ESTRATÉGIA ANTI-DATACENTER S/ API: Uso de clientes mobile nativos
-            // Aplicativos iOS e Android não exigem verificação JS/Login pesada
-            // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
+            // GAMBIARRAS ANTI-BLOQUEIO: Rotação Pura de Clientes (Sem Format Override)
+            // O yt-dlp fará sua mágica nativa para encontrar o melhor áudio
             // ================================================================
             const tentativas = [
-                // 1. Android VR Nativo (Mais resiliente a datacenters)
-                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
-                // 2. Client TV (Estável para áudio)
-                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 200, useCookies: true },
-                // 3. Android Nativo (Com Agent simulado)
-                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 400, useCookies: false },
-                // 4. iOS Nativo (Com Cookie para Bypass)
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 600, useCookies: true },
-                // 5. Web Safari c/ Cookies (Último recurso yt-dlp)
-                { cliente: 'web_safari', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15', sleepMs: 800, useCookies: true }
+                { cliente: 'android_vr', sleepMs: 0 },
+                { cliente: 'ios', sleepMs: 1500 },
+                { cliente: 'android', sleepMs: 2000 },
+                { cliente: 'web_embedded', sleepMs: 2500 },
+                { cliente: 'tv', sleepMs: 3000 },
+                { cliente: 'ios,android_vr,web,tv', sleepMs: 3500 } // Super-combo
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -204,19 +167,17 @@ class MediaProcessor {
                 const t = tentativas[i];
                 if (t.sleepMs > 0) await new Promise(r => setTimeout(r, t.sleepMs));
 
-                this.logger?.info(`[AUDIO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente} | Cookies: ${t.useCookies ? 'SIM' : 'NAO'}`);
+                this.logger?.info(`[ÁUDIO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente}`);
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'audio',
                     output: outputPath,
-                    clientOverride: t.cliente,
-                    userAgent: t.ua,
-                    useCookies: t.useCookies
+                    clientOverride: t.cliente
                 });
                 try {
                     await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
                 } catch (e: any) {
-                    const fullErr = e.stderr || e.message || '';
-                    this.logger?.warn(`⚠️ [yt-dlp ${t.cliente}] FALHOU. Comando: \n${cmd}\n\n=== LOG DETALHADO ERROR ===\n${fullErr}\n==========================\n`);
+                    const msg = (e.stderr || e.message || '').split('\n')[0];
+                    this.logger?.warn(`⚠️ [${t.cliente}] ${msg.substring(0, 100)}`);
                 }
             }
 
@@ -226,7 +187,7 @@ class MediaProcessor {
                 return { sucesso: true, buffer, metadata };
             }
 
-            // ÚLTIMA INSTÂNCIA: ytdl-core (Mais estável que APIs de terceiros para o Railway)
+            // Último recurso: ytdl-core
             this.logger?.warn('⚠️ [LAST RESORT] ytdl-core...');
             return await this._downloadWithYtdlCore(finalUrl, 'audio', metadata);
 
@@ -243,43 +204,28 @@ class MediaProcessor {
      */
     async downloadYouTubeVideo(url: string, quality: string = '720'): Promise<{ sucesso: boolean; buffer?: Buffer; error?: string; metadata?: any }> {
         try {
-            // Normaliza URL de Shorts para o formato padrão
-            // YouTube Shorts (/shorts/ID) às vezes é tratado diferente pelo yt-dlp
-            const normalizeUrl = (u: string) => {
-                const shortsMatch = u.match(/youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/);
-                if (shortsMatch) return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
-                return u;
-            };
-            const normalizedUrl = normalizeUrl(url);
-            if (normalizedUrl !== url) this.logger?.info(`🔄 Short detectado! Normalizado: ${normalizedUrl}`);
+            this.logger?.info(`🎥 Download vídeo: ${url} (qualidade: ${quality})`);
 
-            this.logger?.info(`🎥 Download vídeo: ${normalizedUrl} (qualidade: ${quality})`);
-
-            const metadata = await this._getYouTubeMetadataSimple(normalizedUrl);
+            const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
-                if (normalizedUrl.startsWith('http')) return await this._downloadWithYtdlCore(normalizedUrl, 'video');
+                if (url.startsWith('http')) return await this._downloadWithYtdlCore(url, 'video');
                 return { sucesso: false, error: 'Metadados não encontrados.' };
             }
 
-            const finalUrl = metadata.url || normalizedUrl;
+            const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
             // ================================================================
-            // ESTRATÉGIA ANTI-DATACENTER S/ API: Uso de clientes mobile nativos
-            // Aplicativos iOS e Android não exigem verificação JS/Login pesada
-            // e ignoram a maioria dos blocos "Sign in to confirm you're not a bot"
+            // GAMBIARRAS ANTI-BLOQUEIO: Rotação Pura de Clientes (Sem Format Override)
+            // O yt-dlp fará a seleção nativa e juntará tudo em MP4
             // ================================================================
             const tentativas = [
-                // 1. Android VR (Excelente para bypass em datacenter)
-                { cliente: 'android_vr', ua: 'com.google.android.apps.youtube.vr/1.60.10 (Linux; U; Android 15; pt_BR)', sleepMs: 0, useCookies: false },
-                // 2. Client TV (Geralmente tem payloads de vídeo mais limpos e funcionou no áudio)
-                { cliente: 'tv', ua: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/8.0 TV Safari/538.1', sleepMs: 400, useCookies: true },
-                // 3. Web Nativo (Bom para resolver assinaturas com cookies)
-                { cliente: 'web', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', sleepMs: 800, useCookies: true },
-                // 4. App iOS Nativo (NUNCA usar cookies aqui, causa skip)
-                { cliente: 'ios', ua: 'com.google.ios.youtube/19.45.2 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X; pt_BR)', sleepMs: 1200, useCookies: false },
-                // 5. App Android Nativo (Com Agent simulado)
-                { cliente: 'android', ua: 'com.google.android.youtube/19.45.36 (Linux; U; Android 15; pt_BR)', sleepMs: 1600, useCookies: true }
+                { cliente: 'android_vr', sleepMs: 0 },
+                { cliente: 'ios', sleepMs: 1500 },
+                { cliente: 'android', sleepMs: 2000 },
+                { cliente: 'web_embedded', sleepMs: 2500 },
+                { cliente: 'tv', sleepMs: 3000 },
+                { cliente: 'ios,android_vr,web,mweb', sleepMs: 3500 } // Super-combo final
             ];
 
             for (let i = 0; i < tentativas.length; i++) {
@@ -287,19 +233,17 @@ class MediaProcessor {
                 const t = tentativas[i];
                 if (t.sleepMs > 0) await new Promise(r => setTimeout(r, t.sleepMs));
 
-                this.logger?.info(`[VÍDEO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente} | Cookies: ${t.useCookies ? 'SIM' : 'NAO'}`);
+                this.logger?.info(`[VÍDEO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente}`);
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'video',
                     output: outputPath,
-                    clientOverride: t.cliente,
-                    userAgent: t.ua,
-                    useCookies: t.useCookies
+                    clientOverride: t.cliente
                 });
                 try {
                     await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
                 } catch (e: any) {
-                    const fullErr = e.stderr || e.message || '';
-                    this.logger?.warn(`⚠️ [yt-dlp ${t.cliente}] FALHOU. Comando: \n${cmd}\n\n=== LOG DETALHADO ERROR ===\n${fullErr}\n==========================\n`);
+                    const msg = (e.stderr || e.message || '').split('\n')[0];
+                    this.logger?.warn(`⚠️ [${t.cliente}] ${msg.substring(0, 100)}`);
                 }
             }
 
@@ -309,7 +253,7 @@ class MediaProcessor {
                 return { sucesso: true, buffer, metadata };
             }
 
-            // ÚLTIMA INSTÂNCIA: ytdl-core
+            // Último recurso: ytdl-core
             this.logger?.warn('⚠️ [LAST RESORT] ytdl-core...');
             return await this._downloadWithYtdlCore(finalUrl, 'video', metadata);
 
@@ -354,7 +298,23 @@ class MediaProcessor {
             this.logger?.info(`🔍 Extraindo metadados para video ID: ${videoId || '(URL sem ID)'}`);
         }
 
-        // PRIORIDADE 1: yt-dlp (busca ou URL)
+        // PRIORIDADE 1: Invidious API (direto pelo ID, se temos o ID)
+        if (videoId) {
+            const invidiousResult = await this._getMetadataFromInvidious(videoId);
+            if (invidiousResult.sucesso) {
+                this.logger?.info(`✅ Metadados via Invidious: ${invidiousResult.titulo}`);
+                return { ...invidiousResult, videoId };
+            }
+
+            // PRIORIDADE 2: Piped API
+            const pipedResult = await this._getMetadataFromPiped(videoId);
+            if (pipedResult.sucesso) {
+                this.logger?.info(`✅ Metadados via Piped: ${pipedResult.titulo}`);
+                return { ...pipedResult, videoId };
+            }
+        }
+
+        // PRIORIDADE 3: yt-dlp (busca ou URL)
         const commands = [
             this._buildYtdlpCommand(url, { type: 'json', isSearch }),
             `yt-dlp --dump-json --no-download ${isSearch ? `ytsearch1:${url}` : url}`
@@ -467,6 +427,419 @@ class MediaProcessor {
         return { sucesso: false };
     }
 
+    /**
+     * Obtém metadados via Invidious API
+     */
+    private async _getMetadataFromInvidious(videoId: string): Promise<any> {
+        // Instâncias Invidious VERIFICADAS e ATIVAS (Março 2026)
+        const invidiousInstances = [
+            'https://yewtu.be',
+            'https://inv.nadeko.net',
+            'https://invidious.flokinet.to',
+            'https://yt.artemislena.eu',
+            'https://invidious.privacydev.net',
+            'https://invidious.nerdvpn.de',
+            'https://invidious.v0l.io'
+        ];
+
+        for (const instance of invidiousInstances) {
+            try {
+                const response = await axios.get(`${instance}/api/v1/videos/${videoId}`, {
+                    timeout: 10000,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+
+                if (response.data) {
+                    const data = response.data;
+                    return {
+                        sucesso: true,
+                        titulo: data.title || 'Título desconhecido',
+                        canal: data.author || 'Canal desconhecido',
+                        duracao: data.lengthSeconds || 0,
+                        duracaoFormatada: this._formatDuration(data.lengthSeconds || 0),
+                        thumbnail: data.thumbnails?.[data.thumbnails?.length - 1]?.url || '',
+                        url: `https://youtube.com/watch?v=${videoId}`,
+                        visualizacoes: this._formatStats(data.viewCount),
+                        curtidas: this._formatStats(data.likeCount),
+                        dataPublicacao: data.publishedText || 'N/A'
+                    };
+                }
+            } catch (err: any) {
+                this.logger?.debug(`⚠️ Invidious ${instance} falhou: ${err.message.substring(0, 30)}`);
+            }
+        }
+
+        return { sucesso: false, error: 'Todas as instâncias Invidious falharam' };
+    }
+
+    /**
+     * Obtém metadados via Piped API
+     */
+    private async _getMetadataFromPiped(videoId: string): Promise<any> {
+        const pipedInstances = [
+            'https://pipedapi.kavin.rocks',
+            'https://pipedapi.tokhmi.xyz',
+            'https://pipedapi.syncpundit.io',
+            'https://api.piped.projectsegfau.lt',
+            'https://watchapi.whatever.social'
+        ];
+
+        for (const instance of pipedInstances) {
+            try {
+                const response = await axios.get(`${instance}/streams/${videoId}`, {
+                    timeout: 10000,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+
+                if (response.data) {
+                    const data = response.data;
+                    return {
+                        sucesso: true,
+                        titulo: data.title || 'Título desconhecido',
+                        canal: data.uploader || 'Canal desconhecido',
+                        duracao: data.duration || 0,
+                        duracaoFormatada: this._formatDuration(data.duration || 0),
+                        thumbnail: data.thumbnailUrl || '',
+                        url: `https://youtube.com/watch?v=${videoId}`,
+                        visualizacoes: this._formatStats(data.views),
+                        curtidas: this._formatStats(data.likes),
+                        dataPublicacao: data.uploadDate || 'N/A'
+                    };
+                }
+            } catch (err: any) {
+                this.logger?.debug(`⚠️ Piped ${instance} falhou: ${err.message?.substring(0, 30)}`);
+            }
+        }
+
+        return { sucesso: false, error: 'Todas as instâncias Piped falharam' };
+    }
+
+    /**
+     * Baixa o stream de áudio DIRETAMENTE via Piped API
+     * Usa curl como subprocess (não via Node.js puro) para melhor compatibilidade
+     * e bypass de limitações da camada HTTP do Node.js
+     */
+    private async _downloadStreamFromPiped(videoId: string, outputPath: string): Promise<{ sucesso: boolean; error?: string }> {
+        if (!videoId) {
+            return { sucesso: false, error: 'videoId não pode ser vazio' };
+        }
+
+        // Instâncias Piped VERIFICADAS (Março 2026)
+        const pipedInstances = [
+            'https://pipedapi.kavin.rocks',
+            'https://pipedapi.tokhmi.xyz',
+            'https://pipedapi.syncpundit.io',
+            'https://api.piped.projectsegfau.lt',
+            'https://watchapi.whatever.social'
+        ];
+
+        for (const instance of pipedInstances) {
+            try {
+                this.logger?.info(`🌊 Piped stream: ${instance}/streams/${videoId}`);
+                const response = await axios.get(`${instance}/streams/${videoId}`, {
+                    timeout: 15000,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AkiraBot/1.0)' }
+                });
+
+                const data = response.data;
+                let streamUrl: string | null = null;
+                let mimeType = 'audio/webm';
+
+                if (data.audioStreams && data.audioStreams.length > 0) {
+                    const sorted = [...data.audioStreams].sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+                    const best = sorted.find((s: any) => s.url);
+                    streamUrl = best?.url || null;
+                    mimeType = best?.mimeType || 'audio/webm';
+                }
+
+                if (!streamUrl) {
+                    this.logger?.warn(`⚠️ Piped ${instance}: sem URL de stream de áudio`);
+                    continue;
+                }
+
+                // Determina extensão pelo MIME type
+                const rawExt = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                const rawPath = outputPath.replace('.mp3', `.${rawExt}`);
+
+                // ════════════════════════════════════════════════════
+                // Usa CURL como subprocess para download (não via Node)
+                // Isso bypassa limitações do Node.js HTTP e é mais robusto
+                // ════════════════════════════════════════════════════
+                this.logger?.info(`📥 Baixando via curl: ${streamUrl.substring(0, 60)}...`);
+                const curlCmd = `curl -L -s --max-time 300 --retry 3 \
+                    -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+                    -H "Referer: https://www.youtube.com/" \
+                    -o "${rawPath}" \
+                    "${streamUrl}"`;
+
+                await execAsync(curlCmd, { timeout: 320000, maxBuffer: 500 * 1024 * 1024 });
+
+                if (!fs.existsSync(rawPath) || fs.statSync(rawPath).size < 1000) {
+                    this.logger?.warn(`⚠️ curl baixou arquivo vazio ou inválido`);
+                    continue;
+                }
+
+                // Converter para MP3 via ffmpeg
+                this.logger?.info(`🎵 Convertendo para MP3 via ffmpeg...`);
+                await new Promise<void>((resolve, reject) => {
+                    ffmpeg(rawPath)
+                        .toFormat('mp3')
+                        .audioCodec('libmp3lame')
+                        .audioBitrate('192k')
+                        .on('end', () => resolve())
+                        .on('error', (err: Error) => reject(err))
+                        .save(outputPath);
+                });
+
+                await this.cleanupFile(rawPath);
+                this.logger?.info(`✅ Piped + curl download concluído!`);
+                return { sucesso: true };
+
+            } catch (err: any) {
+                this.logger?.warn(`⚠️ Piped stream ${instance} falhou: ${err.message?.substring(0, 60)}`);
+            }
+        }
+
+        return { sucesso: false, error: 'Todas as instâncias Piped falharam no stream' };
+    }
+
+    /**
+     * Baixa o stream de vídeo DIRETAMENTE via Piped API
+     * Usa curl como subprocess para garantir estabilidade no download
+     */
+    private async _downloadVideoStreamFromPiped(videoId: string, outputPath: string, targetQuality: string = '720'): Promise<{ sucesso: boolean; error?: string }> {
+        if (!videoId) {
+            return { sucesso: false, error: 'videoId não pode ser vazio' };
+        }
+
+        // Instâncias Piped VERIFICADAS (Março 2026)
+        const pipedInstances = [
+            'https://pipedapi.kavin.rocks',
+            'https://pipedapi.tokhmi.xyz',
+            'https://pipedapi.syncpundit.io',
+            'https://api.piped.projectsegfau.lt',
+            'https://watchapi.whatever.social'
+        ];
+
+        for (const instance of pipedInstances) {
+            try {
+                this.logger?.info(`🌊 Piped VÍDEO stream: ${instance}/streams/${videoId}`);
+                const response = await axios.get(`${instance}/streams/${videoId}`, {
+                    timeout: 15000,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AkiraBot/1.0)' }
+                });
+
+                const data = response.data;
+                let videoUrl: string | null = null;
+                let audioUrl: string | null = null;
+                let needsMuxing = false;
+
+                if (data.videoStreams && data.videoStreams.length > 0) {
+                    const targetQualNum = parseInt(targetQuality) || 360;
+
+                    const validStreams = data.videoStreams.filter((s: any) => s.quality !== 'auto');
+
+                    if (validStreams.length > 0) {
+                        const sorted = validStreams.sort((a: any, b: any) => {
+                            const qA = parseInt(a.quality.replace('p', '')) || 0;
+                            const qB = parseInt(b.quality.replace('p', '')) || 0;
+                            if (qA <= targetQualNum && qB > targetQualNum) return -1;
+                            if (qB <= targetQualNum && qA > targetQualNum) return 1;
+                            return qB - qA;
+                        });
+
+                        const selectedVideo = sorted[0];
+                        videoUrl = selectedVideo?.url || null;
+                        needsMuxing = selectedVideo?.videoOnly === true;
+                    }
+                }
+
+                if (!videoUrl) {
+                    this.logger?.warn(`⚠️ Piped ${instance}: sem URL de stream VÍDEO`);
+                    continue;
+                }
+
+                if (needsMuxing && data.audioStreams && data.audioStreams.length > 0) {
+                    const sortedAudio = [...data.audioStreams].sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+                    audioUrl = sortedAudio[0]?.url || null;
+                }
+
+                if (needsMuxing && !audioUrl) {
+                    this.logger?.warn(`⚠️ Piped ${instance} precisa de muxing mas não tem stream de áudio`);
+                    continue;
+                }
+
+                this.logger?.info(`📥 Baixando VÍDEO via curl (${needsMuxing ? 'Muxing: Video+Audio' : 'Muxed direto'})...`);
+
+                if (needsMuxing) {
+                    const tempVideo = outputPath.replace('.mp4', '_v.mp4');
+                    const tempAudio = outputPath.replace('.mp4', '_a.m4a');
+
+                    const curlVidCmd = `curl -L -s --max-time 300 --retry 3 -H "User-Agent: Mozilla/5.0" -H "Referer: https://www.youtube.com/" -o "${tempVideo}" "${videoUrl}"`;
+                    await execAsync(curlVidCmd, { timeout: 320000, maxBuffer: 500 * 1024 * 1024 });
+
+                    const curlAudCmd = `curl -L -s --max-time 300 --retry 3 -H "User-Agent: Mozilla/5.0" -H "Referer: https://www.youtube.com/" -o "${tempAudio}" "${audioUrl}"`;
+                    await execAsync(curlAudCmd, { timeout: 320000, maxBuffer: 500 * 1024 * 1024 });
+
+                    if (!fs.existsSync(tempVideo) || !fs.existsSync(tempAudio)) {
+                        this.logger?.warn(`⚠️ Erro ao baixar arquivos temporários para Muxing no ${instance}`);
+                        continue;
+                    }
+
+                    this.logger?.info(`🎵 Muxing Áudio e Vídeo via ffmpeg...`);
+                    await new Promise<void>((resolve, reject) => {
+                        ffmpeg()
+                            .input(tempVideo)
+                            .input(tempAudio)
+                            .outputOptions(['-c:v copy', '-c:a aac'])
+                            .on('end', () => resolve())
+                            .on('error', (err: Error) => reject(err))
+                            .save(outputPath);
+                    });
+
+                    await this.cleanupFile(tempVideo);
+                    await this.cleanupFile(tempAudio);
+                } else {
+                    const curlCmd = `curl -L -s --max-time 300 --retry 3 -H "User-Agent: Mozilla/5.0" -H "Referer: https://www.youtube.com/" -o "${outputPath}" "${videoUrl}"`;
+                    await execAsync(curlCmd, { timeout: 320000, maxBuffer: 500 * 1024 * 1024 });
+                }
+
+                if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) {
+                    this.logger?.info(`✅ Piped VÍDEO download concluído!`);
+                    return { sucesso: true };
+                }
+
+            } catch (err: any) {
+                this.logger?.warn(`⚠️ Piped VÍDEO ${instance} falhou: ${err.message?.substring(0, 60)}`);
+            }
+        }
+
+        return { sucesso: false, error: 'Todas as instâncias falharam no stream de áudio' };
+    }
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * DOWNLOAD VIA INVIDIOUS PROXY - BYPASS TOTAL DO 429/SHADOW BLOCK
+     * ═══════════════════════════════════════════════════════════════════════
+     * Usa a API do Invidious para obter URLs de stream direta e baixa via curl.
+     * As URLs de stream do Invidious passam pelo servidor DELES, não pelo IP do Railway.
+     */
+    private async _downloadViaInvidiousProxy(
+        videoId: string,
+        outputPath: string,
+        type: 'audio' | 'video',
+        quality: string = '720'
+    ): Promise<{ sucesso: boolean; error?: string }> {
+        if (!videoId) return { sucesso: false, error: 'videoId vazio' };
+
+        // Instâncias Invidious com suporte a streaming (Março 2026)
+        const instances = [
+            'https://yewtu.be',
+            'https://inv.nadeko.net',
+            'https://invidious.flokinet.to',
+            'https://yt.artemislena.eu',
+            'https://invidious.nerdvpn.de',
+            'https://invidious.v0l.io'
+        ];
+
+        for (const instance of instances) {
+            try {
+                this.logger?.info(`🔌 Invidious Proxy: ${instance}/api/v1/videos/${videoId}`);
+                const resp = await axios.get(`${instance}/api/v1/videos/${videoId}?fields=adaptiveFormats,formatStreams`, {
+                    timeout: 12000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        'Accept': 'application/json',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Origin': instance,
+                        'Referer': `${instance}/watch?v=${videoId}`
+                    }
+                });
+
+                const data = resp.data;
+                let streamUrl: string | null = null;
+
+                if (type === 'audio') {
+                    // Prioriza audio/mp4 (M4A) para depois converter com ffmpeg
+                    const audioStreams: any[] = data.adaptiveFormats?.filter((f: any) =>
+                        f.type?.startsWith('audio')
+                    ) || [];
+                    audioStreams.sort((a: any, b: any) => (parseInt(b.bitrate) || 0) - (parseInt(a.bitrate) || 0));
+                    streamUrl = audioStreams[0]?.url || null;
+
+                    if (!streamUrl && data.formatStreams?.length > 0) {
+                        // Fallback: formato progressivo (tem áudio+vídeo)
+                        streamUrl = data.formatStreams[0]?.url || null;
+                    }
+                } else {
+                    // Procura stream de vídeo com a qualidade mais próxima
+                    const targetHeight = parseInt(quality) || 720;
+                    const videoStreams: any[] = data.adaptiveFormats?.filter((f: any) =>
+                        f.type?.startsWith('video') && f.container === 'mp4'
+                    ) || [];
+                    videoStreams.sort((a: any, b: any) => {
+                        // Prefere a resolução mais próxima do alvo
+                        return Math.abs(parseInt(a.resolution) - targetHeight) - Math.abs(parseInt(b.resolution) - targetHeight);
+                    });
+
+                    // Primeiro tenta formato progressivo (áudio + vídeo juntos)
+                    const progressive = data.formatStreams?.find((f: any) =>
+                        parseInt(f.resolution) <= targetHeight
+                    );
+                    streamUrl = progressive?.url || videoStreams[0]?.url || null;
+                }
+
+                if (!streamUrl) {
+                    this.logger?.warn(`⚠️ Invidious ${instance}: sem URL de stream`);
+                    continue;
+                }
+
+                // A URL do Invidious pode ser um proxy deles (ex: ${instance}/videoplayback?...) OU
+                // a URL direta do Google. Ambas funcionam via curl.
+                this.logger?.info(`📥 [Invidious Proxy] Baixando via curl: ${streamUrl.substring(0, 70)}...`);
+
+                const rawPath = type === 'audio' ? outputPath.replace('.mp3', '.m4a') : outputPath;
+                const curlCmd = [
+                    'curl -L -s --max-time 300 --retry 2',
+                    '-H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"',
+                    `-H "Referer: ${instance}/"`,
+                    `-o "${rawPath}"`,
+                    `"${streamUrl}"`
+                ].join(' ');
+
+                await execAsync(curlCmd, { timeout: 320000, maxBuffer: 512 * 1024 * 1024 });
+
+                if (!fs.existsSync(rawPath) || fs.statSync(rawPath).size < 5000) {
+                    this.logger?.warn(`⚠️ Invidious ${instance}: arquivo baixado vazio ou inválido`);
+                    continue;
+                }
+
+                if (type === 'audio' && rawPath !== outputPath) {
+                    // Converte M4A → MP3 via ffmpeg
+                    await new Promise<void>((resolve, reject) => {
+                        ffmpeg(rawPath)
+                            .toFormat('mp3')
+                            .audioCodec('libmp3lame')
+                            .audioQuality(0)
+                            .on('end', () => resolve())
+                            .on('error', (e: Error) => reject(e))
+                            .save(outputPath);
+                    });
+                    await this.cleanupFile(rawPath);
+                }
+
+                if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 5000) {
+                    this.logger?.info(`✅ [Invidious Proxy] Download concluído com sucesso!`);
+                    return { sucesso: true };
+                }
+
+            } catch (err: any) {
+                this.logger?.warn(`⚠️ Invidious ${instance} falhou: ${err.message?.substring(0, 60)}`);
+            }
+        }
+
+        return { sucesso: false, error: 'Todas as instâncias Invidious falharam' };
+    }
 
     /**
      * Cria agente com cookies para o @distube/ytdl-core
@@ -714,38 +1087,39 @@ class MediaProcessor {
             }
 
             const extractMediaContainer = (msgObj: any, depth: number = 0): any => {
-                if (!msgObj || typeof msgObj !== 'object' || depth > 10) return null;
+                if (!msgObj || typeof msgObj !== 'object' || depth > 5) return null;
 
-                // Se já é o container direto
+                // Se encontramos as chaves de mídia, retornamos este objeto
                 if (msgObj.mediaKey && (msgObj.url || msgObj.directPath)) return msgObj;
 
-                // Lista de wrappers comuns no Baileys/WhatsApp
-                const possibleWrappers = [
-                    'viewOnceMessageV2', 'viewOnceMessageV2Extension', 'viewOnceMessage',
-                    'ephemeralMessage', 'documentWithCaptionMessage', 'editMessage',
-                    'protocolMessage', 'editedMessage', 'message', 'quotedMessage'
+                // Wrappers conhecidos
+                const wraps = [
+                    msgObj.viewOnceMessageV2?.message,
+                    msgObj.viewOnceMessageV2Extension?.message,
+                    msgObj.viewOnceMessage?.message,
+                    msgObj.ephemeralMessage?.message,
+                    msgObj.documentWithCaptionMessage?.message,
+                    msgObj.editMessage?.message,
+                    msgObj.protocolMessage?.editedMessage,
+                    msgObj.extendedTextMessage?.contextInfo?.quotedMessage,
+                    msgObj.message // Caso a estrutura esteja um nível abaixo
                 ];
 
-                for (const key of possibleWrappers) {
-                    if (msgObj[key]) {
-                        const found = extractMediaContainer(msgObj[key], depth + 1);
+                for (const w of wraps) {
+                    if (w) {
+                        const found = extractMediaContainer(w, depth + 1);
                         if (found) return found;
                     }
                 }
 
-                // Tipos de mídia conhecidos
-                const subTypes = ['imageMessage', 'videoMessage', 'stickerMessage', 'audioMessage', 'documentMessage'];
-                for (const type of subTypes) {
-                    if (msgObj[type]) {
-                        const found = extractMediaContainer(msgObj[type], depth + 1);
-                        if (found) return found;
-                    }
-                }
-
-                // Busca exaustiva em qualquer objeto filho (exceto os já testados)
-                for (const key in msgObj) {
-                    if (msgObj[key] && typeof msgObj[key] === 'object' && !possibleWrappers.includes(key) && !subTypes.includes(key)) {
-                        const found = extractMediaContainer(msgObj[key], depth + 1);
+                // Sub-mensagens específicas
+                const subKeys = ['imageMessage', 'videoMessage', 'stickerMessage', 'audioMessage', 'documentMessage'];
+                for (const k of subKeys) {
+                    if (msgObj[k]) {
+                        // Se o objeto em msgObj[k] já tem as chaves, retorna ele
+                        if (msgObj[k].mediaKey) return msgObj[k];
+                        // Senão, aprofunda
+                        const found = extractMediaContainer(msgObj[k], depth + 1);
                         if (found) return found;
                     }
                 }
@@ -755,7 +1129,7 @@ class MediaProcessor {
 
             const mediaContent = extractMediaContainer(message);
             if (!mediaContent) {
-                this.logger?.error('❌ Mídia não encontrada. Estrutura recebida:', Object.keys(message || {}).join(', '));
+                this.logger?.error('❌ Mídia não encontrada. Estrutura recebida:', JSON.stringify(message).substring(0, 500));
                 return null;
             }
 

@@ -30,54 +30,49 @@ class MessageProcessor {
     }
 
     /**
-    * Extrai o JID real do participante (limpo de sufixos de dispositivo)
-    * Garantindo funcionamento em grupos no Railway
-    */
-    extractParticipantJid(message: any): string {
-        try {
-            const remoteJid = message.key?.remoteJid || '';
-            const isGroup = String(remoteJid).endsWith('@g.us');
-
-            // Em grupos, o sender está em participant. Em PV, é o próprio remoteJid
-            const participant = isGroup
-                ? (message.key?.participant || message.participant)
-                : remoteJid;
-
-            if (!participant) return '';
-
-            const jidStr = String(participant);
-            // Remove sufixos de dispositivo (:1, :2) mantendo o domínio @s.whatsapp.net ou @lid
-            const [userPart, domainPart] = jidStr.split('@');
-            if (!userPart || !domainPart) return jidStr;
-
-            const cleanUser = userPart.split(':')[0];
-            return `${cleanUser}@${domainPart}`;
-        } catch (e: any) {
-            this.logger?.error('Erro ao extrair JID real:', e.message);
-            return '';
-        }
-    }
-
-    /**
     * Extrai número real do usuário
     */
-    extractUserNumber(message: any): string {
+    extractUserNumber(message: any) {
         try {
-            return this.extractParticipantJid(message) || 'desconhecido';
+            const key = message.key || {};
+            const remoteJid = key.remoteJid || '';
+
+            // Se for PV (não termina com @g.us)
+            if (!String(remoteJid).endsWith('@g.us')) {
+                return String(remoteJid).split(':')[0].split('@')[0];
+            }
+
+            // Se for grupo, obtém do participant
+            if (key.participant) {
+                const participant = String(key.participant);
+                if (participant.includes('@s.whatsapp.net')) {
+                    return participant.split(':')[0].split('@')[0];
+                }
+                if (participant.includes('@lid')) {
+                    const limpo = participant.split(':')[0];
+                    const digitos = limpo.replace(/\D/g, '');
+
+                    // Otimização: Uso de defaultCountry estático baseado no bot
+                    const defaultCountry = this.config?.BOT_NUMERO_REAL?.startsWith('244') ? 'AO' : 'BR';
+
+                    if (parsePhoneNumberFromString && digitos.length > 5) {
+                        try {
+                            const pn = parsePhoneNumberFromString(digitos, defaultCountry as any);
+                            if (pn && pn.isValid()) {
+                                return String(pn.number).replace(/^\+/, '');
+                            }
+                        } catch (err) { }
+                    }
+
+                    if (digitos.length > 0) return digitos;
+                }
+            }
+
+            return 'desconhecido';
+
         } catch (e: any) {
             this.logger?.error('Erro ao extrair número:', e.message);
             return 'desconhecido';
-        }
-    }
-
-    /**
-    * Extrai o nome de exibição (pushName) do usuário
-    */
-    extractPushName(message: any): string {
-        try {
-            return message.pushName || 'Usuário';
-        } catch (e) {
-            return 'Usuário';
         }
     }
 
@@ -114,11 +109,14 @@ class MessageProcessor {
                 case 'videoMessage':
                     return (msg.videoMessage && msg.videoMessage.caption) || '';
                 case 'audioMessage':
-                    return '[mensagem de voz]';
+                    return '[áudio]';
                 case 'stickerMessage':
                     return '[figurinha]';
                 case 'documentMessage':
                     return (msg.documentMessage && msg.documentMessage.caption) || '[documento]';
+                case 'pollCreationMessageV3':
+                case 'pollCreationMessage':
+                    return `[enquete: ${msg[tipo].name}]`;
                 default:
                     return '';
             }
@@ -261,24 +259,19 @@ class MessageProcessor {
             }
 
             // Try to get participant from context or from quoted message key
-            let participantJidCitado = context.participant || context.remoteJid || null;
+            let participantJidCitado = context.participant || null;
 
-            // Em PV, não há participant explícito às vezes. 
-            // Se for resposta ao bot, inferimos
+            // Em PV, não há participant. Inferimos que é reply ao bot
             if (!participantJidCitado) {
-                const isPV = !String(message.key?.remoteJid || '').endsWith('@g.us');
+                const messageRemoteJid = message.key?.remoteJid;
+                const isPV = !String(messageRemoteJid || '').endsWith('@g.us');
                 if (isPV) {
-                    // Se a mensagem citada veio de nós (bot), o autor é o bot
-                    if (context.fromMe) {
-                        participantJidCitado = `${this.config.BOT_NUMERO_REAL}@s.whatsapp.net`;
-                    } else {
-                        // Senão é a pessoa com quem estamos a falar
-                        participantJidCitado = message.key.remoteJid;
-                    }
+                    participantJidCitado = `${this.config.BOT_NUMERO_REAL}@s.whatsapp.net`;
+                    this.logger?.debug('🔍 [PV REPLY] Detectado reply em PV - assumindo reply ao bot');
                 }
             }
 
-            // Extract author number and name if available
+            // Extract author number and name if available (name limited at API layer)
             let quotedAuthorNumero = 'desconhecido';
             if (participantJidCitado) {
                 quotedAuthorNumero = this.extractUserNumber({ key: { participant: participantJidCitado } });
@@ -287,12 +280,9 @@ class MessageProcessor {
             // Check if reply is to bot
             const ehRespostaAoBot = this.isReplyToBot(participantJidCitado);
 
-            // Nome do autor citado (se disponível no contexto de algum lugar, ou 'Usuário')
-            // No Baileys v6+, o contextInfo não traz o pushName do citado, mas o CommandHandler pode saber
-            const quotedAuthorName = context.pushName || 'Usuário';
-
             // ═══════════════════════════════════════════════════════════════════
             // DETECÇÃO DE REPLY A MENSAGEM DE JOGO
+            // Verifica se a mensagem citada é uma mensagem de jogo do bot
             // ═══════════════════════════════════════════════════════════════════
             const isGameReply = this.detectGameMessage(quotedTextOriginal, textoMensagemCitada);
 
@@ -301,22 +291,27 @@ class MessageProcessor {
             const contextHint = this.extractContextHint(quotedTextOriginal, currentMessageText);
             const priorityLevel = this.calculateReplyPriority(true, ehRespostaAoBot, currentMessageText);
 
-            // Construção no formato esperado pela API
+            // Construção no formato esperado por CommandHandler/GroupManagement e API
             return {
+                // Compatível com GroupManagement._extractTargets
                 quemEscreveuCitacaoJid: participantJidCitado,
-                textoMensagemCitada,
+
+                // Compatível com CommandHandler (uso geral)
+                textoMensagemCitada, // texto completo amigável
                 tipoMidiaCitada: tipoMidia,
                 textoCitadoResumido: quotedTextOriginal,
+
+                // Metadados
                 participantJidCitado,
                 ehRespostaAoBot,
                 quemEscreveuCitacao: quotedAuthorNumero,
-                quemEscreveuCitacaoName: quotedAuthorName,
                 quotedAuthorNumero: quotedAuthorNumero,
                 quotedType: tipoMidia,
                 quotedTextOriginal: quotedTextOriginal,
                 contextHint: contextHint,
                 priorityLevel: priorityLevel,
                 isReply: true,
+                // Novas propriedades para detecção de jogos
                 isReplyToGame: isGameReply.isGame,
                 gameType: isGameReply.gameType
             };
@@ -324,34 +319,6 @@ class MessageProcessor {
         } catch (e: any) {
             this.logger?.error('Erro ao extrair reply info:', e.message);
             return null;
-        }
-    }
-
-    /**
-    * Verifica se a mensagem é direcionada à Akira
-    */
-    isDirectedToBot(message: any): boolean {
-        try {
-            const isGroup = this.getConversationType(message) === 'grupo';
-
-            // Em PV, tudo é direcionado ao bot
-            if (!isGroup) return true;
-
-            const text = this.extractText(message);
-
-            // 1. É um comando (prefixo)
-            if (this.isCommand(text)) return true;
-
-            // 2. Bot foi mencionado
-            if (this.isBotMentioned(message)) return true;
-
-            // 3. É uma resposta ao bot
-            const replyInfo = this.extractReplyInfo(message);
-            if (replyInfo && replyInfo.ehRespostaAoBot) return true;
-
-            return false;
-        } catch (e: any) {
-            return false;
         }
     }
 
@@ -487,37 +454,6 @@ class MessageProcessor {
                 return getContentType(subMsg) === 'imageMessage';
             }
             return false;
-        } catch (e: any) {
-            return false;
-        }
-    }
-
-    /**
-    * Detecta se tem vídeo
-    */
-    hasVideo(message: any): boolean {
-        try {
-            const tipo = getContentType(message.message);
-            if (tipo === 'videoMessage') return true;
-
-            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
-                const subMsg = message.message[tipo].message;
-                return getContentType(subMsg) === 'videoMessage';
-            }
-            return false;
-        } catch (e: any) {
-            return false;
-        }
-    }
-
-
-    /**
-    * Detecta se tem documento
-    */
-    hasDocument(message: any): boolean {
-        try {
-            const tipo = getContentType(message.message);
-            return tipo === 'documentMessage' || tipo === 'documentWithCaptionMessage';
         } catch (e: any) {
             return false;
         }
