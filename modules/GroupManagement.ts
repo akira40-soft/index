@@ -104,9 +104,11 @@ class GroupManagement {
             return false;
         }
 
-        // Verifica se o bot está realmente logado
-        if (!this.sock.user || !this.sock.user.id) {
-            this.logger.debug('🔍 [GroupManagement] sock.user ausente');
+        // Verifica se o bot está logado
+        // Fallback para creds.me se sock.user estiver ausente (comum logo após reconexão)
+        const me = this.sock.user || this.sock.authState?.creds?.me;
+        if (!me || !me.id) {
+            this.logger.debug('🔍 [GroupManagement] Identidade do bot (sock.user) ausente');
             return false;
         }
 

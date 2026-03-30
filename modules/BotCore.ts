@@ -516,20 +516,16 @@ class BotCore {
             await this.presenceSimulator.simulateTicks(m, true, false);
             await this.presenceSimulator.simulateTyping(m.key.remoteJid, 1500);
 
-            const tipoMsg = getContentType(m.message);
-            let imgMsg = m.message.imageMessage;
-            if (tipoMsg === 'viewOnceMessage' || tipoMsg === 'viewOnceMessageV2') {
-                imgMsg = m.message[tipoMsg].message?.imageMessage;
-            }
-            if (!imgMsg) { this.logger.error('❌ Imagem inválida'); return; }
-
             this.logger.debug('⬇️ Baixando imagem...');
-            const imageBuffer = await this.mediaProcessor.downloadMedia(imgMsg, 'image');
-            if (!imageBuffer?.length) {
+            // ⚡ OTIMIZAÇÃO: Deixa o MediaProcessor extrair a imagem de qualquer container (viewOnce, ephemeral, etc)
+            const result = await this.mediaProcessor.downloadMedia(m.message, 'image');
+            if (!result || !result.buffer?.length) {
                 this.logger.error('❌ Buffer vazio');
                 await this.reply(m, '❌ Não consegui baixar a imagem.');
                 return;
             }
+
+            const { buffer: imageBuffer, mediaContent } = result;
 
             this.logger.debug(`✅ Imagem: ${imageBuffer.length} bytes`);
             let base64Image;
@@ -552,7 +548,7 @@ class BotCore {
                 tipo_mensagem: 'image',
                 imagem_dados: {
                     dados: base64Image,
-                    mime_type: imgMsg.mimetype || 'image/jpeg',
+                    mime_type: mediaContent.mimetype || 'image/jpeg',
                     descricao: caption || 'Imagem'
                 },
                 mensagem_citada: replyInfo?.textoMensagemCitada || '',
@@ -590,15 +586,9 @@ class BotCore {
     async handleAudioMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         this.logger.info(`🎤 [ÁUDIO] ${nome}`);
         try {
-            const tipoMsg = getContentType(m.message);
-            let audMsg = m.message.audioMessage;
-            if (tipoMsg === 'viewOnceMessage' || tipoMsg === 'viewOnceMessageV2') {
-                audMsg = m.message[tipoMsg].message?.audioMessage;
-            }
-            if (!audMsg) { this.logger.error('❌ Áudio inválido'); return; }
-
-            const audioBuffer = await this.mediaProcessor.downloadMedia(audMsg, 'audio');
-            await this.handleAudioMessage_internal(m, nome, numeroReal, replyInfo, ehGrupo, audioBuffer);
+            this.logger.debug('⬇️ Baixando áudio...');
+            const result = await this.mediaProcessor.downloadMedia(m.message, 'audio');
+            await this.handleAudioMessage_internal(m, nome, numeroReal, replyInfo, ehGrupo, result?.buffer || null);
         } catch (error: any) {
             this.logger.error('❌ Erro áudio:', error.message);
         }
