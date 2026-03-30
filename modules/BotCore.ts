@@ -577,7 +577,6 @@ class BotCore {
             // ⚡ OTIMIZAÇÃO: Simulação não-bloqueante
             if (this.presenceSimulator) {
                 this.presenceSimulator.simulateTyping(m.key.remoteJid, this.presenceSimulator.calculateTypingDuration(resposta)).catch(() => { });
-                await delay(200);
             }
 
             const opcoes = ehGrupo ? { quoted: m } : (replyInfo?.ehRespostaAoBot) ? { quoted: m } : {};
@@ -746,7 +745,6 @@ class BotCore {
                     } else {
                         // Para IA, dispara a simulação completa em background
                         this.presenceSimulator.simulateFullResponse(this.sock, m, resposta, false).catch(() => { });
-                        await delay(200); // Pequeno fôlego para o servidor registrar o status
                     }
                 }
 

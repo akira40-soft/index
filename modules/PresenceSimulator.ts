@@ -20,42 +20,18 @@ class PresenceSimulator {
     }
 
     /**
-     * Aguarda a conexão ficar estável (OPEN) por um tempo limitado
-     */
-    async waitForConnection(timeoutMs: number = 2000) {
-        if (this.sock?.ws?.readyState === 1) return true;
-
-        const startTime = Date.now();
-        while (Date.now() - startTime < timeoutMs) {
-            if (this.sock?.ws?.readyState === 1) return true;
-            await new Promise(r => setTimeout(r, 200));
-        }
-        return false;
-    }
-
-    /**
      * Envia atualização de presença de forma segura, verificando se o socket está ativo
      */
     async safeSendPresenceUpdate(type: any, jid: string) {
         if (!jid || !this.sock) return false;
 
-        const maxRetries = 2;
-        for (let i = 0; i < maxRetries; i++) {
-            try {
-                // Verifica se o socket está realmente aberto (readyState 1 = OPEN)
-                if (this.sock?.ws?.readyState !== 1) {
-                    this.logger.warn(`⚠️ [PRESENCE] Socket não está OPEN (Estado: ${this.sock?.ws?.readyState})`);
-                    return false;
-                }
-
-                await this.sock.sendPresenceUpdate(type, jid);
-                return true;
-            } catch (e: any) {
-                this.logger.warn(`⚠️ [PRESENCE] Tentativa ${i + 1} falhou para ${jid}: ${e.message}`);
-                if (i < maxRetries - 1) await delay(1000);
-            }
+        try {
+            await this.sock.sendPresenceUpdate(type, jid);
+            return true;
+        } catch (e: any) {
+            this.logger.debug(`⚠️ [PRESENCE] Falha para ${jid}: ${e.message}`);
+            return false;
         }
-        return false;
     }
 
     /**
