@@ -1079,7 +1079,7 @@ class MediaProcessor {
     /**
      * Download de mídia via Baileys
      */
-    async downloadMedia(message: any, mimeType: string = 'image'): Promise<Buffer | null> {
+    async downloadMedia(message: any, mimeType: string = 'image'): Promise<{ buffer: Buffer; mediaContent: any } | null> {
         try {
             if (!message) {
                 this.logger?.error('❌ Mensagem é null');
@@ -1129,7 +1129,7 @@ class MediaProcessor {
 
             const mediaContent = extractMediaContainer(message);
             if (!mediaContent) {
-                this.logger?.error('❌ Mídia não encontrada. Estrutura recebida:', JSON.stringify(message).substring(0, 500));
+                this.logger?.error('❌ Mídia não encontrada. Estrutura:', JSON.stringify(message).substring(0, 200));
                 return null;
             }
 
@@ -1194,7 +1194,7 @@ class MediaProcessor {
                 return null;
             }
 
-            return buffer;
+            return { buffer, mediaContent };
         } catch (e: any) {
             this.logger?.error('❌ Erro ao baixar mídia:', e.message);
             return null;
@@ -1538,19 +1538,23 @@ class MediaProcessor {
             let mimeType = '';
 
             if (hasImage) {
-                buffer = await this.downloadMedia(target.imageMessage, 'image');
+                const res = await this.downloadMedia(target.imageMessage, 'image');
+                buffer = res?.buffer || null;
                 tipo = 'image';
                 mimeType = target.imageMessage.mimetype || 'image/jpeg';
             } else if (hasVideo) {
-                buffer = await this.downloadMedia(target.videoMessage, 'video');
+                const res = await this.downloadMedia(target.videoMessage, 'video');
+                buffer = res?.buffer || null;
                 tipo = 'video';
                 mimeType = target.videoMessage.mimetype || 'video/mp4';
             } else if (hasAudio) {
-                buffer = await this.downloadMedia(target.audioMessage, 'audio');
+                const res = await this.downloadMedia(target.audioMessage, 'audio');
+                buffer = res?.buffer || null;
                 tipo = 'audio';
                 mimeType = target.audioMessage.mimetype || 'audio/mpeg';
             } else if (hasSticker) {
-                buffer = await this.downloadMedia(target.stickerMessage, 'sticker');
+                const res = await this.downloadMedia(target.stickerMessage, 'sticker');
+                buffer = res?.buffer || null;
                 tipo = 'sticker';
                 mimeType = target.stickerMessage.mimetype || 'image/webp';
             }
