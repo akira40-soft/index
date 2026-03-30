@@ -1,4 +1,3 @@
-/// <reference path="./declarations.d.ts" />
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * CORREÇÕES HF SPACES - DNS E CONEXÃO WHATSAPP

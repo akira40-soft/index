@@ -29,8 +29,8 @@ class SecurityLogger {
         // O HF Spaces tem sistema de arquivos somente-leitura em /
         // ═══════════════════════════════════════════════════════════════════
 
-        // Forçar persistência real no Railway, fallback para /tmp
-        const basePath = process.env.DATA_DIR || '/tmp/akira_data';
+        // Usar DATABASE_FOLDER do ConfigManager para persistência local
+        const basePath = this.config.DATABASE_FOLDER || './database';
         this.logsPath = path.join(basePath, 'security_logs');
         this.alertsPath = path.join(this.logsPath, 'alerts.json');
         this.opsPath = path.join(this.logsPath, 'operations.json');
@@ -44,8 +44,9 @@ class SecurityLogger {
         } catch (error: any) {
             console.warn(`⚠️ SecurityLogger: Não foi possível criar diretório em ${this.logsPath}:`, error.message);
 
-            // Fallback para /tmp direto
-            const tmpPath = '/tmp/security_logs';
+            // Fallback para ./database direto
+            const baseDir = this.config.DATABASE_FOLDER || './database';
+            const tmpPath = path.join(baseDir, 'security_logs_fallback');
             try {
                 fs.mkdirSync(tmpPath, { recursive: true });
                 this.logsPath = tmpPath;

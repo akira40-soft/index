@@ -41,6 +41,7 @@ class MediaProcessor {
     private logger: any;
     private tempFolder: string;
     private downloadCache: Map<string, any>;
+    public sock: any;
 
     constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
@@ -57,6 +58,10 @@ class MediaProcessor {
                 this.logger.error(`❌ Erro ao criar pasta temporária:`, dirErr.message);
             }
         }
+    }
+
+    public setSocket(sock: any): void {
+        this.sock = sock;
     }
 
     /**

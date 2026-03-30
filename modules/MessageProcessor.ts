@@ -23,10 +23,15 @@ class MessageProcessor {
     public config: any;
     public logger: any;
     public rateLimitMap: Map<string, number[]> = new Map();
+    public sock: any;
 
     constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
         this.logger = logger || console;
+    }
+
+    public setSocket(sock: any): void {
+        this.sock = sock;
     }
 
     /**

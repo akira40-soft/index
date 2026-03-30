@@ -7,23 +7,26 @@
  * ═══════════════════════════════════════════════════════════════════════
  */
 
+import axios from 'axios';
 import ConfigManager from './ConfigManager.js';
-import MediaProcessor from './MediaProcessor.js';
 
 class APIClient {
     private config: any;
     private logger: any;
     private requestCount: number;
     private errorCount: number;
-    private mediaProcessor: MediaProcessor;
+    public sock: any;
 
     constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
         this.logger = logger || console;
         this.requestCount = 0;
         this.errorCount = 0;
-        this.mediaProcessor = new MediaProcessor(this.logger);
-        this.logger.info(`🔌 [API] Cliente inicializado. URL Base: ${this.config.API_URL}`);
+        this.sock = null;
+    }
+
+    public setSocket(sock: any): void {
+        this.sock = sock;
     }
 
     /**
@@ -34,51 +37,37 @@ class APIClient {
             usuario,
             numero,
             mensagem,
-            pushName = '',
             tipo_conversa = 'pv',
             tipo_mensagem = 'texto',
             mensagem_citada = '',
             reply_metadata = {},
             imagem_dados = null,
-            video_dados = null,
-            documento_dados = null,
             grupo_id = null,
             grupo_nome = null,
-            forcar_pesquisa = false,
-            analise_doc = ''
+            forcar_pesquisa = false
         } = messageData;
 
         const payload: any = {
-            usuario: String(usuario || 'anonimo').substring(0, 100),
-            numero: String(numero || 'desconhecido').substring(0, 50),
-            pushName: String(pushName || usuario || '').substring(0, 100),
-            mensagem: String(mensagem || '').substring(0, 4000),
+            usuario: String(usuario || 'anonimo').substring(0, 50),
+            numero: String(numero || 'desconhecido').substring(0, 20),
+            mensagem: String(mensagem || '').substring(0, 2000),
             tipo_conversa: ['pv', 'grupo'].includes(tipo_conversa) ? tipo_conversa : 'pv',
-            tipo_mensagem: ['texto', 'image', 'imagem', 'audio', 'video', 'document', 'documento', 'documentWithCaption'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
+            tipo_mensagem: ['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
             historico: [],
-            forcar_busca: Boolean(forcar_pesquisa),
-            analise_doc: String(analise_doc || ''),
-            timestamp: Date.now()
+            forcar_busca: Boolean(forcar_pesquisa)
         };
 
         // Adiciona contexto de reply se existir
-        const safeReplyMeta = reply_metadata || {};
-        const isReply = Boolean(mensagem_citada || safeReplyMeta.is_reply || safeReplyMeta.isReply);
-
-        if (isReply) {
-            // Se mensagem_citada raiz for vazia, puxa do metadado gerado pelo MessageProcessor
-            const textoCitadoReal = mensagem_citada || safeReplyMeta.textoMensagemCitada || safeReplyMeta.quotedTextOriginal || '';
-            payload.mensagem_citada = String(textoCitadoReal).substring(0, 4000);
-
+        if (mensagem_citada) {
+            payload.mensagem_citada = String(mensagem_citada).substring(0, 3000);
             payload.reply_metadata = {
                 is_reply: true,
-                reply_to_bot: Boolean(safeReplyMeta.ehRespostaAoBot || safeReplyMeta.reply_to_bot),
-                quoted_author_name: String(safeReplyMeta.quemEscreveuCitacaoName || safeReplyMeta.quoted_author_name || 'Usuário').substring(0, 100),
-                quoted_author_numero: String(safeReplyMeta.quemEscreveuCitacao || safeReplyMeta.quoted_author_numero || 'desconhecido'),
-                quoted_type: String(safeReplyMeta.tipoMidiaCitada || safeReplyMeta.quoted_type || 'texto'),
-                quoted_text_original: String(safeReplyMeta.quotedTextOriginal || safeReplyMeta.quoted_text_original || '').substring(0, 3000),
-                context_hint: String(safeReplyMeta.contextHint || safeReplyMeta.context_hint || 'contexto_geral'),
-                priority_level: safeReplyMeta.priorityLevel || 1
+                reply_to_bot: Boolean(reply_metadata.reply_to_bot),
+                quoted_author_name: String(reply_metadata.quoted_author_name || 'desconhecido').substring(0, 50),
+                quoted_author_numero: String(reply_metadata.quoted_author_numero || 'desconhecido'),
+                quoted_type: String(reply_metadata.quoted_type || 'texto'),
+                quoted_text_original: String(reply_metadata.quoted_text_original || '').substring(0, 200),
+                context_hint: String(reply_metadata.context_hint || '')
             };
         } else {
             payload.reply_metadata = {
@@ -87,45 +76,20 @@ class APIClient {
             };
         }
 
-        // 📷 Mapeia Imagem (Sincronizado com api.py)
-        if (imagem_dados && (imagem_dados.dados || imagem_dados.path)) {
-            payload.imagem_dados = {
-                dados: imagem_dados.dados || null,
-                path: imagem_dados.path || null,
+        // Adiciona dados de imagem se existirem
+        if (imagem_dados && imagem_dados.dados) {
+            payload.imagem = {
+                dados: imagem_dados.dados,
                 mime_type: imagem_dados.mime_type || 'image/jpeg',
                 descricao: imagem_dados.descricao || 'Imagem enviada',
                 analise_visao: imagem_dados.analise_visao || {}
             };
         }
 
-        // 🎥 Mapeia Vídeo
-        if (video_dados && (video_dados.dados || video_dados.path)) {
-            payload.video_dados = {
-                dados: video_dados.dados || null,
-                path: video_dados.path || null,
-                mime_type: video_dados.mime_type || 'video/mp4',
-                descricao: video_dados.descricao || 'Vídeo enviado'
-            };
-        }
-
-        // 📄 Mapeia Documento
-        if (documento_dados && (documento_dados.dados || documento_dados.path)) {
-            payload.documento_dados = {
-                dados: documento_dados.dados || null,
-                path: documento_dados.path || null,
-                mime_type: documento_dados.mime_type || 'application/octet-stream',
-                nome_arquivo: documento_dados.nome_arquivo || 'documento'
-            };
-        }
-
         // Adiciona info de grupo se existir
         if (grupo_id) {
             payload.grupo_id = grupo_id;
-            payload.grupo_nome = grupo_nome || 'Grupo';
-            // Isola contexto via ID único (segurança extra)
-            payload.contexto_id = `WA_${grupo_id.split('@')[0]}`;
-        } else {
-            payload.contexto_id = `WA_PV_${payload.numero.split('@')[0]}`;
+            payload.contexto_grupo = grupo_nome || 'Grupo';
         }
 
         return payload;
@@ -144,17 +108,7 @@ class APIClient {
             };
         }
 
-        // Normalização simples: garante que não termine em barra para evitar // no endpoint
-        let baseUrl = (this.config.API_URL || '').trim();
-        if (baseUrl.endsWith('/')) {
-            baseUrl = baseUrl.slice(0, -1);
-        }
-
-        let url = `${baseUrl}${endpoint}`;
-        // Remove duplicatas de /api/api/ caso o usuário tenha configurado a base com o prefixo
-        url = url.replace(/\/api\/api\//g, '/api/');
-
-        const parsedUrl = new URL(url);
+        const url = `${this.config.API_URL}${endpoint}`;
         const maxRetries = options.retries || this.config.API_RETRY_ATTEMPTS;
         let lastError = null;
 
@@ -163,70 +117,40 @@ class APIClient {
                 this.requestCount++;
 
                 if (this.config.LOG_API_REQUESTS) {
-                    this.logger.info(`[API] ${method.toUpperCase()} ${url} (tentativa ${attempt}/${maxRetries})`);
+                    this.logger.info(`[API] ${method.toUpperCase()} ${endpoint} (tentativa ${attempt}/${maxRetries})`);
                 }
 
-                const fetchOptions: any = {
+                const axiosConfig = {
                     method,
+                    url,
+                    timeout: this.config.API_TIMEOUT,
                     headers: {
                         'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                        'User-Agent': `AkiraBot/${this.config.BOT_VERSION}`
                     },
                     ...options
                 };
 
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), this.config.API_TIMEOUT);
-                fetchOptions.signal = controller.signal;
-
                 if (data) {
-                    fetchOptions.body = JSON.stringify(data);
+                    axiosConfig.data = data;
                 }
 
-                const response = await fetch(url, fetchOptions);
-                clearTimeout(timeoutId);
+                const response = await axios(axiosConfig);
 
-                let responseData: any = {};
-                const contentType = response.headers.get("content-type");
-                if (contentType && contentType.includes("application/json")) {
-                    responseData = await response.json();
-                } else {
-                    const textData = await response.text();
-                    try { responseData = JSON.parse(textData); } catch (e) { responseData = { error: textData }; }
-                }
-
-                if (response.ok) {
+                if (response.status >= 200 && response.status < 300) {
                     if (this.config.LOG_API_REQUESTS) {
                         this.logger.info(`[API] ✅ ${endpoint} (${response.status})`);
                     }
-                    return { success: true, data: responseData, status: response.status };
-                } else {
-                    // Dispara exceção similar ao axios para o catch capturar
-                    throw {
-                        response: {
-                            status: response.status,
-                            data: responseData
-                        },
-                        message: `HTTP error! status: ${response.status}`,
-                        code: `HTTP_${response.status}`
-                    };
+                    return { success: true, data: response.data, status: response.status };
                 }
 
             } catch (error: any) {
                 lastError = error;
-                const statusCode = error.response?.status;
-                const errorMsg = error.response?.data?.error || error.message;
+                const statusCode = (error.response && error.response.status) || undefined;
+                const errorMsg = (error.response && error.response.data && error.response.data.error) || error.message;
 
                 if (this.config.LOG_API_REQUESTS) {
-                    let code = error.code || 'UNKNOWN';
-                    if (error.name === 'AbortError') {
-                        code = 'ETIMEDOUT';
-                    }
-                    const syscall = error.syscall ? `| syscall: ${error.syscall}` : '';
-                    this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'} (${code}${syscall}): ${errorMsg} | URL: ${url} (tentativa ${attempt}/${maxRetries})`);
-                    if (error.stack && attempt === maxRetries) {
-                        this.logger.debug(`[API] Stack: ${error.stack.substring(0, 200)}...`);
-                    }
+                    this.logger.warn(`[API] ⚠️ Erro ${statusCode || 'NETWORK'}: ${errorMsg} (tentativa ${attempt}/${maxRetries})`);
                 }
 
                 // Não retry em erros 4xx (exceto timeout)
@@ -244,16 +168,7 @@ class APIClient {
         }
 
         this.errorCount++;
-        let errorMsg = 'Erro desconhecido';
-        if (lastError) {
-            if (lastError.response?.data?.error) {
-                errorMsg = lastError.response.data.error;
-            } else if (lastError.name === 'AbortError') {
-                errorMsg = 'Timeout da API excedido';
-            } else {
-                errorMsg = lastError.message || String(lastError);
-            }
-        }
+        const errorMsg = (lastError && lastError.response && lastError.response.data && lastError.response.data.error) || (lastError && lastError.message) || 'Erro desconhecido';
 
         if (this.config.LOG_API_REQUESTS) {
             this.logger.error(`[API] ❌ Falhou após ${maxRetries} tentativas: ${errorMsg}`);
@@ -267,31 +182,9 @@ class APIClient {
     */
     async processMessage(messageData: any): Promise<any> {
         try {
-            // Se houver m: m nos dados de mídia e não houver dados/path, tenta baixar
-            if (messageData.imagem_dados?.m && !messageData.imagem_dados.dados && !messageData.imagem_dados.path) {
-                const buffer = await this.mediaProcessor.downloadMedia(messageData.imagem_dados.m, 'image');
-                if (buffer) {
-                    messageData.imagem_dados.dados = buffer.toString('base64');
-                }
-            }
-            if (messageData.video_dados?.m && !messageData.video_dados.dados && !messageData.video_dados.path) {
-                const buffer = await this.mediaProcessor.downloadMedia(messageData.video_dados.m, 'video');
-                if (buffer) {
-                    messageData.video_dados.dados = buffer.toString('base64');
-                }
-            }
-            if (messageData.documento_dados?.m && !messageData.documento_dados.dados && !messageData.documento_dados.path) {
-                const buffer = await this.mediaProcessor.downloadMedia(messageData.documento_dados.m, 'document');
-                if (buffer) {
-                    messageData.documento_dados.dados = buffer.toString('base64');
-                }
-            }
-
-            this.logger.info(`[API] Construindo payload...`);
             const payload = this.buildPayload(messageData);
-            this.logger.info(`[API] Payload pronto. Enviando this.request('POST') url: /api/akira`);
 
-            const result = await this.request('POST', '/api/akira', payload);
+            const result = await this.request('POST', '/akira', payload);
 
             if (result.success) {
                 return {
@@ -309,11 +202,7 @@ class APIClient {
                 };
             }
         } catch (error: any) {
-            const status = error.response?.status || 'NETWORK';
-            const code = error.code || 'NETWORK_ERR';
-            const errDetails = error.stack || error.message || String(error);
-            this.logger.error(`[API] Erro FATAL ao processar mensagem (Status: ${status} | Code: ${code}):\n${errDetails}`);
-
+            this.logger.error('[API] Erro ao processar mensagem:', error.message);
             return {
                 success: false,
                 resposta: 'Deu um erro interno aqui. Tenta depois?',
@@ -327,7 +216,7 @@ class APIClient {
     */
     async analyzeImage(imageBase64: string, usuario: string = 'anonimo', numero: string = ''): Promise<any> {
         try {
-            const result = await this.request('POST', '/api/vision/analyze', {
+            const result = await this.request('POST', '/vision/analyze', {
                 imagem: imageBase64,
                 usuario,
                 numero,
@@ -361,7 +250,7 @@ class APIClient {
     */
     async performOCR(imageBase64: string, numero: string = ''): Promise<any> {
         try {
-            const result = await this.request('POST', '/api/vision/ocr', {
+            const result = await this.request('POST', '/vision/ocr', {
                 imagem: imageBase64,
                 numero
             });
@@ -394,7 +283,7 @@ class APIClient {
     async reset(usuario: string | null = null): Promise<any> {
         try {
             const payload = usuario ? { usuario } : {};
-            const result = await this.request('POST', '/api/reset', payload);
+            const result = await this.request('POST', '/reset', payload);
 
             return {
                 success: result.success,
@@ -415,7 +304,7 @@ class APIClient {
     */
     async healthCheck(): Promise<any> {
         try {
-            const result = await this.request('GET', '/api/health');
+            const result = await this.request('GET', '/health');
             return {
                 success: result.success,
                 status: (result.data && result.data.status) || 'unknown',

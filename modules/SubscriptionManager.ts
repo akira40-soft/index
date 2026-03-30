@@ -18,7 +18,6 @@
 import fs from 'fs';
 import path from 'path';
 import ConfigManager from './ConfigManager.js';
-import JidUtils from './JidUtils.js';
 
 class SubscriptionManager {
     public config: any;
@@ -27,17 +26,19 @@ class SubscriptionManager {
     public subscribersPath: string;
     public subscribers: { [key: string]: any };
     public usage: { [key: string]: any };
+    public sock: any;
 
     constructor(config: any = null) {
         this.config = config || ConfigManager.getInstance();
+        this.sock = null;
 
         // ═══════════════════════════════════════════════════════════════════
         // HF SPACES: Usar /tmp para garantir permissões de escrita
         // O HF Spaces tem sistema de arquivos somente-leitura em /
         // ═══════════════════════════════════════════════════════════════════
 
-        // Forçar uso de /tmp no HF Spaces (sistema read-only)
-        this.dataPath = '/tmp/akira_data/subscriptions';
+        // Usar DATABASE_FOLDER do ConfigManager para persistência local
+        this.dataPath = path.join(this.config.DATABASE_FOLDER || './database', 'subscriptions');
 
         this.usagePath = path.join(this.dataPath, 'usage.json');
         this.subscribersPath = path.join(this.dataPath, 'subscribers.json');
@@ -51,8 +52,9 @@ class SubscriptionManager {
         } catch (error: any) {
             console.warn(`⚠️ SubscriptionManager: Não foi possível criar diretório em ${this.dataPath}:`, error.message);
 
-            // Fallback para /tmp direto se falhar
-            const tmpPath = '/tmp/subscriptions';
+            // Fallback para ./database direto se falhar
+            const baseDir = this.config.DATABASE_FOLDER || './database';
+            const tmpPath = path.join(baseDir, 'subscriptions_fallback');
             try {
                 fs.mkdirSync(tmpPath, { recursive: true });
                 this.dataPath = tmpPath;
@@ -72,28 +74,6 @@ class SubscriptionManager {
         this.subscribers = this.dataPath ? this._loadJSON(this.subscribersPath, {}) : {};
         this.usage = this.dataPath ? this._loadJSON(this.usagePath, {}) : {};
 
-        // ═══════════════════════════════════════════════════════════════════
-        // MIGRATION: JID -> NUMERIC ID (Digits Only)
-        // ═══════════════════════════════════════════════════════════════════
-        if (this.subscribers && typeof this.subscribers === 'object' && !Array.isArray(this.subscribers)) {
-            const migrated: any = {};
-            let migratedCount = 0;
-            for (const id in this.subscribers) {
-                const numericId = JidUtils.toNumeric(id);
-                if (id !== numericId) {
-                    migrated[numericId] = this.subscribers[id];
-                    migratedCount++;
-                } else {
-                    migrated[id] = this.subscribers[id];
-                }
-            }
-            if (migratedCount > 0) {
-                console.log(`✨ [SubscriptionManager] Migradas ${migratedCount} assinaturas para ID Numérico.`);
-                this.subscribers = migrated;
-                this._saveJSON(this.subscribersPath, this.subscribers);
-            }
-        }
-
         // Limpa uso antigo periodicamente
         if (this.dataPath) {
             this._cleanOldUsage();
@@ -102,24 +82,27 @@ class SubscriptionManager {
         console.log('✅ SubscriptionManager inicializado');
     }
 
+    public setSocket(sock: any): void {
+        this.sock = sock;
+    }
+
     /**
     * Verifica se usuário pode usar uma feature
     * @returns { { canUse: boolean, reason: string, remaining: number } }
     */
     public canUseFeature(userId: string, featureName: string): { canUse: boolean, reason: string, remaining: number } {
         try {
-            const numericId = JidUtils.toNumeric(userId);
             // Owner tem acesso ilimitado
-            if (this.config.isDono(numericId)) {
+            if (this.config.isDono(userId)) {
                 return { canUse: true, reason: 'OWNER', remaining: 999 };
             }
 
-            const tier = this.getUserTier(numericId);
+            const tier = this.getUserTier(userId);
             const limites = this._getLimites(tier);
             const window = this._getTimeWindow(tier);
 
             // Gera chave única
-            const key = `${numericId}_${featureName}_${this._getWindowStart(window)}`;
+            const key = `${userId}_${featureName}_${this._getWindowStart(window)}`;
 
             // Obtém uso atual
             const uso = (this.usage[key] || 0) + 1;
@@ -151,13 +134,12 @@ class SubscriptionManager {
     * Obtém tier do usuário — verifica expiração antes de conceder subscriber
     */
     public getUserTier(userId: string): string {
-        const numericId = JidUtils.toNumeric(userId);
-        if (this.config.isDono(numericId)) return 'owner';
+        if (this.config.isDono(userId)) return 'owner';
         // Verifica sub activa E não expirada
-        if (this.subscribers[numericId] && this.isSubscriptionValid(numericId)) return 'subscriber';
+        if (this.subscribers[userId] && this.isSubscriptionValid(userId)) return 'subscriber';
         // Se expirou, limpa o registo automaticamente
-        if (this.subscribers[numericId] && !this.isSubscriptionValid(numericId)) {
-            delete this.subscribers[numericId];
+        if (this.subscribers[userId] && !this.isSubscriptionValid(userId)) {
+            delete this.subscribers[userId];
             this._saveJSON(this.subscribersPath, this.subscribers);
         }
         return 'free';
@@ -168,15 +150,14 @@ class SubscriptionManager {
     */
     public subscribe(userId: string, duracao: number = 30): { sucesso: boolean, mensagem?: string, expiraEm?: string, erro?: string } {
         try {
-            const numericId = JidUtils.toNumeric(userId);
             const dataExpira = new Date();
             dataExpira.setDate(dataExpira.getDate() + duracao);
 
-            this.subscribers[numericId] = {
+            this.subscribers[userId] = {
                 subscritaEm: new Date().toISOString(),
                 expiraEm: dataExpira.toISOString(),
                 duracao,
-                renovacoes: (this.subscribers[numericId]?.renovacoes || 0) + 1
+                renovacoes: (this.subscribers[userId]?.renovacoes || 0) + 1
             };
 
             this._saveJSON(this.subscribersPath, this.subscribers);
@@ -196,8 +177,7 @@ class SubscriptionManager {
     */
     public unsubscribe(userId: string): { sucesso: boolean, mensagem?: string, erro?: string } {
         try {
-            const numericId = JidUtils.toNumeric(userId);
-            delete this.subscribers[numericId];
+            delete this.subscribers[userId];
             this._saveJSON(this.subscribersPath, this.subscribers);
 
             return { sucesso: true, mensagem: 'Assinatura cancelada' };
@@ -210,8 +190,7 @@ class SubscriptionManager {
     * Verifica se assinatura expirou
     */
     public isSubscriptionValid(userId: string): boolean {
-        const numericId = JidUtils.toNumeric(userId);
-        const sub = this.subscribers[numericId];
+        const sub = this.subscribers[userId];
         if (!sub) return false;
 
         const agora = new Date();
@@ -234,8 +213,7 @@ class SubscriptionManager {
     * Obtém informações de assinatura
     */
     public getSubscriptionInfo(userId: string): { tier: string, status: string, usoPorPeriodo: string, periodo: string, recursos: string[], expiraEm?: string, upgrade?: string } {
-        const numericId = JidUtils.toNumeric(userId);
-        const tier = this.getUserTier(numericId);
+        const tier = this.getUserTier(userId);
 
         if (tier === 'owner') {
             return {
@@ -254,8 +232,8 @@ class SubscriptionManager {
             };
         }
 
-        const sub = this.subscribers[numericId];
-        if (sub && this.isSubscriptionValid(numericId)) {
+        const sub = this.subscribers[userId];
+        if (sub && this.isSubscriptionValid(userId)) {
             const expira = new Date(sub.expiraEm);
             const diasRestantes = Math.ceil((expira.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
 
@@ -297,8 +275,7 @@ class SubscriptionManager {
     * Formata mensagem de upgrade
     */
     public getUpgradeMessage(userId: string, feature: string): string {
-        const numericId = JidUtils.toNumeric(userId);
-        const tier = this.getUserTier(numericId);
+        const tier = this.getUserTier(userId);
 
         if (tier === 'free') {
             return `\n\n💎 *UPGRADE DISPONÍVEL*\n\n` +
@@ -327,21 +304,20 @@ class SubscriptionManager {
     * Gera relatório de uso
     */
     public getUsageReport(userId: string): { userId: string, tier: string, usoAtual: { [key: string]: number }, limites: any } {
-        const numericId = JidUtils.toNumeric(userId);
         const userUsage: { [key: string]: number } = {};
 
         for (const [key, count] of Object.entries(this.usage)) {
-            if (key.startsWith(numericId)) {
+            if (key.startsWith(userId)) {
                 const [, feature] = key.split('_');
                 userUsage[feature] = count as number;
             }
         }
 
         return {
-            userId: numericId,
-            tier: this.getUserTier(numericId),
+            userId,
+            tier: this.getUserTier(userId),
             usoAtual: userUsage,
-            limites: this._getLimites(this.getUserTier(numericId))
+            limites: this._getLimites(this.getUserTier(userId))
         };
     }
 

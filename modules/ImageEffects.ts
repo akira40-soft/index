@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ═══════════════════════════════════════════════════════════════════════════
  * MÓDULO: ImageEffects.ts
  * ═══════════════════════════════════════════════════════════════════════════
@@ -15,6 +15,7 @@ class ImageEffects {
     public config: any;
     public logger: any;
     public tempFolder: string;
+    public sock: any;
     public ANGOLA_COLORS: { red: string, black: string, yellow: string };
 
     constructor(config: any = null) {
@@ -32,11 +33,16 @@ class ImageEffects {
         if (!fs.existsSync(this.tempFolder)) {
             fs.mkdirSync(this.tempFolder, { recursive: true });
         }
+        this.sock = null;
+    }
+
+    public setSocket(sock: any): void {
+        this.sock = sock;
     }
 
     /**
-    * Gera caminho de arquivo temporário
-    */
+     * Gera caminho de arquivo temporário
+     */
     generateTempPath(ext: string = 'png'): string {
         return path.join(
             this.tempFolder,
@@ -80,7 +86,7 @@ class ImageEffects {
                 newHeight = Math.round(newHeight * scale);
             }
 
-            // Aplicar melhorias profissionais
+            // Aplicar melhorias
             let processed = sharp(imageBuffer)
                 .resize(newWidth, newHeight, {
                     fit: 'inside',
@@ -88,20 +94,19 @@ class ImageEffects {
                     kernel: 'lanczos3'
                 });
 
-            // Aumentar nitidez (Sharpen agressivo mas limpo para look "Premium")
+            // Aumentar nitidez
             processed = processed.sharpen({
                 sigma: 1.5,
-                m1: 1.0,
-                m2: 3.0
+                m1: 0.5,
+                m2: 0.5
             });
 
-            // HDR-like Pro: Ajustar contraste, brilho e curvas de tom
-            processed = processed.linear(1.2, -10);
+            // Ajustar contraste e brilho
+            processed = processed.linear(1.05, -10);
 
-            // Aumentar saturação para cores mais vibrantes e profissionais
+            // Aumentar saturação ligeiramente
             processed = processed.modulate({
-                saturation: 1.4,
-                brightness: 1.02
+                saturation: 1.1
             });
 
             const outputBuffer = await processed.toBuffer();
@@ -504,26 +509,21 @@ class ImageEffects {
             const height = metadata.height || 512;
 
             const fontSize = Math.floor(width / 5);
-            const rectHeight = Math.floor(height * 0.25);
+            const rectHeight = Math.floor(height * 0.22);
             const rectY = Math.floor(height / 2 - rectHeight / 2);
-
-            const centerX = Math.floor(width / 2);
-            const centerY = Math.floor(height / 2);
 
             const wastedSvg = Buffer.from(
                 `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="0" y="${rectY}" width="${width}" height="${rectHeight}" fill="black" fill-opacity="0.8"/>
-                    
-                    <!-- Texto Principal com stroke para simular borda se Impact não carregar -->
-                    <text x="${centerX}" y="${centerY}" 
-                          font-family="Impact, Arial, Helvetica, sans-serif" 
-                          font-weight="900" 
+                    <rect x="0" y="${rectY}" width="${width}" height="${rectHeight}" fill="black" fill-opacity="0.6"/>
+                    <text x="50%" y="50%" 
+                          font-family="Impact, Arial, sans-serif" 
+                          font-weight="bold" 
                           font-size="${fontSize}px" 
-                          fill="#FF0000" 
-                          stroke="black"
-                          stroke-width="${Math.max(1, width / 100)}px"
+                          fill="#ff0000" 
                           text-anchor="middle" 
-                          dominant-baseline="middle">WASTED</text>
+                          dominant-baseline="central"
+                          stroke="black"
+                          stroke-width="${Math.max(1, width / 200)}">WASTED</text>
                 </svg>`
             );
 
@@ -531,13 +531,8 @@ class ImageEffects {
                 success: true,
                 buffer: await sharp(imageBuffer)
                     .greyscale()
-                    .blur(4)
-                    .composite([{
-                        input: wastedSvg,
-                        gravity: 'center'
-                    }])
-                    .toBuffer(),
-                effect: 'wasted'
+                    .composite([{ input: wastedSvg, blend: 'over', gravity: 'centre' }])
+                    .toBuffer()
             };
         } catch (e: any) {
             this.logger?.error('Erro no efeito Wasted:', e.message);

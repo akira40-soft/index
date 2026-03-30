@@ -206,16 +206,38 @@ class BotCore {
 
     private _updateComponentsSocket(sock: any): void {
         try {
-            this.logger.info('🔄 Atualizando socket...');
+            this.logger.info('🔄 Atualizando socket em todos os módulos core...');
+
+            // Módulos com setSocket nativo
             if (this.commandHandler?.setSocket) this.commandHandler.setSocket(sock);
             if (this.groupManagement?.setSocket) this.groupManagement.setSocket(sock);
             if (this.stickerViewOnceHandler?.setSocket) this.stickerViewOnceHandler.setSocket(sock);
             if (this.botProfile?.setSocket) this.botProfile.setSocket(sock);
             if (this.userProfile?.setSocket) this.userProfile.setSocket(sock);
+
+            // Módulos de processamento (adicionando suporte agora)
+            if (this.mediaProcessor?.setSocket) this.mediaProcessor.setSocket(sock);
+            if (this.moderationSystem?.setSocket) this.moderationSystem.setSocket(sock);
+            if (this.registrationSystem?.setSocket) this.registrationSystem.setSocket(sock);
+            if (this.subscriptionManager?.setSocket) this.subscriptionManager.setSocket(sock);
+            if (this.paymentManager?.setSocket) this.paymentManager.setSocket(sock);
+            if (this.levelSystem?.setSocket) this.levelSystem.setSocket(sock);
+            if (this.economySystem?.setSocket) this.economySystem.setSocket(sock);
+            if (this.gameSystem?.setSocket) this.gameSystem.setSocket(sock);
+            if (this.gridTacticsGame?.setSocket) this.gridTacticsGame.setSocket(sock);
+            if (this.messageProcessor?.setSocket) this.messageProcessor.setSocket(sock);
+            if (this.rateLimiter?.setSocket) this.rateLimiter.setSocket(sock);
+            if (this.permissionManager?.setSocket) this.permissionManager.setSocket(sock);
+            if (this.imageEffects?.setSocket) this.imageEffects.setSocket(sock);
+            if (this.audioProcessor?.setSocket) this.audioProcessor.setSocket(sock);
+            if (this.apiClient?.setSocket) this.apiClient.setSocket(sock);
+
+            // Simulador de presença (propriedade direta)
             if (this.presenceSimulator) this.presenceSimulator.sock = sock;
-            this.logger.info('✅ Socket atualizado');
+
+            this.logger.info('✅ Todos os módulos sincronizados');
         } catch (e: any) {
-            this.logger.error('❌ Erro socket:', e);
+            this.logger.error('❌ Erro na sincronização global de socket:', e.message);
         }
     }
 
@@ -250,9 +272,7 @@ class BotCore {
             }
 
             this.sock = makeWASocket(socketConfig);
-
-            if (this.commandHandler?.setSocket) this.commandHandler.setSocket(this.sock);
-            if (this.presenceSimulator) this.presenceSimulator.sock = this.sock;
+            this._updateComponentsSocket(this.sock);
 
             this.sock.ev.on('connection.update', async (update: any) => {
                 const { connection, lastDisconnect, qr } = update;
@@ -296,10 +316,6 @@ class BotCore {
                     this.reconnectAttempts = 0;
                     this.currentQR = null;
                     this.connectionStartTime = Date.now();
-
-                    // Warm-up delay: Aguarda 3s para o socket estabilizar antes de permitir comandos pesados
-                    this.logger.info('⏳ Aguardando warm-up de 3s...');
-                    await delay(3000);
 
                     this._updateComponentsSocket(this.sock);
                     this.BOT_JID = this.sock.user?.id;

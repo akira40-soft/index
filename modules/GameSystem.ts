@@ -11,18 +11,24 @@
  */
 
 class GameSystem {
-    private static instance: GameSystem;
-    private games: Map<string, any> = new Map();
+    private games: Map<string, any>;
+    private logger: any;
+    private config: any;
+    private gridTactics: any;
+    public sock: any;
 
-    private constructor() {
-        // Inicialização se necessário
+    constructor(logger: any, config: any, gridTactics: any = null) {
+        this.games = new Map();
+        this.logger = logger;
+        this.config = config;
+        this.gridTactics = gridTactics;
+        this.sock = null;
     }
 
-    public static getInstance(): GameSystem {
-        if (!GameSystem.instance) {
-            GameSystem.instance = new GameSystem();
-        }
-        return GameSystem.instance;
+    public setSocket(sock: any): void {
+        this.sock = sock;
+        // Se houver gridTactics e ele tiver setSocket, propaga
+        if (this.gridTactics?.setSocket) this.gridTactics.setSocket(sock);
     }
 
     /**
@@ -94,33 +100,30 @@ class GameSystem {
             if (gType === 'ttt' && /^[1-9]$/.test(texto)) {
                 return await this.handleTicTacToe(chatId, senderId, texto);
             }
+            if (gType === 'grid') {
+                if (this.gridTactics) {
+                    return await this.gridTactics.handleGridTactics(chatId, senderId, texto, []);
+                }
+            }
         }
 
         // Tic-Tac-Toe
         let game = this.games.get(chatId);
         if (game && game.type === 'ttt') {
-            // RESTRIÇÃO: Apenas jogadores ativos podem interagir
-            if (!game.players.includes(normSender)) return null;
-
             if (/^[1-9]$/.test(texto)) {
-                return await this.handleTicTacToe(chatId, senderId, texto);
-            }
-            if (['reset', 'reiniciar', 'fechar', 'sair', 'stop'].includes(texto)) {
                 return await this.handleTicTacToe(chatId, senderId, texto);
             }
         }
 
-        // RPS (Pedra, Papel, Tesoura)
+        // RPS
         game = this.games.get(`${chatId}_rps`);
-        if (game && game.type === 'rps' && game.players.includes(normSender)) {
-            if (['pedra', 'papel', 'tesoura'].includes(texto)) {
-                return await this.handleRPS(chatId, senderId, texto);
-            }
+        if (game && game.type === 'rps' && ['pedra', 'papel', 'tesoura'].includes(texto)) {
+            return await this.handleRPS(chatId, senderId, texto);
         }
 
         // Guess
         game = this.games.get(`${chatId}_guess`);
-        if (game && game.type === 'guess' && game.player === normSender && /^\d+$/.test(texto)) {
+        if (game && game.type === 'guess' && /^\d+$/.test(texto)) {
             return await this.handleGuess(chatId, senderId, texto);
         }
 
@@ -138,22 +141,6 @@ class GameSystem {
         // Use helper for robust normalization
         const normalizedSenderId = this._normalizeId(senderId);
         let normalizedOpponentId = opponentId ? this._normalizeId(opponentId) : undefined;
-
-        // Comandos de controle
-        if (game && game.type === 'ttt') {
-            const lowInput = input.toLowerCase();
-            if (['fechar', 'sair', 'stop'].includes(lowInput)) {
-                this.games.delete(chatId);
-                return { text: '🚪 Partida de Jogo da Velha encerrada!', finished: true };
-            }
-            if (['reset', 'reiniciar'].includes(lowInput)) {
-                const p1 = game.players[0];
-                const p2 = game.players[1];
-                const isAI = game.isAIMode;
-                this.games.delete(chatId);
-                return await this.handleTicTacToe(chatId, p1, 'start', isAI ? undefined : p2);
-            }
-        }
 
         // Iniciar novo jogo - AGORA SUPORTA MODO IA
         if (input === 'start' || (!game && normalizedOpponentId)) {
@@ -348,16 +335,12 @@ class GameSystem {
     }
 
     private renderBoard(board: any[]): string {
-        const numMap = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
-        const b = board.map((cell, i) => cell || numMap[i]);
-
-        return `    ┏━━━━━┳━━━━━┳━━━━━┓\n` +
-            `    ┃  ${b[0]}  ┃  ${b[1]}  ┃  ${b[2]}  ┃\n` +
-            `    ┣━━━━━╋━━━━━╋━━━━━┫\n` +
-            `    ┃  ${b[3]}  ┃  ${b[4]}  ┃  ${b[5]}  ┃\n` +
-            `    ┣━━━━━╋━━━━━╋━━━━━┫\n` +
-            `    ┃  ${b[6]}  ┃  ${b[7]}  ┃  ${b[8]}  ┃\n` +
-            `    ┗━━━━━┻━━━━━┻━━━━━┛`;
+        const b = board.map((cell, i) => cell || (i + 1).toString());
+        return `     ${b[0]} | ${b[1]} | ${b[2]}\n` +
+            `    ---+---+---\n` +
+            `     ${b[3]} | ${b[4]} | ${b[5]}\n` +
+            `    ---+---+---\n` +
+            `     ${b[6]} | ${b[7]} | ${b[8]}`;
     }
 
     private checkWinner(board: any[]): boolean {
@@ -380,123 +363,93 @@ class GameSystem {
      */
     public async handleRPS(chatId: string, senderId: string, input: string, opponentId?: string): Promise<{ text: string, finished: boolean }> {
         const choices = ['pedra', 'papel', 'tesoura'];
-        const emojis: any = { pedra: '🪨', papel: '📄', tesoura: '✂️' };
-        const beats: any = { pedra: 'tesoura', papel: 'pedra', tesoura: 'papel' };
+        const emojis = { pedra: '🪨', papel: '📄', tesoura: '✂️' };
+        const beats = { pedra: 'tesoura', papel: 'pedra', tesoura: 'papel' };
 
         const gameKey = `${chatId}_rps`;
         let game = this.games.get(gameKey);
 
-        const normSender = this._normalizeId(senderId);
-
-        // Comandos de controle
-        if (game && game.type === 'rps') {
-            const lowInput = input.trim().toLowerCase();
-            if (['sair', 'fechar', 'stop'].includes(lowInput)) {
-                this.games.delete(gameKey);
-                return { text: '🚪 Jogo de Pedra, Papel e Tesoura encerrado.', finished: true };
-            }
-            if (['reset', 'reiniciar'].includes(lowInput)) {
-                const p1 = game.players[0];
-                const p2 = game.players[1];
-                const isAI = game.isAIMode;
-                this.games.delete(gameKey);
-                return await this.handleRPS(chatId, p1, 'start', isAI ? undefined : p2);
-            }
-        }
-
         // Iniciar novo jogo
         if (input === 'start' || (!game && opponentId)) {
             if (game) {
-                return { text: '⚠️ Já existe uma partida em andamento! Digite *sair* para fechar.', finished: false };
+                return { text: '⚠️ Já existe um jogo de RPS em andamento!', finished: false };
             }
 
-            const isAIMode = !opponentId;
-            const normOpponent = opponentId ? this._normalizeId(opponentId) : 'akira-ai@akira.bot';
+            if (!opponentId) {
+                return { text: '❌ Mencione alguém para jogar RPS!', finished: false };
+            }
 
             game = {
                 type: 'rps',
-                players: [normSender, normOpponent],
+                players: [senderId, opponentId],
                 choices: [null, null],
-                waitingFor: normSender,
-                isAIMode: isAIMode,
+                waitingFor: senderId,
                 startTime: Date.now(),
                 lastActivity: Date.now()
             };
 
             this.games.set(gameKey, game);
-
-            const oppName = isAIMode ? '🤖 *Akira (IA)*' : `@${normOpponent.split('@')[0]}`;
-
             return {
-                text: `🪨📄✂️ *DESAFIO RPS INICIADO!*\n\n` +
-                    `👤 @${normSender.split('@')[0]} vs ${oppName}\n\n` +
-                    `👉 Vez de: @${normSender.split('@')[0]}\n` +
-                    `💡 Escolha: *pedra*, *papel* ou *tesoura*`,
+                text: `🪨📄✂️ *PEDRA, PAPEL, TESOURA!*\n\n` +
+                    `@${senderId.split('@')[0]} vs @${opponentId.split('@')[0]}\n\n` +
+                    `Vez de: @${senderId.split('@')[0]}\n\n` +
+                    ` Escolha: *#rps pedra*, *#rps papel* ou *#rps tesoura*`,
                 finished: false
             };
         }
 
         if (!game || game.type !== 'rps') {
-            return { text: '❌ Nenhum jogo ativo. Use #rps @user ou #rps start para jogar contra mim.', finished: false };
+            return { text: '❌ Nenhum jogo ativo. Use #rps @user para começar.', finished: false };
         }
 
         // Validar escolha
-        const choice = input.toLowerCase().trim();
+        const choice = input.toLowerCase();
         if (!choices.includes(choice)) {
-            return { text: '❌ Escolha inválida! Use: *pedra*, *papel* ou *tesoura*.', finished: false };
+            return { text: '❌ Escolha inválida! Use: pedra, papel ou tesoura.', finished: false };
         }
 
         // Determinar índice do jogador
-        const playerIndex = normSender === game.players[0] ? 0 : (normSender === game.players[1] ? 1 : -1);
-
-        if (playerIndex === -1) return { text: '❌ Você não participa desta partida!', finished: false };
-        if (normSender !== game.waitingFor) return { text: '⏳ Aguarde sua vez!', finished: false };
+        const playerIndex = senderId === game.players[0] ? 0 : 1;
+        if (senderId !== game.waitingFor) {
+            return { text: '⏳ Aguarde a vez do outro jogador!', finished: false };
+        }
 
         // Registrar escolha
         game.choices[playerIndex] = choice;
         game.lastActivity = Date.now();
 
-        // Se for modo IA, a IA escolhe agora
-        if (game.isAIMode) {
-            const aiChoice = choices[Math.floor(Math.random() * choices.length)];
-            game.choices[1] = aiChoice;
-        }
-
-        // Se alguém ainda não escolheu (multiplayer)
+        // Se o outro jogador ainda não escolheu
         if (game.choices[0] === null || game.choices[1] === null) {
-            const nextPlayer = game.players[1];
+            const nextPlayer = game.players[playerIndex === 0 ? 1 : 0];
             game.waitingFor = nextPlayer;
             return {
-                text: `✅ Escolha registrada!\n\n👉 Vez de: @${nextPlayer.split('@')[0]}\n💡 Digite sua escolha agora.`,
+                text: `✅ @${senderId.split('@')[0]} escolheu!\n\n` +
+                    `Vez de: @${nextPlayer.split('@')[0]}\n\n` +
+                    `Escolha: *#rps pedra*, *#rps papel* ou *#rps tesoura*`,
                 finished: false
             };
         }
 
-        // Ambos escolheram - Resultado
-        const c1 = game.choices[0];
-        const c2 = game.choices[1];
-        let resText = '';
-        let winnerIndex = -1;
+        // Ambos escolheram - determinar vencedor
+        const choice1 = game.choices[0];
+        const choice2 = game.choices[1];
+        let result: string;
 
-        if (c1 === c2) {
-            resText = '🤝 *EMPATE TÉCNICO!*';
-        } else if (beats[c1] === c2) {
-            resText = `🏆 *@${game.players[0].split('@')[0]} VENCEU!*`;
-            winnerIndex = 0;
+        if (choice1 === choice2) {
+            result = 'Empate!';
+        } else if (beats[choice1 as keyof typeof beats] === choice2) {
+            result = `@${game.players[0].split('@')[0]} wins!`;
         } else {
-            const name = game.isAIMode ? 'Akira' : `@${game.players[1].split('@')[0]}`;
-            resText = `🏆 *${name} VENCEU!*`;
-            winnerIndex = 1;
+            result = `@${game.players[1].split('@')[0]} wins!`;
         }
 
         this.games.delete(gameKey);
 
         return {
-            text: `🪨📄✂️ *PEDRA, PAPEL E TESOURA*\n\n` +
-                `👤 @${game.players[0].split('@')[0]}: ${emojis[c1]} *${c1.toUpperCase()}*\n` +
-                `🤖 ${game.isAIMode ? 'Akira' : '@' + game.players[1].split('@')[0]}: ${emojis[c2]} *${c2.toUpperCase()}*\n\n` +
-                `${resText}\n\n` +
-                `_${winnerIndex === 0 ? 'Parabéns!' : (winnerIndex === 1 ? 'Melhor sorte na próxima.' : 'Ninguém ganhou.')}_`,
+            text: `🪨📄✂️ *RESULTADO*\n\n` +
+                `@${game.players[0].split('@')[0]}: ${emojis[choice1 as keyof typeof emojis]} ${choice1}\n` +
+                `@${game.players[1].split('@')[0]}: ${emojis[choice2 as keyof typeof emojis]} ${choice2}\n\n` +
+                `🏆 *${result}*`,
             finished: true
         };
     }
@@ -510,32 +463,17 @@ class GameSystem {
         const gameKey = `${chatId}_guess`;
         let game = this.games.get(gameKey);
 
-        const normSender = this._normalizeId(senderId);
-
-        // Comandos de controle
-        if (game && game.type === 'guess') {
-            const lowInput = input.trim().toLowerCase();
-            if (['sair', 'fechar', 'stop'].includes(lowInput)) {
-                this.games.delete(gameKey);
-                return { text: '🚪 O jogo de adivinhação foi encerrado.', finished: true };
-            }
-            if (['reset', 'reiniciar'].includes(lowInput)) {
-                this.games.delete(gameKey);
-                return await this.handleGuess(chatId, normSender, 'start');
-            }
-        }
-
         // Iniciar novo jogo
         if (input === 'start') {
             if (game) {
-                return { text: '⚠️ Já existe um desafio ativo! Digite apenas o número ou *sair*.', finished: false };
+                return { text: '⚠️ Já existe um jogo de advinha ativo!', finished: false };
             }
 
             const targetNumber = Math.floor(Math.random() * 100) + 1;
 
             game = {
                 type: 'guess',
-                player: normSender,
+                player: senderId,
                 target: targetNumber,
                 attempts: 0,
                 maxAttempts: 10,
@@ -545,10 +483,10 @@ class GameSystem {
 
             this.games.set(gameKey, game);
             return {
-                text: `🔢 *ADVINHA O NÚMERO!* 🔢\n\n` +
-                    `🤔 Pensei em um número entre *1 e 100*.\n` +
-                    `🎯 Você tem *10 tentativas*.\n\n` +
-                    `💡 Digite um número para tentar!`,
+                text: `🔢 *ADVINHA O NÚMERO!*\n\n` +
+                    `Pensei em um número entre 1 e 100.\n` +
+                    `Você tem *10 tentativas*!\n\n` +
+                    `Use: *#guess <número>* para tentar`,
                 finished: false
             };
         }
@@ -557,13 +495,13 @@ class GameSystem {
             return { text: '❌ Nenhum jogo ativo. Use #guess start para começar.', finished: false };
         }
 
-        if (normSender !== game.player) {
-            return { text: '❌ Este jogo é de outro usuário! Use #guess start para criar o seu.', finished: false };
+        if (senderId !== game.player) {
+            return { text: '❌ Este jogo é de outro usuário. Use #guess start para jogar.', finished: false };
         }
 
-        const guess = parseInt(input.trim());
+        const guess = parseInt(input);
         if (isNaN(guess) || guess < 1 || guess > 100) {
-            return { text: '❌ Inválido! Escolha um número entre *1 e 100*.', finished: false };
+            return { text: '❌ Escolha um número entre 1 e 100.', finished: false };
         }
 
         game.attempts++;
@@ -571,13 +509,10 @@ class GameSystem {
 
         if (guess === game.target) {
             this.games.delete(gameKey);
-            const medal = game.attempts <= 3 ? '🥇' : (game.attempts <= 6 ? '🥈' : '🥉');
             return {
-                text: `🎉 *PARABÉNS! VOCÊ ACERTOU!* 🎉\n\n` +
-                    `🎯 O número era: *${game.target}*\n` +
-                    `📊 Tentativas: *${game.attempts}/${game.maxAttempts}*\n` +
-                    `🏆 Ranking: ${medal}\n\n` +
-                    `_Incrível! Quer jogar de novo?_`,
+                text: `🎉 *ACERTOU!*\n\n` +
+                    `O número era *${game.target}*!\n` +
+                    `Você acertou em *${game.attempts} tentativa(s)*! 🏆`,
                 finished: true
             };
         }
@@ -585,32 +520,19 @@ class GameSystem {
         if (game.attempts >= game.maxAttempts) {
             this.games.delete(gameKey);
             return {
-                text: `😞 *GAME OVER* 😞\n\n` +
-                    `O número secreto era: *${game.target}*\n` +
-                    `Você esgotou todas as tentativas.\n\n` +
-                    `_Tente novamente! Digite #guess start_`,
+                text: `😞 *FIM DE JOGO!*\n\n` +
+                    `O número era *${game.target}*.\n` +
+                    `Você usou todas as *${game.maxAttempts} tentativas*!`,
                 finished: true
             };
         }
 
-        // Dicas dinâmicas
-        const diff = Math.abs(guess - game.target);
-        let heat = '';
-        if (diff <= 5) heat = '🔥 *MUITO QUENTE!*';
-        else if (diff <= 15) heat = '🌞 *ESTÁ ESQUENTANDO...*';
-        else if (diff <= 30) heat = '⛅ *ESTÁ MORNO.*';
-        else heat = '❄️ *FRIO...*';
-
-        const direction = guess < game.target ? '🔼 Tente um MAIOR' : '🔽 Tente um MENOR';
-
-        // Barra de progresso visual
-        const prog = '🟥'.repeat(game.attempts) + '⬜'.repeat(game.maxAttempts - game.attempts);
+        const hint = guess < game.target ? '🔼 O número é MAIOR' : '🔽 O número é MENOR';
 
         return {
-            text: `❌ *ERROU!* ❌\n\n` +
-                `${heat}\n` +
-                `${direction}\n\n` +
-                `📊 Tentativas: [${prog}] *${game.attempts}/${game.maxAttempts}*`,
+            text: `${hint}\n\n` +
+                `Tentativas: *${game.attempts}/${game.maxAttempts}*\n` +
+                `Use: *#guess <número>*`,
             finished: false
         };
     }
@@ -621,45 +543,28 @@ class GameSystem {
      * ═══════════════════════════════════════════════════════════════════════
      */
     private words = [
-        'akira', 'computador', 'teclado', 'monitor', 'celular', 'whatsapp',
-        'programacao', 'typescript', 'javascript', 'internet', 'algoritmo',
-        'software', 'hardware', 'servidor', 'banco', 'futebol', 'angola',
-        'luanda', 'escola', 'universo', 'galaxia', 'planeta', 'estrela',
-        'tecnologia', 'inteligencia', 'artificial', 'projeto', 'sistema'
+        'programacao', 'javascript', 'typescript', 'whatsapp', 'bot', 'akira',
+        'desenvolvimento', 'computador', 'internet', 'mensagem', 'servidor',
+        'database', 'api', 'frontend', 'backend', 'mobile', 'windows', 'linux'
     ];
 
     public async handleHangman(chatId: string, senderId: string, input: string, customWord?: string): Promise<{ text: string, finished: boolean }> {
         const gameKey = `${chatId}_hangman`;
         let game = this.games.get(gameKey);
 
-        const normSender = this._normalizeId(senderId);
-
-        // Comandos de controle
-        if (game && game.type === 'hangman') {
-            const lowInput = input.trim().toLowerCase();
-            if (['sair', 'fechar', 'stop'].includes(lowInput)) {
-                this.games.delete(gameKey);
-                return { text: '🚪 O jogo da forca foi encerrado.', finished: true };
-            }
-            if (['reset', 'reiniciar'].includes(lowInput)) {
-                this.games.delete(gameKey);
-                return await this.handleHangman(chatId, normSender, 'start');
-            }
-        }
-
         // Iniciar novo jogo
-        if (input === 'start' || (!game && customWord)) {
+        if (input === 'start') {
             if (game) {
-                return { text: '⚠️ Já existe uma forca ativa! Digite as letras ou *sair*.', finished: false };
+                return { text: '⚠️ Já existe um jogo da forca ativo!', finished: false };
             }
 
             const word = (customWord && customWord.length > 2)
-                ? customWord.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '')
+                ? customWord.toLowerCase().replace(/[^a-z]/g, '')
                 : this.words[Math.floor(Math.random() * this.words.length)];
 
             game = {
                 type: 'hangman',
-                player: normSender,
+                player: senderId,
                 word: word,
                 guessed: new Set<string>(),
                 wrong: 0,
@@ -670,9 +575,7 @@ class GameSystem {
 
             this.games.set(gameKey, game);
             return {
-                text: `🔤 *JOGO DA FORCA INICIADO!* 🔤\n\n` +
-                    this.getHangmanDisplay(game) +
-                    `\n\n💡 Digite uma letra para chutar!`,
+                text: this.getHangmanDisplay(game),
                 finished: false
             };
         }
@@ -681,15 +584,15 @@ class GameSystem {
             return { text: '❌ Nenhum jogo ativo. Use #forca start para começar.', finished: false };
         }
 
-        if (normSender !== game.player) {
-            return { text: '❌ Este jogo é de outro usuário! Use #forca start para criar o seu.', finished: false };
+        if (senderId !== game.player) {
+            return { text: '❌ Este jogo é de outro usuário. Use #forca start para jogar.', finished: false };
         }
 
         // Processar tentativa (letra única)
-        const guess = input.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').charAt(0);
+        const guess = input.toLowerCase().charAt(0);
 
-        if (!guess || !/[a-z]/.test(guess)) {
-            return { text: '❌ Inválido! Digite apenas uma letra de A a Z.', finished: false };
+        if (!guess || guess.length !== 1 || !/[a-z]/.test(guess)) {
+            return { text: '❌ Digite uma letra! Use: #forca <letra>', finished: false };
         }
 
         if (game.guessed.has(guess)) {
@@ -701,22 +604,21 @@ class GameSystem {
 
         // Verificar se a letra está na palavra
         if (game.word.includes(guess)) {
+            // Verificar vitória
             const won = game.word.split('').every((letter: string) => game.guessed.has(letter));
 
             if (won) {
                 this.games.delete(gameKey);
                 return {
-                    text: `🎉 *PARABÉNS! VOCÊ VENCEU!* 🎉\n\n` +
+                    text: `🎉 *VOCÊ GANHOU!*\n\n` +
                         `A palavra era: *${game.word.toUpperCase()}*\n` +
-                        `💀 Erros: *${game.wrong}/${game.maxWrong}*\n\n` +
-                        `_Ufa! Você escapou da forca!_`,
+                        `Erros: ${game.wrong}/${game.maxWrong} 🏆`,
                     finished: true
                 };
             }
 
             return {
-                text: `✅ Letra *${guess.toUpperCase()}* está correta!\n\n` +
-                    this.getHangmanDisplay(game),
+                text: this.getHangmanDisplay(game) + `\n\n✅ Letra correta!`,
                 finished: false
             };
         }
@@ -727,17 +629,15 @@ class GameSystem {
         if (game.wrong >= game.maxWrong) {
             this.games.delete(gameKey);
             return {
-                text: `😵 *VOCÊ FOI ENFORCADO!* 😵\n\n` +
-                    this.getHangmanDisplay(game) +
-                    `\n\n❌ A palavra secreta era: *${game.word.toUpperCase()}*\n` +
-                    `_Tente novamente! Digite #forca start_`,
+                text: `😵 *GAME OVER!*\n\n` +
+                    `A palavra era: *${game.word.toUpperCase()}*\n` +
+                    `Você foi enforcado! 💀`,
                 finished: true
             };
         }
 
         return {
-            text: `❌ Letra *${guess.toUpperCase()}* não existe!\n\n` +
-                this.getHangmanDisplay(game),
+            text: this.getHangmanDisplay(game) + `\n\n❌ Letra errada!`,
             finished: false
         };
     }
@@ -788,6 +688,7 @@ class GameSystem {
   ┌───────┐
   │       │
   │       O
+  │      /│\\
   │      / 
   │      
 ──┴─────────`,
@@ -814,238 +715,471 @@ class GameSystem {
             `Use: *#forca <letra>*`;
     }
 
-
-
     /**
      * ═══════════════════════════════════════════════════════════════════════
-     * BLACKJACK (21)
+     * GRID TACTICS - JOGO HÍBRIDO: XADREZ + SUDOKU + JOGO DA VELHA
      * ═══════════════════════════════════════════════════════════════════════
+     * 
+     * COMO JOGAR:
+     * - Grade 3x3, cada célula pode ter 1-9
+     * - Não pode重复 números na mesma linha, coluna OU quadrante 3x3
+     * - Como Sudoku, mas com цель de fazer 3 em linha como Jogo da Velha
+     * - Ganha quem completar 3 números em linha (horizontal, vertical ou diagonal)
+     * - Enquanto mantém o Sudoku válido!
+     * 
+     * COMANDOS:
+     * - #gridtactics start - Iniciar jogo
+     * - #grid <número> <posição> - Jogar (ex: #grid 5 5 = número 5 na posição 5)
+     * - #grid help - Ver regras completas
+     * 
+     * EXEMPLO:
+     *   Posições:   Tabuleiro vazio:
+     *    1|2|3         _|_|_
+     *   -+-+-         -+-+-
+     *    4|5|6         _|_|_
+     *   -+-+-         -+-+-
+     *    7|8|9         _|_|_
      */
-    public async handleBlackjack(chatId: string, senderId: string, input: string): Promise<{ text: string, finished: boolean }> {
-        const gameKey = `${chatId}_blackjack`;
+    public async handleGridTactics(chatId: string, senderId: string, input: string, opponentId?: string): Promise<{ text: string, finished: boolean }> {
+        const gameKey = `${chatId}_gridtactics`;
         let game = this.games.get(gameKey);
 
-        const normSender = this._normalizeId(senderId);
+        // Mostrar ajuda/regras
+        if (input === 'help' || input === 'regras' || input === 'regras') {
+            return this.getGridTacticsHelp();
+        }
 
         // Iniciar novo jogo
         if (input === 'start') {
-            if (game) return { text: '⚠️ Já existe um Blackjack ativo! Digite *puxar*, *parar* ou *sair*.', finished: false };
+            if (game) {
+                return { text: '⚠️ Já existe uma partida de Grid Tactics em andamento!', finished: false };
+            }
 
-            const deck = this.generateDeck();
-            const playerHand = [this.drawCard(deck), this.drawCard(deck)];
-            const aiHand = [this.drawCard(deck), this.drawCard(deck)];
+            // Modo IA ou multiplayer
+            const isAIMode = !opponentId;
+            if (isAIMode) {
+                opponentId = 'akira-ai@akira.bot';
+            }
+
+            // Gerar tabuleiro Sudoku válido inicial (com algumas células preenchidas)
+            const initialBoard = this.generateValidSudokuBoard(3); // 3 significa dificuldade média
 
             game = {
-                type: 'blackjack',
-                player: normSender,
-                playerHand,
-                aiHand,
-                deck,
-                status: 'playing',
+                type: 'gridtactics',
+                players: [senderId, opponentId],
+                turn: 0,
+                board: initialBoard,
+                isAIMode: isAIMode,
+                aiSymbol: '🤖',
+                humanSymbol: '👤',
+                moveHistory: [],
                 startTime: Date.now(),
                 lastActivity: Date.now()
             };
 
             this.games.set(gameKey, game);
 
-            const pScore = this.calculateBJScore(playerHand);
-            if (pScore === 21) {
-                return this.resolveBlackjack(chatId, game, 'BLACKJACK! 🃏');
-            }
+            const opponentDisplay = isAIMode ? '🤖 Akira (IA)' : `@${opponentId.split('@')[0]}`;
 
             return {
-                text: `🃏 *BLACKJACK (21)* 🃏\n\n` +
-                    `👤 *Sua Mão:* ${this.renderHand(playerHand)} (${pScore})\n` +
-                    `🤖 *Banca:* ${this.renderHand([aiHand[0]], true)} (?)\n\n` +
-                    `💡 O que deseja fazer?\n` +
-                    `👉 *#bj puxar* (pegar carta)\n` +
-                    `👉 *#bj parar* (encerrar vez)\n` +
-                    `👉 *#bj sair* (desistir)`,
+                text: `🎯 *GRID TACTICS*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `👤 @${senderId.split('@')[0]} (Você)\n` +
+                    `vs\n` +
+                    `${opponentDisplay}\n\n` +
+                    `*OBJETIVO:* Complete 3 números em linha (horizontal, vertical ou diagonal)\n` +
+                    `enquanto mantém o Sudoku válido!\n\n` +
+                    `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                    `*Como jogar:*\n` +
+                    `#grid <número 1-9> <posição 1-9>\n\n` +
+                    `*Exemplo:* #grid 5 5 (coloca o número 5 na posição central)\n\n` +
+                    `Vez de: @${senderId.split('@')[0]}`,
                 finished: false
             };
         }
 
-        if (!game || game.type !== 'blackjack') return { text: '❌ Nenhum jogo ativo. Use #blackjack start para começar.', finished: false };
-        if (normSender !== game.player) return { text: '❌ Este jogo não é seu!', finished: false };
-
-        const action = input.trim().toLowerCase();
-
-        if (action === 'puxar' || action === 'hit') {
-            const card = this.drawCard(game.deck);
-            game.playerHand.push(card);
-            const score = this.calculateBJScore(game.playerHand);
-
-            if (score > 21) {
-                return this.resolveBlackjack(chatId, game, 'ESTOUROU! 💥');
-            }
-
+        if (!game || game.type !== 'gridtactics') {
             return {
-                text: `🃏 *BLACKJACK - PUXOU* 🃏\n\n` +
-                    `👤 *Sua Mão:* ${this.renderHand(game.playerHand)} (${score})\n` +
-                    `🤖 *Banca:* ${this.renderHand([game.aiHand[0]], true)} (?)\n\n` +
-                    `👉 *puxar* ou *parar*?`,
+                text: `❌ Nenhum jogo ativo.\n\n` +
+                    `Use *#gridtactics start* para jogar contra a IA\n` +
+                    `Use *#gridtactics @user* para multiplayer\n` +
+                    `Use *#gridtactics help* para ver as regras!`,
                 finished: false
             };
         }
 
-        if (action === 'parar' || action === 'stand') {
-            // Turno da Banca (IA)
-            let aiScore = this.calculateBJScore(game.aiHand);
-            while (aiScore < 17) {
-                game.aiHand.push(this.drawCard(game.deck));
-                aiScore = this.calculateBJScore(game.aiHand);
-            }
-            return this.resolveBlackjack(chatId, game);
+        // Processar jogada
+        const args = input.split(' ');
+        if (args.length < 2) {
+            return {
+                text: `❌ Formato inválido!\n\n` +
+                    `Use: *#grid <número 1-9> <posição 1-9>*\n\n` +
+                    `Exemplo: *#grid 5 5*\n\n` +
+                    `${this.renderGridTacticsBoard(game.board)}`,
+                finished: false
+            };
         }
 
-        if (['sair', 'fechar', 'stop'].includes(action)) {
+        const number = parseInt(args[0]);
+        const position = parseInt(args[1]) - 1;
+
+        // Validações
+        if (isNaN(number) || number < 1 || number > 9) {
+            return { text: '❌ Escolha um número de 1 a 9!', finished: false };
+        }
+
+        if (isNaN(position) || position < 0 || position > 8) {
+            return { text: '❌ Escolha uma posição de 1 a 9!', finished: false };
+        }
+
+        if (game.board[position] !== null) {
+            return { text: '❌ Essa posição já está ocupada!', finished: false };
+        }
+
+        // Verificar se é a vez do jogador correto
+        if (senderId !== game.players[game.turn]) {
+            return { text: '⏳ Aguarde sua vez!', finished: false };
+        }
+
+        // Fazer jogada do humano
+        const previousBoard = [...game.board];
+        game.board[position] = number;
+        game.moveHistory.push({ player: senderId, number, position, board: [...previousBoard] });
+        game.lastActivity = Date.now();
+
+        // Verificar vitória do humano
+        if (this.checkGridTacticsWinner(game.board, number)) {
             this.games.delete(gameKey);
-            return { text: '👋 Você saiu da mesa de Blackjack.', finished: true };
+            return {
+                text: `🎉 *VITÓRIA!*\n\n` +
+                    `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                    `@${senderId.split('@')[0]} venceu!\n\n` +
+                    `Você completou 3 em linha! 🏆`,
+                finished: true
+            };
         }
 
-        return { text: '❌ Use: *puxar* ou *parar*.', finished: false };
-    }
+        // Verificar se o humano quebrou o Sudoku (movimento inválido)
+        if (!this.isValidSudokuMove(game.board, position, number)) {
+            game.board[position] = null; // Reverter jogada
+            return {
+                text: `❌ *MOVIMENTO INVÁLIDO!*\n\n` +
+                    `Esse número viola as regras do Sudoku!\n` +
+                    `Não pode ter números repetidos na mesma linha, coluna ou quadrante.\n\n` +
+                    `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                    `Tente novamente!`,
+                finished: false
+            };
+        }
 
-    private generateDeck(): any[] {
-        const suits = ['♠️', '♥️', '♦️', '♣️'];
-        const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-        const deck = [];
-        for (const s of suits) {
-            for (const r of ranks) {
-                deck.push({ rank: r, suit: s });
+        // Verificar empate (tabuleiro cheio)
+        if (game.board.every((cell: any) => cell !== null)) {
+            this.games.delete(gameKey);
+            return {
+                text: `👔 *EMPATE!*\n\n` +
+                    `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                    `Ninguém venceu. Boa tentativa!`,
+                finished: true
+            };
+        }
+
+        // Se modo IA, jogada da IA
+        if (game.isAIMode) {
+            game.turn = 1;
+
+            // IA encontra melhor jogada
+            const aiMove = this.calculateGridTacticsAIMove(game.board, number); // O número do humano
+
+            if (aiMove.position !== -1) {
+                game.board[aiMove.position] = aiMove.number;
+                game.moveHistory.push({ player: 'akira-ai', number: aiMove.number, position: aiMove.position, board: [...previousBoard] });
+
+                // Verificar vitória da IA
+                if (this.checkGridTacticsWinner(game.board, aiMove.number)) {
+                    this.games.delete(gameKey);
+                    return {
+                        text: `🤖 *DERROTA!*\n\n` +
+                            `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                            `Akira completou 3 em linha!\n\n` +
+                            `Tente novamente com #gridtactics start`,
+                        finished: true
+                    };
+                }
+
+                // Verificar empatar após jogada da IA
+                if (game.board.every((cell: number | null) => cell !== null)) {
+                    this.games.delete(gameKey);
+                    return {
+                        text: `👔 *EMPATE!*\n\n` +
+                            `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                            `Ninguém venceu. Boa tentativa!`,
+                        finished: true
+                    };
+                }
             }
-        }
-        return deck.sort(() => Math.random() - 0.5);
-    }
 
-    private drawCard(deck: any[]): any {
-        return deck.pop();
-    }
+            // Voltar turno para o humano
+            game.turn = 0;
 
-    private calculateBJScore(hand: any[]): number {
-        let score = 0;
-        let aces = 0;
-        for (const card of hand) {
-            if (card.rank === 'A') {
-                aces++;
-                score += 11;
-            } else if (['J', 'Q', 'K'].includes(card.rank)) {
-                score += 10;
-            } else {
-                score += parseInt(card.rank);
-            }
-        }
-        while (score > 21 && aces > 0) {
-            score -= 10;
-            aces--;
-        }
-        return score;
-    }
-
-    private renderHand(hand: any[], hidden: boolean = false): string {
-        let res = hand.map(c => `[${c.rank}${c.suit}]`).join(' ');
-        if (hidden) res += ' [❓]';
-        return res;
-    }
-
-    private resolveBlackjack(chatId: string, game: any, specialMsg?: string): { text: string, finished: boolean } {
-        const pScore = this.calculateBJScore(game.playerHand);
-        const aiScore = this.calculateBJScore(game.aiHand);
-        let resultMsg = '';
-
-        if (pScore > 21) {
-            resultMsg = '❌ Você estourou e perdeu!';
-        } else if (aiScore > 21) {
-            resultMsg = '🎉 A banca estourou! VOCÊ VENCEU! 🏆';
-        } else if (pScore > aiScore) {
-            resultMsg = '🎉 Você venceu a banca! 🏆';
-        } else if (pScore < aiScore) {
-            resultMsg = '❌ A banca venceu. Mais sorte na próxima!';
-        } else {
-            resultMsg = '🤝 Empate! O valor volta para você.';
+            return {
+                text: `🎯 *GRID TACTICS VS AKIRA*\n\n` +
+                    `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                    `🤖 Akira jogou: ${aiMove.number} na posição ${aiMove.position + 1}\n\n` +
+                    `Sua vez! Use: #grid <número> <posição>`,
+                finished: false
+            };
         }
 
-        this.games.delete(`${chatId}_blackjack`);
+        // Modo multiplayer - trocar turno
+        game.turn = game.turn === 0 ? 1 : 0;
 
         return {
-            text: `🃏 *FIM DE JOGO* 🃏\n\n` +
-                `${specialMsg ? '* ' + specialMsg + ' *\n\n' : ''}` +
-                `👤 *Sua Mão:* ${this.renderHand(game.playerHand)} (*${pScore}*)\n` +
-                `🤖 *Banca:* ${this.renderHand(game.aiHand)} (*${aiScore}*)\n\n` +
-                `${resultMsg}`,
-            finished: true
+            text: `🎯 *GRID TACTICS*\n\n` +
+                `${this.renderGridTacticsBoard(game.board)}\n\n` +
+                `Vez de: @${game.players[game.turn].split('@')[0]}\n\n` +
+                `Use: #grid <número> <posição>`,
+            finished: false
         };
     }
 
     /**
-     * ═══════════════════════════════════════════════════════════════════════
-     * ROLETA RUSSA
-     * ═══════════════════════════════════════════════════════════════════════
+     * Gera um tabuleiro Sudoku válido inicial
      */
-    public async handleRussianRoulette(chatId: string, senderId: string, input: string): Promise<{ text: string, finished: boolean }> {
-        const gameKey = `${chatId}_roulette`;
-        let game = this.games.get(gameKey);
+    private generateValidSudokuBoard(difficulty: number): (number | null)[] {
+        // Tabuleiro base válido (uma solução Sudoku)
+        const baseBoard = [
+            5, 3, null, null, 7, null, null, null, null,
+            6, null, null, 1, 9, 5, null, null, null,
+            null, 9, 8, null, null, null, null, 6, null,
+            8, null, null, null, 6, null, null, null, 3,
+            4, null, null, 8, null, 3, null, null, 1,
+            7, null, null, null, 2, null, null, null, 6,
+            null, 6, null, null, null, null, 2, 8, null,
+            null, null, null, 4, 1, 9, null, null, 5,
+            null, null, null, null, 8, null, null, 7, 9
+        ];
 
-        const normSender = this._normalizeId(senderId);
+        // Converte para array mutável
+        const board = [...baseBoard];
 
-        if (input === 'start') {
-            if (game) return { text: '⚠️ Já há um tambor girado! Puxe o gatilho.', finished: false };
+        // Remove células aleatoriamente baseado na dificuldade
+        // difficulty 1 = fácil (remove 3), 2 = médio (remove 4), 3 = difícil (remove 5)
+        const cellsToRemove = 3 + difficulty;
+        const positions = Array.from({ length: 9 }, (_, i) => i);
 
-            game = {
-                type: 'roulette',
-                bullet: Math.floor(Math.random() * 6) + 1,
-                current: 1,
-                player: normSender,
-                startTime: Date.now()
-            };
-
-            this.games.set(gameKey, game);
-            return {
-                text: `🔫 *ROLETA RUSSA* 🔫\n\n` +
-                    `O tambor foi girado...\n` +
-                    `Uma bala foi colocada em uma das 6 câmaras.\n\n` +
-                    `👉 *#roleta puxar* para arriscar a sorte!`,
-                finished: false
-            };
+        // Embaralha posições
+        for (let i = positions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [positions[i], positions[j]] = [positions[j], positions[i]];
         }
 
-        if (!game || game.type !== 'roulette') return { text: '❌ Use #roleta start para começar.', finished: false };
+        // Remove células
+        for (let i = 0; i < cellsToRemove; i++) {
+            const pos = positions[i] * 9 + Math.floor(Math.random() * 9);
+            if (pos < 81) {
+                board[pos] = null;
+            }
+        }
 
-        if (input.trim().toLowerCase() === 'puxar' || input.trim().toLowerCase() === 'shoot') {
-            const hit = game.current === game.bullet;
-            const chamber = game.current;
-            game.current++;
+        return board;
+    }
 
-            if (hit) {
-                this.games.delete(gameKey);
-                return {
-                    text: `💥 *POOOW!* 💀\n\n` +
-                        `A bala estava na câmara *${chamber}*.\n` +
-                        `@${normSender.split('@')[0]} não teve sorte hoje...`,
-                    finished: true
-                };
+    /**
+     * Renderiza o tabuleiro de Grid Tactics
+     */
+    private renderGridTacticsBoard(board: (number | null)[]): string {
+        let display = '';
+
+        for (let i = 0; i < 9; i++) {
+            const cell = board[i];
+            const cellDisplay = cell !== null ? cell.toString() : '_';
+
+            if (i === 0 || i === 3 || i === 6) {
+                display += '┌───┬───┬───┐\n';
+            } else if (i === 1 || i === 4 || i === 7) {
+                display += '├───┼───┼───┤\n';
             }
 
-            if (game.current > 6) {
-                this.games.delete(gameKey);
-                return { text: '🍀 *CLIC!* O tambor acabou. Você sobreviveu! 🏆', finished: true };
+            const row = Math.floor(i / 3);
+            const col = i % 3;
+
+            display += '│';
+            display += ` ${cellDisplay} `;
+
+            if (col === 2) {
+                display += '│\n';
             }
-
-            return {
-                text: `🍀 *CLIC!* \n\n` +
-                    `Câmara ${chamber} estava vazia.\n` +
-                    `Ainda restam ${6 - chamber} chances.\n\n` +
-                    `👉 *puxar* de novo?`,
-                finished: false
-            };
         }
 
-        if (['sair', 'fechar'].includes(input.toLowerCase())) {
-            this.games.delete(gameKey);
-            return { text: '🚶 Você guardou a arma e saiu.', finished: true };
+        display += '└───┴───┴───┘\n';
+
+        // Adicionar números das posições abaixo
+        display += '  1  2  3   4  5  6   7  8  9';
+
+        return display;
+    }
+
+    /**
+     * Verifica se uma jogada mantém o Sudoku válido
+     */
+    private isValidSudokuMove(board: (number | null)[], position: number, number: number): boolean {
+        const row = Math.floor(position / 3);
+        const col = position % 3;
+        const boxRow = Math.floor(row / 3);
+        const boxCol = Math.floor(col / 3);
+
+        // Verificar linha (grupo de 3 células)
+        for (let i = row * 3; i < row * 3 + 3; i++) {
+            if (i !== position && board[i] === number) {
+                return false;
+            }
         }
 
-        return { text: '❌ Use: *puxar* ou *sair*.', finished: false };
+        // Verificar coluna
+        for (let i = col; i < 9; i += 3) {
+            if (i !== position && board[i] === number) {
+                return false;
+            }
+        }
+
+        // Verificar quadrante 3x3
+        const boxStart = boxRow * 6 + boxCol * 3;
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 3; c++) {
+                const pos = boxStart + r * 3 + c;
+                if (pos !== position && board[pos] === number) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Verifica vencedor no Grid Tactics (3 em linha)
+     */
+    private checkGridTacticsWinner(board: (number | null)[], lastNumber: number): boolean {
+        const wins = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8], // Horizontais
+            [0, 3, 6], [1, 4, 7], [2, 5, 8], // Verticais
+            [0, 4, 8], [2, 4, 6]             // Diagonais
+        ];
+
+        return wins.some(combo => {
+            // Todos os 3 devem ser preenchidos E serem o último número jogado
+            // (Na verdade, o último número jogado ganha, então verificamos se todos são iguais)
+            return board[combo[0]] !== null &&
+                board[combo[1]] !== null &&
+                board[combo[2]] !== null &&
+                board[combo[0]] === board[combo[1]] &&
+                board[combo[1]] === board[combo[2]];
+        });
+    }
+
+    /**
+     * Calcula a melhor jogada da IA no Grid Tactics
+     */
+    private calculateGridTacticsAIMove(board: (number | null)[], humanNumber: number): { number: number, position: number } {
+        const availablePositions = board.map((cell, i) => cell === null ? i : -1).filter(i => i !== -1);
+
+        if (availablePositions.length === 0) {
+            return { number: -1, position: -1 };
+        }
+
+        // 1. Tentar vencer
+        for (const pos of availablePositions) {
+            for (let num = 1; num <= 9; num++) {
+                if (this.isValidSudokuMove(board, pos, num)) {
+                    const testBoard = [...board];
+                    testBoard[pos] = num;
+                    if (this.checkGridTacticsWinner(testBoard, num)) {
+                        return { number: num, position: pos };
+                    }
+                }
+            }
+        }
+
+        // 2. Bloquear vitória do oponente
+        for (const pos of availablePositions) {
+            for (let num = 1; num <= 9; num++) {
+                if (num !== humanNumber && this.isValidSudokuMove(board, pos, num)) {
+                    const testBoard = [...board];
+                    testBoard[pos] = num;
+                    if (this.checkGridTacticsWinner(testBoard, num)) {
+                        return { number: num, position: pos };
+                    }
+                }
+            }
+        }
+
+        // 3. Jogar no centro (posição 4) se disponível
+        if (board[4] === null) {
+            for (let num = 1; num <= 9; num++) {
+                if (this.isValidSudokuMove(board, 4, num)) {
+                    return { number: num, position: 4 };
+                }
+            }
+        }
+
+        // 4. Jogar em qualquer posição válida aleatória
+        const validMoves: { number: number, position: number }[] = [];
+
+        for (const pos of availablePositions) {
+            // Tentar números que não são o que o humano usou recentemente
+            const preferredNumbers = [5, 3, 7, 1, 9, 2, 4, 6, 8];
+
+            for (const num of preferredNumbers) {
+                if (this.isValidSudokuMove(board, pos, num)) {
+                    validMoves.push({ number: num, position: pos });
+                    break;
+                }
+            }
+        }
+
+        if (validMoves.length > 0) {
+            return validMoves[Math.floor(Math.random() * validMoves.length)];
+        }
+
+        return { number: -1, position: -1 };
+    }
+
+    /**
+     * Retorna a ajuda/regras do Grid Tactics
+     */
+    private getGridTacticsHelp(): { text: string, finished: boolean } {
+        return {
+            text: `🎯 *GRID TACTICS - REGRAS COMPLETAS*\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `*O QUE É?*\n` +
+                `Um jogo híbrido que combina:\n` +
+                `• Jogo da Velha (3 em linha)\n` +
+                `• Sudoku (sem números repetidos)\n\n` +
+                `*OBJETIVO:*\n` +
+                `Complete 3 números em linha (horizontal,\n` +
+                `vertical ou diagonal) ENQUANTO mantém\n` +
+                `o tabuleiro válido como Sudoku!\n\n` +
+                `*REGRAS DO SUDOKU:*\n` +
+                `• Não pode ter números repetidos na mesma linha\n` +
+                `• Não pode ter números repetidos na mesma coluna\n` +
+                `• Não pode ter números repetidos no mesmo quadrante 3x3\n\n` +
+                `*COMO JOGAR:*\n` +
+                `1. Use *#gridtactics start* para começar\n` +
+                `2. Use *#grid <número> <posição>* para jogar\n\n` +
+                `*EXEMPLO:*\n` +
+                `#grid 5 5 = coloca o número 5 na posição central\n\n` +
+                `*POSIÇÕES:*\n` +
+                ` 1 | 2 | 3\n` +
+                `---+---+---\n` +
+                ` 4 | 5 | 6\n` +
+                `---+---+---\n` +
+                ` 7 | 8 | 9\n\n` +
+                `*DICA:*\n` +
+                `• Some 3 não precisa ser 3 em linha!\n` +
+                `• Pode ser 1-2-3, 2-3-4, etc\n` +
+                `• Planeje com antecedência! 🧠`,
+            finished: false
+        };
     }
 
     /**
@@ -1056,12 +1190,10 @@ class GameSystem {
         this.games.delete(`${chatId}_rps`);
         this.games.delete(`${chatId}_guess`);
         this.games.delete(`${chatId}_hangman`);
-        this.games.delete(`${chatId}_blackjack`);
-        this.games.delete(`${chatId}_roulette`);
         this.games.delete(`${chatId}_gridtactics`);
         return true;
     }
 }
 
-export default GameSystem.getInstance();
+export default GameSystem;
 

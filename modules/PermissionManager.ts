@@ -8,6 +8,7 @@
  */
 
 import RegistrationSystem from './RegistrationSystem.js';
+import ConfigManager from './ConfigManager.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -18,13 +19,18 @@ class PermissionManager {
     public commandPermissions: any;
     public actionLimits: any;
     public securityConfig: any;
+    public config: any;
 
     public logger: any;
+    public sock: any;
 
-    constructor(logger: any = console) {
+    constructor(logger: any = console, registrationSystem: any = null) {
+        this.config = ConfigManager.getInstance();
         this.logger = logger;
+        this.sock = null;
+
         // Integração com sistema de registro
-        this.registrationSystem = RegistrationSystem.getInstance();
+        this.registrationSystem = registrationSystem || new RegistrationSystem(this.logger);
 
         // Configurações de registro por grupo
         this.groupRegistrationConfig = this.loadGroupRegistrationConfig();
@@ -67,7 +73,7 @@ class PermissionManager {
             'top': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
 
             // Comandos PÚBLICOS (requerem registro se grupo configurado)
-            'donate': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'donate': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
             'perfil': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'profile': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'level': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
@@ -105,23 +111,6 @@ class PermissionManager {
             'curiosidade': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'enquete': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5, grupo: true },
             'poll': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5, grupo: true },
-
-            // Anime Reactions (Entretenimento)
-            'abraco': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'hug': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'beijo': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'kiss': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'cafune': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'pat': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'tapa': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'slap': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'bully': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'kill': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'happy': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'smile': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'dance': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1.5 },
-            'wink': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'poke': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
 
             // Aliases e comandos adicionais alinhados com CommandHandler
             // Conta & Economia
@@ -218,6 +207,31 @@ class PermissionManager {
             'comprar': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'doar': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
 
+            // OSINT operacionais (apenas dono)
+            'dork': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'email': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'phone': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'username': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'sherlock': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'holehe': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'theharvester': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'shodan': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'cve': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'whois': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 2 },
+            'dns': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 2 },
+            'geo': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 2 },
+
+            // Cybersecurity (apenas dono)
+            'nuclei': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'nikto': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'masscan': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'commix': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'searchsploit': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'socialfish': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'blackeye': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'netexec': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'winrm': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'impacket': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
 
             // Comandos de GRUPO (Requerem Admin/Dono + Registro)
             'add': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
@@ -257,64 +271,9 @@ class PermissionManager {
             'nmap': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
             'sqlmap': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
 
-            // ════════════════════════════════════════════════════════════
-            // COMANDOS EM FALTA (adicionados para corrigir "Comando não encontrado")
-            // ════════════════════════════════════════════════════════════
-
-            // Welcome / Goodbye (em falta)
-            'setwelcome': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'setgoodbye': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Moderação de grupo (em falta)
-            'warn': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'unwarn': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'resetwarns': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'mutelist': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'silenciados': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Sorteio adicional (em falta - raffle)
-            'raffle': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 2, grupo: true },
-
-            // Membros / Listagem (em falta)
-            'membros': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'listadmins': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Pin (em falta - fixar)
-            'fixar': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Foto do grupo (alias 'foto' em falta)
-            'foto': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 2, grupo: true },
-
-            // Descrição (alias 'desc' em falta)
-            'desc': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Anti-moderação de mídia (antivideo, antiaudio, antidoc, antiimage, antisticker)
-            'antivideo': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'antiaudio': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'antivoz': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'antidoc': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-            'antidocumento': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Link do grupo (em falta - 'link')
-            'link': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
-
-            // Bot config (em falta)
-            'setbotpic': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'setphoto': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'setname': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'setbio': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'getuser': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'blacklist': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
-
-            // Economia adicional (em falta)
-            'deposit': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'withdraw': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'transactions': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
-            'reg': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
-
-            // Comandos CYBERSEGURANÇA (somente exibição de menu)
+            // Comandos CYBERSEGURANÇA (requerem pagamento - já implementado)
+            // Menu OSINT (somente exibição de menu)
         };
-
 
         // Tipos de ações e seus limites
         this.actionLimits = {
@@ -536,7 +495,8 @@ class PermissionManager {
      */
     loadGroupRegistrationConfig() {
         try {
-            const configPath = '/tmp/akira_data/group_registration_config.json';
+            const basePath = this.config.DATABASE_FOLDER || './database';
+            const configPath = path.join(basePath, 'data', 'group_registration_config.json');
             if (fs.existsSync(configPath)) {
                 const data = fs.readFileSync(configPath, 'utf8');
                 return JSON.parse(data || '{}');
@@ -552,7 +512,8 @@ class PermissionManager {
      */
     saveGroupRegistrationConfig() {
         try {
-            const configPath = '/tmp/akira_data/group_registration_config.json';
+            const basePath = this.config.DATABASE_FOLDER || './database';
+            const configPath = path.join(basePath, 'data', 'group_registration_config.json');
             const dir = path.dirname(configPath);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
@@ -595,7 +556,7 @@ class PermissionManager {
         const permConfig = this.commandPermissions[comando];
 
         if (!permConfig) {
-            return { allowed: true, reason: 'unregistered_command' };
+            return { allowed: false, reason: 'Comando não encontrado.' };
         }
 
         // REGRA 1: Dono SEMPRE pode tudo
@@ -628,22 +589,11 @@ class PermissionManager {
             };
         }
 
-        // REGRA 5: Verificar registro (se comando requer)
+        // REGRA 5: Verificar registro (se comando requer E grupo exige)
         if (permConfig.requiresRegistration) {
-            // Categorias que SEMPRE requerem registro (Economia, Jogos, Perfil)
-            const personalCategories = [
-                'perfil', 'profile', 'daily', 'diario', 'atm', 'saldo', 'balance', 'banco',
-                'transfer', 'transferir', 'pagar', 'depositar', 'sacar',
-                'ttt', 'rps', 'guess', 'forca', 'grid', 'slot', 'dado', 'moeda'
-            ];
-
-            const isPersonalCommand = personalCategories.includes(comando);
-
-            // Requer registro se: 
-            // 1. Não está em grupo (PV)
-            // 2. É um comando pessoal (Economia/Jogos)
-            // 3. O grupo ativou a exigência de registro (#requireregister on)
-            const mustCheckRegistration = !isGroup || isPersonalCommand || (isGroup && groupJid && this.groupRequiresRegistration(groupJid));
+            // Se não está em grupo, sempre requer registro
+            // Se está em grupo, verifica se grupo exige
+            const mustCheckRegistration = !isGroup || (isGroup && groupJid && this.groupRequiresRegistration(groupJid));
 
             if (mustCheckRegistration) {
                 const isRegistered = this.registrationSystem.isRegistered(userId);
@@ -673,6 +623,10 @@ class PermissionManager {
             '• `#registrar João Silva|25`\n' +
             '• `#registrar Maria Santos|30`\n\n' +
             '✅ Após o registro, você terá acesso a todos os comandos comuns do bot!';
+    }
+
+    public setSocket(sock: any): void {
+        this.sock = sock;
     }
 }
 

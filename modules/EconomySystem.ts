@@ -1,22 +1,21 @@
 import fs from 'fs';
 import path from 'path';
 import ConfigManager from './ConfigManager.js';
-import JidUtils from './JidUtils.js';
 
 class EconomySystem {
-    private static instance: EconomySystem;
     public config: any;
     public logger: any;
     public dbPath: string;
     public users: any;
     public dailyAmount: number;
     public dailyCooldown: number;
+    public sock: any;
 
-    private constructor(logger: any = console) {
+    constructor(logger: any = console) {
         this.config = ConfigManager.getInstance();
         this.logger = logger;
 
-        // Configurar persistência centralizada
+        // Usar DATABASE_FOLDER do ConfigManager para persistência local
         const basePath = this.config.DATABASE_FOLDER || './database';
         this.dbPath = path.join(basePath, 'economy', 'economy.json');
 
@@ -28,11 +27,8 @@ class EconomySystem {
         this.dailyCooldown = 24 * 60 * 60 * 1000; // 24 horas
     }
 
-    public static getInstance(logger: any = console): EconomySystem {
-        if (!EconomySystem.instance) {
-            EconomySystem.instance = new EconomySystem(logger);
-        }
-        return EconomySystem.instance;
+    public setSocket(sock: any): void {
+        this.sock = sock;
     }
 
     _ensureFiles() {
@@ -75,16 +71,15 @@ class EconomySystem {
      * Inicializa usuário se não existir
      */
     _initUser(userId: string) {
-        const normId = JidUtils.normalize(userId);
-        if (!this.users[normId]) {
-            this.users[normId] = {
+        if (!this.users[userId]) {
+            this.users[userId] = {
                 wallet: 0,
                 bank: 0,
                 lastDaily: 0,
                 transactions: []
             };
         }
-        return this.users[normId];
+        return this.users[userId];
     }
 
     /**
@@ -126,8 +121,7 @@ class EconomySystem {
      * Recompensa diária
      */
     daily(userId: string) {
-        const normId = JidUtils.normalize(userId);
-        const user = this._initUser(normId);
+        const user = this._initUser(userId);
         const now = Date.now();
 
         // Verifica cooldown
@@ -162,8 +156,7 @@ class EconomySystem {
      * Retorna tempo restante para próximo daily
      */
     getDailyTimeLeft(userId: string) {
-        const normId = JidUtils.normalize(userId);
-        const user = this.users[normId];
+        const user = this.users[userId];
         if (!user || !user.lastDaily) return 0;
 
         const now = Date.now();
@@ -264,8 +257,7 @@ class EconomySystem {
      * Retorna histórico de transações
      */
     getTransactions(userId: string, limit = 10) {
-        const normId = JidUtils.normalize(userId);
-        const user = this.users[normId];
+        const user = this.users[userId];
         if (!user || !user.transactions) return [];
 
         return user.transactions.slice(-limit).reverse();
