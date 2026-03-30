@@ -1,10 +1,10 @@
 ﻿/**
  * ═══════════════════════════════════════════════════════════════════════
- * PRESENCE SIMULATOR - AKIRA BOT V21
+ * PRESENCE SIMULATOR - AKIRA BOT V21 (REACTIVE EDITION)
  * ═══════════════════════════════════════════════════════════════════════
- * ✅ Simulações realistas de presença e status de mensagem
- * ✅ Digitação, gravação de áudio, ticks, leitura
- * ✅ Totalmente compatível com Baileys
+ * ✅ Simulações hiper-realistas de presença
+ * ✅ Não-bloqueante: Não trava o fluxo de resposta do bot
+ * ✅ Sincronizado: Pára de digitar IMEDIATAMENTE ao enviar msg
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -13,270 +13,144 @@ import { delay } from '@whiskeysockets/baileys';
 class PresenceSimulator {
     public sock: any;
     public logger: any;
+    private activeSimulations: Map<string, AbortController>;
 
     constructor(sock: any) {
         this.sock = sock;
         this.logger = console;
+        this.activeSimulations = new Map();
     }
 
     /**
-     * Envia atualização de presença de forma segura, verificando se o socket está ativo
+     * Envia atualização de presença de forma segura
      */
-    async safeSendPresenceUpdate(type: any, jid: string) {
+    async safeSendPresenceUpdate(type: 'composing' | 'recording' | 'paused' | 'available', jid: string) {
         if (!jid || !this.sock) return false;
-
         try {
             await this.sock.sendPresenceUpdate(type, jid);
             return true;
         } catch (e: any) {
-            this.logger.debug(`⚠️ [PRESENCE] Falha para ${jid}: ${e.message}`);
+            // Silencia erros de conexão fechada para não poluir o log
             return false;
         }
     }
 
     /**
-     * Simula digitação realista
-     * - Inicia presença como "disponível"
-     * - Muda para "digitando"
-     * - Aguarda tempo proporcional ao tamanho da resposta
-     * - Volta para "pausado"
-     * - Retorna para "disponível"
+     * Pára qualquer simulação ativa para um JID
      */
-    async simulateTyping(jid: string, durationMs: number = 3000) {
-        try {
-            // Step 1: Garantir que está online
-            await this.safeSendPresenceUpdate('available', jid);
-            await delay(300);
-
-            // Step 2: Começar a digitar
-            await this.safeSendPresenceUpdate('composing', jid);
-            this.logger.log(`⌨️  [DIGITANDO] Simulando digitação por ${(durationMs / 1000).toFixed(1)}s...`);
-
-            // Step 3: Aguardar conforme tamanho da mensagem
-            await delay(durationMs);
-
-            // Step 4: Parar de digitar (transição)
-            await this.safeSendPresenceUpdate('paused', jid);
-            await delay(300);
-
-            // Step 5: Voltar ao normal
-            await this.safeSendPresenceUpdate('available', jid);
-            this.logger.log('✅ [PRONTO] Digitação simulada concluída');
-
-            return true;
-        } catch (e: any) {
-            this.logger.error('❌ Erro inesperado ao simular digitação:', e.message);
-            return false;
+    async stop(jid: string) {
+        const controller = this.activeSimulations.get(jid);
+        if (controller) {
+            controller.abort();
+            this.activeSimulations.delete(jid);
         }
+        await this.safeSendPresenceUpdate('paused', jid);
     }
 
     /**
-     * Simula gravação de áudio realista
-     * - Muda para "gravando"
-     * - Aguarda duração
-     * - Volta para "pausado"
+     * Simula digitação hiper-realista (Não-Bloqueante)
      */
-    async simulateRecording(jid: string, durationMs: number = 2000) {
-        try {
-            this.logger.log(`🎤 [GRAVANDO] Preparando áudio por ${(durationMs / 1000).toFixed(1)}s...`);
+    async simulateTyping(jid: string, durationMs: number = 2000) {
+        // Interrompe simulação anterior se houver
+        await this.stop(jid);
 
-            // Step 1: Começar a "gravar"
-            await this.safeSendPresenceUpdate('recording', jid);
+        const controller = new AbortController();
+        this.activeSimulations.set(jid, controller);
 
-            // Step 2: Aguardar processamento
-            await delay(durationMs);
+        // Execução asíncrona (não usa await no chamador principal do BotCore)
+        const run = async () => {
+            try {
+                if (controller.signal.aborted) return;
 
-            // Step 3: Concluir gravação
-            await this.safeSendPresenceUpdate('paused', jid);
+                await this.safeSendPresenceUpdate('composing', jid);
 
-            this.logger.log('✅ [PRONTO] Áudio preparado para envio');
-
-            return true;
-        } catch (e: any) {
-            this.logger.error('❌ Erro inesperado ao simular gravação:', e.message);
-            return false;
-        }
-    }
-
-    /**
-     * Simula envio de "ticks" (confirmações de entrega/leitura)
-     * 
-     * Em grupos:
-     *   - Sem ativação: Um tick (entregue)
-     *   - Com ativação: Dois ticks azuis (lido)
-     * 
-     * Em PV:
-     *   - Sem ativação: Um tick (entregue)
-     *   - Com ativação: Dois ticks azuis (lido)
-     */
-    async simulateTicks(m: any, wasActivated: boolean = true, isAudio: boolean = false) {
-        try {
-            // REMOVIDO: Verificação de socket bloqueante
-            if (!this.sock) return false;
-
-            const isGroup = String(m.key.remoteJid || '').endsWith('@g.us');
-            const jid = m.key.remoteJid;
-            const participant = m.key.participant;
-            const messageId = m.key.id;
-
-            if (isGroup) {
-                // ═══ GRUPO ═══
-                if (!wasActivated) {
-                    // Não foi ativada: Apenas um tick (entregue)
-                    try {
-                        // EXPLICITAR 'delivered' PARA 2 TICKS CINZAS
-                        await this.sock.sendReadReceipt(jid, participant, [messageId], 'delivered');
-                        this.logger.log('✓✓ [ENTREGUE] Grupo');
-                        return true;
-                    } catch (err) {
-                        return false;
-                    }
-                } else {
-                    // Foi ativada: Dois ticks azuis (lido)
-                    try {
-                        await this.sock.readMessages([m.key]);
-                        this.logger.log('✓✓ [LIDO] Grupo');
-                        return true;
-                    } catch (err) {
-                        return false;
-                    }
+                // Divisão em pequenos blocos para permitir cancelamento rápido
+                const step = 200;
+                let elapsed = 0;
+                while (elapsed < durationMs && !controller.signal.aborted) {
+                    await delay(step);
+                    elapsed += step;
                 }
-            } else {
-                // ═══ PV (PRIVADO) ═══
-                if (wasActivated || isAudio) {
-                    try {
-                        await this.sock.readMessages([m.key]);
-                        this.logger.log(isAudio ? '▶️ [REPRODUZIDO] PV' : '✓✓ [LIDO] PV');
-                        return true;
-                    } catch (err) {
-                        return false;
-                    }
-                } else {
-                    try {
-                        // EXPLICITAR 'delivered' PARA 2 TICKS CINZAS
-                        await this.sock.sendReadReceipt(jid, participant, [messageId], 'delivered');
-                        this.logger.log('✓✓ [ENTREGUE] PV');
-                        return true;
-                    } catch (err) {
-                        return false;
-                    }
+
+                if (!controller.signal.aborted) {
+                    await this.stop(jid);
                 }
+            } catch (e) {
+                this.activeSimulations.delete(jid);
             }
-        } catch (e: any) {
-            return false;
-        }
+        };
+
+        run(); // Chama sem await
+        return true;
     }
 
     /**
-     * Simula leitura de mensagem
+     * Simula gravação de áudio (Não-Bloqueante)
      */
-    async markAsRead(m: any) {
-        try {
-            if (!this.sock) return false;
-            await this.sock.readMessages([m.key]);
-            this.logger.log('✓✓ [LIDO] Mensagem marcada');
-            return true;
-        } catch (e: any) {
-            return false;
-        }
+    async simulateRecording(jid: string, durationMs: number = 3000) {
+        await this.stop(jid);
+
+        const controller = new AbortController();
+        this.activeSimulations.set(jid, controller);
+
+        const run = async () => {
+            try {
+                await this.safeSendPresenceUpdate('recording', jid);
+
+                const step = 200;
+                let elapsed = 0;
+                while (elapsed < durationMs && !controller.signal.aborted) {
+                    await delay(step);
+                    elapsed += step;
+                }
+
+                if (!controller.signal.aborted) {
+                    await this.stop(jid);
+                }
+            } catch (e) {
+                this.activeSimulations.delete(jid);
+            }
+        };
+
+        run();
+        return true;
     }
 
     /**
-     * Simula status completo de mensagem
+     * Simula leitura e ticks de confirmação
      */
-    async simulateMessageStatus(m: any, wasActivated: boolean = true) {
+    async simulateTicks(m: any, wasActivated: boolean = true) {
+        if (!this.sock || !m?.key) return false;
+
+        const jid = m.key.remoteJid;
+        const participant = m.key.participant;
+        const messageId = m.key.id;
+
         try {
-            if (!this.sock) return false;
-
-            const isGroup = String(m.key.remoteJid || '').endsWith('@g.us');
-
-            if (isGroup) {
-                try {
-                    await this.sock.sendReadReceipt(m.key.remoteJid, m.key.participant, [m.key.id], 'delivered');
-                    await delay(300);
-                } catch (e) { }
-            } else {
-                try {
-                    await this.sock.sendReadReceipt(m.key.remoteJid, undefined, [m.key.id], 'delivered');
-                    await delay(300);
-                } catch (e) { }
-            }
-
             if (wasActivated) {
-                await delay(500);
-                await this.markAsRead(m);
-            }
-
-            return true;
-        } catch (e: any) {
-            return false;
-        }
-    }
-
-    /**
-     * Simula comportamento completo ao responder
-     * 1. Marca entrega
-     * 2. Simula digitação
-     * 3. Envia mensagem
-     * 4. Marca leitura
-     */
-    async simulateFullResponse(sock: any, m: any, responseText: string, isAudio: boolean = false) {
-        try {
-            // Atualizar socket se fornecido novo
-            if (sock) this.sock = sock;
-
-            // REMOVIDO: Verificação bloqueante e waitForConnection
-            // Agora confiamos no safeSendPresenceUpdate para lidar com erros silenciosamente
-
-            const jid = m.key.remoteJid;
-            const isGroup = String(jid || '').endsWith('@g.us');
-
-            // Step 1: Marcar como entregue (em grupos)
-            if (isGroup) {
-                await this.simulateTicks(m, false, false);
-                await delay(300);
-            }
-
-            // Step 2: Simular digitação ou gravação
-            if (isAudio) {
-                const estimatedDuration = this.calculateRecordingDuration(responseText);
-                await this.simulateRecording(jid, estimatedDuration);
+                await this.sock.readMessages([m.key]);
             } else {
-                const estimatedDuration = this.calculateTypingDuration(responseText);
-                await this.simulateTyping(jid, estimatedDuration);
+                await this.sock.sendReadReceipt(jid, participant, [messageId], 'delivered');
             }
-
-            // Step 4: Marcar como lido
-            await delay(500);
-            await this.simulateTicks(m, true, isAudio);
-
             return true;
-        } catch (e: any) {
-            this.logger.error('❌ Erro inesperado ao simular resposta completa:', e.message);
+        } catch (e) {
             return false;
         }
     }
 
     /**
-     * Calcula duração realista de digitação baseado no tamanho da resposta
-     * Fórmula: 20-30ms por caractere, mínimo 500ms, máximo 5s
+     * Calcula duração proporcional (20ms por char + jitter)
      */
-    calculateTypingDuration(text: string, minMs: number = 500, maxMs: number = 5000) {
-        if (!text) return minMs;
-        const estimatedMs = Math.max(text.length * 25, minMs);
-        return Math.min(estimatedMs, maxMs);
-    }
+    calculateTypingDuration(text: string): number {
+        if (!text) return 500;
+        // IA é mais lenta (humana), comandos são instantâneos
+        const isCommand = text.startsWith('#') || text.startsWith('/');
+        if (isCommand) return 400; // Delay mínimo apenas para feedback visual
 
-    /**
-     * Calcula duração realista de gravação de áudio
-     * Fórmula: 80ms por 10 caracteres, mínimo 1s, máximo 6s
-     */
-    calculateRecordingDuration(text: string, minMs: number = 1000, maxMs: number = 6000) {
-        if (!text) return minMs;
-        const estimatedMs = Math.max((text.length / 10) * 80, minMs);
-        return Math.min(estimatedMs, maxMs);
+        const base = text.length * 25;
+        const jitter = Math.random() * 500;
+        return Math.min(Math.max(base + jitter, 1000), 7000);
     }
 }
 
 export default PresenceSimulator;
-

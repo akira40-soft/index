@@ -485,8 +485,9 @@ class BotCore {
                 await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
             } else if (temAudio) {
                 await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo);
-            } else if (texto) {
-                await this.handleTextMessage(m, nome, numeroReal, texto, replyInfo, ehGrupo);
+            } else {
+                // Se for texto ou qualquer outra msg com texto (sticker com legenda, etc)
+                await this.handleTextMessage(m, nome, numeroReal, texto || caption, replyInfo, ehGrupo);
             }
         } catch (error: any) {
             this.logger.error('❌ Erro pipeline:', error?.message);
@@ -627,7 +628,8 @@ class BotCore {
     async handleTextMessage(m: any, nome: string, numeroReal: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio: boolean = false): Promise<void> {
         try {
             // 1. Verificar Rate Limit (exceto para o dono)
-            const isOwner = typeof this.config?.isDono === 'function' ? this.config.isDono(numeroReal, nome) : false;
+            const isOwner = typeof this.config?.isDono === 'function' ? this.config.isDono(numeroReal, texto) : false;
+
             if (!isOwner && this.moderationSystem?.checkAndLimitHourlyMessages) {
                 const res = this.moderationSystem.checkAndLimitHourlyMessages(numeroReal, nome, numeroReal, texto, null, isOwner);
                 if (!res?.allowed) {
@@ -719,15 +721,16 @@ class BotCore {
 
             if (foiAudio) {
                 this.logger.info('🎤 [AUDIO RESPONSE]');
-                if (this.presenceSimulator) await this.presenceSimulator.safeSendPresenceUpdate('recording', m.key.remoteJid);
+                if (this.presenceSimulator) await this.presenceSimulator.simulateRecording(m.key.remoteJid, 2000);
                 try {
                     const tts = await this.audioProcessor.textToSpeech(resposta);
                     if (!tts.sucesso) {
                         this.logger.warn('⚠️ Falha TTS');
-                        if (this.presenceSimulator) await this.presenceSimulator.safeSendPresenceUpdate('paused', m.key.remoteJid);
+                        if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                         await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
                     } else {
                         this.logger.info('📤 Voice Note...');
+                        if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                         await this.sock.sendMessage(m.key.remoteJid, {
                             audio: tts.buffer,
                             mimetype: tts.mimetype || 'audio/ogg; codecs=opus',
@@ -736,33 +739,28 @@ class BotCore {
                     }
                 } catch (err: any) {
                     this.logger.error(`❌ Erro TTS: ${err.message}`);
+                    if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                     await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
-                } finally {
-                    if (this.presenceSimulator) await this.presenceSimulator.safeSendPresenceUpdate('paused', m.key.remoteJid);
                 }
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m);
             } else {
-                // ⚡ OTIMIZAÇÃO: Simulação não-bloqueante para reduzir latência (Ping Baixo)
+                // ⚡ OTIMIZAÇÃO: Simulação reativa (Pára ao enviar)
                 if (this.presenceSimulator) {
-                    const isCommand = this.messageProcessor.isCommand(texto);
-                    if (isCommand) {
-                        // Para comandos (#), apenas avisa o servidor que está 'composing' sem esperar
-                        this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid).catch(() => { });
-                    } else {
-                        // Para IA, dispara a simulação completa em background
-                        this.presenceSimulator.simulateFullResponse(this.sock, m, resposta, false).catch(() => { });
-                    }
+                    const duration = this.presenceSimulator.calculateTypingDuration(resposta);
+                    this.presenceSimulator.simulateTyping(m.key.remoteJid, duration);
                 }
 
-                // Lógica de UX: Em grupos sempre usa quote. No PV, apenas se o usuário respondeu ao bot.
                 const opcoes = ehGrupo ? { quoted: m } : (replyInfo?.ehRespostaAoBot ? { quoted: m } : {});
 
                 this.logger.info(`🚀 [SENDING MSG] PV/Grupo Dispatch...`);
                 try {
+                    // 🛑 STOP PRESENCE IMEDIATO ANTES DE ENVIAR
+                    if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
+
                     await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
                     this.logger.info(`✅ [DISPATCH OK]`);
                 } catch (innerErr: any) {
-                    this.logger.error(`❌ [DISPATCH FAILED] Erro fatal no envio ao Baileys: ${innerErr.message}`);
+                    this.logger.error(`❌ [DISPATCH FAILED] Erro fatal: ${innerErr.message}`);
                 }
 
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m);

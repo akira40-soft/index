@@ -163,19 +163,21 @@ class GroupManagement {
 
                 return metadata;
             } catch (e: any) {
-                const isConnectionClosed = e.message?.includes('Connection Closed');
+                const isConnectionClosed = e.message?.includes('Connection Closed') || e.message?.includes('515');
                 const logLvl = isConnectionClosed ? 'warn' : 'error';
 
                 this.logger[logLvl](`❌ [GroupManagement] Erro ao obter metadados (tentativa ${attempt}/${retries}):`, e.message);
 
+                // ESTRATÉGIA DE RESILIÊNCIA: Se a conexão fechou e temos cache (mesmo expirado), USAR O CACHE
+                if (isConnectionClosed && cached) {
+                    this.logger.info(`✨ [GroupManagement] Usando cache de emergência para ${groupJid} devido a falha de conexão.`);
+                    return cached.data;
+                }
+
                 if (attempt < retries) {
-                    // Delay exponencial: 1s, 2s, 4s
                     const delayMs = Math.pow(2, attempt - 1) * 1000;
                     this.logger.info(`⏳ [GroupManagement] Aguardando ${delayMs}ms antes de retry...`);
                     await new Promise(resolve => setTimeout(resolve, delayMs));
-
-                    // No Baileys v4+, o socket reconecta automaticamente via eventos no BotCore.
-                    // Tentar chamar sock.connect() aqui é incorreto e pode causar loops.
                 }
             }
         }
