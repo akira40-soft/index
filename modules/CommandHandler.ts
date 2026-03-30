@@ -1335,9 +1335,9 @@ ${P}menu osint — Comandos OSINT avançados`,
             const isImage = !!(targetMessage.imageMessage || targetMessage.viewOnceMessageV2?.message?.imageMessage);
 
             if (!isImage && !isVideo) {
-                const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
-                if (buf) {
-                    const res = await this.mediaProcessor.createStickerFromImage(buf, { packName, author });
+                const bufInfo = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
+                if (bufInfo && bufInfo.buffer) {
+                    const res = await this.mediaProcessor.createStickerFromImage(bufInfo.buffer, { packName, author });
                     if (res && res.sucesso && res.buffer) {
                         await this.sock.sendMessage(m.key.remoteJid, { sticker: res.buffer }, { quoted: m });
                         return true;
@@ -1349,11 +1349,15 @@ ${P}menu osint — Comandos OSINT avançados`,
 
             let res;
             if (isImage) {
-                const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
-                res = await this.mediaProcessor.createStickerFromImage(buf, { packName, author });
+                const bufInfo = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
+                if (bufInfo && bufInfo.buffer) {
+                    res = await this.mediaProcessor.createStickerFromImage(bufInfo.buffer, { packName, author });
+                }
             } else if (isVideo) {
-                const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'video');
-                res = await this.mediaProcessor.createAnimatedStickerFromVideo(buf, 10, { packName, author });
+                const bufInfo = await this.mediaProcessor.downloadMedia(targetMessage, 'video');
+                if (bufInfo && bufInfo.buffer) {
+                    res = await this.mediaProcessor.createAnimatedStickerFromVideo(bufInfo.buffer, 10, { packName, author });
+                }
             }
 
             if (res && res.sucesso && res.buffer) {
@@ -1378,15 +1382,15 @@ ${P}menu osint — Comandos OSINT avançados`,
                 return true;
             }
 
-            const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'sticker');
-            if (!buf) {
+            const bufInfo = await this.mediaProcessor.downloadMedia(targetMessage, 'sticker');
+            if (!bufInfo || !bufInfo.buffer) {
                 await this._reply(m, '❌ Não foi possível baixar a figurinha.');
                 return true;
             }
 
             // Em vez de converter para imagem, rouba a figurinha regerando com addStickerMetadata
             const outBuf = await this.mediaProcessor.addStickerMetadata(
-                buf,
+                bufInfo.buffer,
                 nome.split(' ')[0], // Pack
                 'Akira-Bot V21'     // Author
             );

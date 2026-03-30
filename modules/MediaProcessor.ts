@@ -120,16 +120,15 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ba/b: Tenta pegar só o áudio. Se não conseguir, baixa o melhor vídeo+áudio e extrai
-            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Remove -f "ba/b" rigoroso. Usa apenas extração final. Se não, yt-dlp falha em 428 e formatos restritos
+            actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // SEM STRING DE FORMATO (-f): Deixa o yt-dlp usar o padrão oficial (bv*+ba/b)
-            // Apenas garantimos que o container final seja MP4 (compatível com WhatsApp)
-            // e forçamos o re-encode de áudio se for muito fora do padrão, mas "--merge-output-format" dá conta
-            actionFlags = `--merge-output-format mp4 -o "${options.output}"`;
+            // Para vídeo, usa seleção padrão (bv+ba) mas força container mp4 e reencode de vídeo apenas se necessário (fallback para h264 se o original for vp9 incompatível com whatsapp)
+            actionFlags = `-S "res:720,ext:mp4:m4a" --recode-video mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
+
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
         return `yt-dlp ${cookieArg} ${bypassFlags} ${actionFlags} "${target}"`;
@@ -155,35 +154,20 @@ class MediaProcessor {
             const cookiePath = this._findCookiePath();
 
             // ================================================================
-            // GAMBIARRAS ANTI-BLOQUEIO: Rotação Pura de Clientes (Sem Format Override)
-            // O yt-dlp fará sua mágica nativa para encontrar o melhor áudio
+            // GAMBIARRAS ANTI-BLOQUEIO: yt-dlp padrão web (Sem formatos restritos)
             // ================================================================
-            const tentativas = [
-                { cliente: 'android_vr', sleepMs: 0 },
-                { cliente: 'ios', sleepMs: 1500 },
-                { cliente: 'android', sleepMs: 2000 },
-                { cliente: 'web_embedded', sleepMs: 2500 },
-                { cliente: 'tv', sleepMs: 3000 },
-                { cliente: 'ios,android_vr,web,tv', sleepMs: 3500 } // Super-combo
-            ];
+            this.logger?.info(`[ÁUDIO] Tentando yt-dlp puro com cliente web padrão...`);
+            const cmd = this._buildYtdlpCommand(finalUrl, {
+                type: 'audio',
+                output: outputPath,
+                clientOverride: 'web,mweb'
+            });
 
-            for (let i = 0; i < tentativas.length; i++) {
-                if (fs.existsSync(outputPath)) break;
-                const t = tentativas[i];
-                if (t.sleepMs > 0) await new Promise(r => setTimeout(r, t.sleepMs));
-
-                this.logger?.info(`[ÁUDIO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente}`);
-                const cmd = this._buildYtdlpCommand(finalUrl, {
-                    type: 'audio',
-                    output: outputPath,
-                    clientOverride: t.cliente
-                });
-                try {
-                    await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
-                } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.warn(`⚠️ [${t.cliente}] ${msg.substring(0, 100)}`);
-                }
+            try {
+                await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
+            } catch (e: any) {
+                const msg = (e.stderr || e.message || '').split('\n')[0];
+                this.logger?.warn(`⚠️ yt-dlp falhou: ${msg.substring(0, 100)}`);
             }
 
             if (fs.existsSync(outputPath)) {
@@ -221,35 +205,21 @@ class MediaProcessor {
             const outputPath = this.generateRandomFilename('mp4');
 
             // ================================================================
-            // GAMBIARRAS ANTI-BLOQUEIO: Rotação Pura de Clientes (Sem Format Override)
+            // GAMBIARRAS ANTI-BLOQUEIO: yt-dlp padrão web (Sem formatos restritos)
             // O yt-dlp fará a seleção nativa e juntará tudo em MP4
             // ================================================================
-            const tentativas = [
-                { cliente: 'android_vr', sleepMs: 0 },
-                { cliente: 'ios', sleepMs: 1500 },
-                { cliente: 'android', sleepMs: 2000 },
-                { cliente: 'web_embedded', sleepMs: 2500 },
-                { cliente: 'tv', sleepMs: 3000 },
-                { cliente: 'ios,android_vr,web,mweb', sleepMs: 3500 } // Super-combo final
-            ];
+            this.logger?.info(`[VÍDEO] Tentando yt-dlp puro com cliente web padrão...`);
+            const cmd = this._buildYtdlpCommand(finalUrl, {
+                type: 'video',
+                output: outputPath,
+                clientOverride: 'web,mweb'
+            });
 
-            for (let i = 0; i < tentativas.length; i++) {
-                if (fs.existsSync(outputPath)) break;
-                const t = tentativas[i];
-                if (t.sleepMs > 0) await new Promise(r => setTimeout(r, t.sleepMs));
-
-                this.logger?.info(`[VÍDEO ${i + 1}/${tentativas.length}] Cliente: ${t.cliente}`);
-                const cmd = this._buildYtdlpCommand(finalUrl, {
-                    type: 'video',
-                    output: outputPath,
-                    clientOverride: t.cliente
-                });
-                try {
-                    await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
-                } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.warn(`⚠️ [${t.cliente}] ${msg.substring(0, 100)}`);
-                }
+            try {
+                await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
+            } catch (e: any) {
+                const msg = (e.stderr || e.message || '').split('\n')[0];
+                this.logger?.warn(`⚠️ yt-dlp falhou: ${msg.substring(0, 100)}`);
             }
 
             if (fs.existsSync(outputPath)) {

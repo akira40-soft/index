@@ -139,6 +139,13 @@ class PresenceSimulator {
     }
 
     /**
+     * Alias retrocompatível com código antigo
+     */
+    async markAsRead(m: any) {
+        return this.simulateTicks(m, true);
+    }
+
+    /**
      * Calcula duração proporcional (20ms por char + jitter)
      */
     calculateTypingDuration(text: string): number {

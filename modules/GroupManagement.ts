@@ -81,7 +81,7 @@ class GroupManagement {
 
         const admins = metadata.participants
             .filter((p: any) => p.admin === 'admin' || p.admin === 'superadmin')
-            .map((p: any) => p.id);
+            .map((p: any) => p.id ? p.id.split('@')[0].split(':')[0] + '@s.whatsapp.net' : '');
 
         this.adminCache.set(groupJid, { admins, timestamp: Date.now() });
         return admins;
@@ -150,7 +150,7 @@ class GroupManagement {
 
             const admins = metadata.participants
                 .filter((p: any) => p.admin || p.isAdmin || p.isSuperAdmin)
-                .map((p: any) => p.id);
+                .map((p: any) => p.id ? p.id.split('@')[0].split(':')[0] + '@s.whatsapp.net' : '');
             this.adminCache.set(groupJid, { admins, timestamp: Date.now() });
 
             return metadata;
@@ -1018,7 +1018,8 @@ class GroupManagement {
      */
     async isUserAdmin(groupJid: string, userJid: string): Promise<boolean> {
         const admins = await this._getGroupAdmins(groupJid);
-        return admins.includes(userJid);
+        const normalizedUserJid = userJid ? userJid.split('@')[0].split(':')[0] + '@s.whatsapp.net' : '';
+        return admins.includes(normalizedUserJid);
     }
 
     // ═════════════════════════════════════════════════════════════════

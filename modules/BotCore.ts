@@ -8,6 +8,7 @@
 
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, delay, Browsers, getContentType } from '@whiskeysockets/baileys';
 import fs from 'fs';
+import path from 'path';
 import pino from 'pino';
 import { exec } from 'child_process';
 import util from 'util';
@@ -412,7 +413,16 @@ class BotCore {
             const remoteJid = m.key.remoteJid;
             const ehGrupo = remoteJid.endsWith('@g.us');
             const ehStatus = remoteJid === 'status@broadcast';
+            const ehNewsletter = remoteJid.endsWith('@newsletter');
+
+            // ✅ BUG FIX: Ignorar Status e Newsletters imediatamente
+            // Evita que Newsletters esgotem o rate limit do utilizador e poluem logs
             if (ehStatus) return;
+            if (ehNewsletter) {
+                // [NOVA FEATURE] Escuta passiva de canais para recolha de "raw data" para treino base sem despender chamadas API
+                this._sniffNewsletter(m, remoteJid);
+                return;
+            }
 
             if (!this.messageProcessor) throw new Error('messageProcessor não inicializado');
 
@@ -972,6 +982,54 @@ class BotCore {
             this.logger.info('✅ Desconectado');
         } catch (error: any) {
             this.logger.error('❌ Erro desconectar:', error.message);
+        }
+    }
+
+    /**
+     * Intercepta passivamente mensagens de canais (Newsletters)
+     * e guarda os dados estruturados para futuro treino da inteligência artificial.
+     * Não gera respostas, logs no terminal (evitar spam) nem conta para Rate Limits.
+     */
+    private _sniffNewsletter(m: any, remoteJid: string): void {
+        try {
+            if (!m.message || !this.config) return;
+
+            const sniffDir = path.join(this.config.DATABASE_FOLDER || './database', 'sniffed_data');
+            if (!fs.existsSync(sniffDir)) fs.mkdirSync(sniffDir, { recursive: true });
+
+            const timestamp = m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString();
+            const pushName = m.pushName || 'Newsletter';
+            const messageType = Object.keys(m.message)[0];
+
+            let content = '';
+            if (this.messageProcessor) {
+                content = this.messageProcessor.extractText(m) || '';
+            }
+
+            // Ignorar mensagens de sistema vazias que não sejam mídia
+            if (!content && messageType !== 'imageMessage' && messageType !== 'videoMessage') return;
+
+            const sniffData = {
+                timestamp,
+                channelId: remoteJid,
+                channelName: pushName,
+                type: messageType,
+                content: content,
+                messageId: m.key?.id
+            };
+
+            const filePath = path.join(sniffDir, 'newsletters_corpus.jsonl');
+            fs.appendFileSync(filePath, JSON.stringify(sniffData) + '\n');
+
+            // Envia para o backend Python auxiliar no treinamento offline
+            if (this.apiClient) {
+                this.apiClient.sendSniffData(sniffData);
+            }
+
+            // Log opcional muito sutil (silenciado por defeito para evitar console spam)
+            // this.logger.debug(`📡 [SNIFFER] Capturada: ${pushName}`);
+        } catch (e: any) {
+            // Ignorado silenciosamente para não interromper outros fluxos
         }
     }
 }

@@ -178,6 +178,22 @@ class APIClient {
     }
 
     /**
+     * Envia dados sniffados de canais passivamente para treinamento
+     */
+    async sendSniffData(data: any): Promise<void> {
+        try {
+            // FIRE AND FORGET - não bloqueia o event loop principal
+            const url = `${this.config.API_URL}/treino/sniff`;
+            axios.post(url, data, {
+                timeout: 5000,
+                headers: { 'Content-Type': 'application/json' }
+            }).catch(() => { });
+        } catch (e) {
+            // Silencioso
+        }
+    }
+
+    /**
     * Envia mensagem para processar na API
     */
     async processMessage(messageData: any): Promise<any> {
