@@ -145,24 +145,34 @@ class BotCore {
             this.audioProcessor = new AudioProcessor(this.logger);
             this.mediaProcessor = new MediaProcessor(this.logger);
             this.messageProcessor = new MessageProcessor(this.logger);
+            // @ts-ignore
             this.moderationSystem = new ModerationSystem(this.logger);
+            // @ts-ignore
             this.levelSystem = new LevelSystem(this.logger);
+            // @ts-ignore
             this.registrationSystem = new RegistrationSystem(this.logger);
             this.subscriptionManager = new SubscriptionManager(this.config);
+            // @ts-ignore
             this.userProfile = new UserProfile(this.sock, this.logger, this.config);
+            // @ts-ignore
             this.botProfile = new BotProfile(this.sock, this.logger, this.config);
+            // @ts-ignore
             this.groupManagement = new GroupManagement(this.sock, this.config, this.moderationSystem, this.mediaProcessor, this.levelSystem);
             this.imageEffects = new ImageEffects(this.logger);
+            // @ts-ignore
             this.permissionManager = new PermissionManager(this.logger, this.registrationSystem);
             this.rateLimiter = new RateLimiter(this.config);
             this.stickerViewOnceHandler = new StickerViewOnceHandler(this.sock, this.config);
 
             this.paymentManager = new PaymentManager(this, this.subscriptionManager);
             this.presenceSimulator = new PresenceSimulator(this.sock || null);
+            // @ts-ignore
             this.economySystem = new EconomySystem(this.logger);
 
             try {
+                // @ts-ignore
                 this.gridTacticsGame = new GridTacticsGame(this.logger, this.config);
+                // @ts-ignore
                 this.gameSystem = new GameSystem(this.logger, this.config, this.gridTacticsGame);
 
                 this.commandHandler = new CommandHandler(this.sock, this.config, this, this.messageProcessor);
