@@ -157,11 +157,15 @@ class BotCore {
             // @ts-ignore
             this.botProfile = new BotProfile(this.sock, this.logger, this.config);
             // @ts-ignore
+            // @ts-ignore
             this.groupManagement = new GroupManagement(this.sock, this.config, this.moderationSystem, this.mediaProcessor, this.levelSystem);
+            // @ts-ignore
             this.imageEffects = new ImageEffects(this.logger);
             // @ts-ignore
             this.permissionManager = new PermissionManager(this.logger, this.registrationSystem);
+            // @ts-ignore
             this.rateLimiter = new RateLimiter(this.config);
+            // @ts-ignore
             this.stickerViewOnceHandler = new StickerViewOnceHandler(this.sock, this.config);
 
             this.paymentManager = new PaymentManager(this, this.subscriptionManager);

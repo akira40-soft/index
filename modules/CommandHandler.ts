@@ -69,18 +69,19 @@ class CommandHandler {
     public gridTacticsGame: any;
 
     constructor(sock: any, config: any, bot: any = null, messageProcessor: any = null) {
+        this.logger = config?.logger || bot?.logger || console;
         this.sock = sock;
         this.config = config;
         this.bot = bot;
         this.messageProcessor = messageProcessor || bot?.messageProcessor;
 
         // Inicializa sistemas - prefere injeção do BotCore
-        // Inicializa sistemas - prefere injeção do BotCore
         const RegistrationClass = (RegistrationSystem as any).default || RegistrationSystem;
         const LevelClass = (LevelSystem as any).default || LevelSystem;
         const EconomyClass = (EconomySystem as any).default || EconomySystem;
         const MediaClass = (MediaProcessor as any).default || MediaProcessor;
 
+        // @ts-ignore
         this.permissionManager = bot?.permissionManager || new PermissionManager(this.logger, bot?.registrationSystem);
         // @ts-ignore
         this.registrationSystem = bot?.registrationSystem || new RegistrationClass(this.logger);
@@ -101,15 +102,19 @@ class CommandHandler {
 
         // Inicializa módulos dependentes de sock
         if (sock) {
+            // @ts-ignore
             this.stickerHandler = bot?.stickerViewOnceHandler || new StickerViewOnceHandler(sock, this.config);
+            // @ts-ignore
             this.groupManagement = bot?.groupManagement || new GroupManagement(sock, this.config, this.moderationSystem, this.mediaProcessor, this.levelSystem);
+            // @ts-ignore
             this.userProfile = bot?.userProfile || new UserProfile(sock, this.logger, this.config);
+            // @ts-ignore
             this.botProfile = bot?.botProfile || new BotProfile(sock, this.logger, this.config);
+            // @ts-ignore
             this.imageEffects = bot?.imageEffects || new ImageEffects(this.logger);
+            // @ts-ignore
             this.presenceSimulator = bot?.presenceSimulator || new PresenceSimulator(sock);
         }
-
-        this.logger = config?.logger || bot?.logger || console;
     }
 
     public setSocket(sock: any): void {
