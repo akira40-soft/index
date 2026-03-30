@@ -210,6 +210,7 @@ class ConfigManager {
             { numero: '202391978787009', nomeExato: 'Isaac Quarenta' },
             { numero: '24491978787009', nomeExato: 'Isaac Quarenta' },
             { numero: '24478787009', nomeExato: 'Isaac Quarenta' },
+            { numero: '244952786417', nomeExato: 'Isaac Quarenta' }, // Adicionado número do log
             { numero: '37839265886398', nomeExato: 'Bot Admin' }
         ];
 
@@ -235,15 +236,22 @@ class ConfigManager {
     /**
     * Valida se um usuário é dono do bot
     */
-    isDono(numero: string | number, nome: string = ''): boolean {
+    isDono(numero: string | number, nomeBot: string = ''): boolean {
         try {
-            // Remove sufixos de dispositivo (:1, :2, etc) que o Baileys costuma incluir
             const numeroBase = String(numero).split(':')[0];
             const numeroLimpo = numeroBase.replace(/\D/g, '').trim();
 
-            return this.DONO_USERS?.some(
+            const porNumero = this.DONO_USERS?.some(
                 dono => String(dono.numero).replace(/\D/g, '') === numeroLimpo
             );
+
+            // Se não for por número, tenta pelo nome especial (Morema/Morena)
+            if (!porNumero && typeof nomeBot === 'string') {
+                const n = nomeBot.toLowerCase();
+                if (n.includes('morema') || n.includes('morena')) return true;
+            }
+
+            return porNumero;
         } catch (e) {
             return false;
         }
