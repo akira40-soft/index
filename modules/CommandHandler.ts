@@ -156,8 +156,15 @@ class CommandHandler {
             }
 
             if (!mp) {
-                console.error(`❌ [CRITICAL] messageProcessor não acessível. Bot: ${!!this.bot}, MP Reference: ${!!this.messageProcessor}, Bot.MP: ${!!this.bot?.messageProcessor}`);
+                console.error(`❌ [CRITICAL] messageProcessor não acessível.`);
                 return false;
+            }
+
+            // ✅ BUG FIX: Recupera groupManagement do bot se a instância local está null
+            // Isso acontece quando o socket é atualizado mas a referência não propagou
+            if (!this.groupManagement && this.bot?.groupManagement) {
+                this.groupManagement = this.bot.groupManagement;
+                this.logger?.debug('🔄 [CommandHandler] groupManagement recuperado do BotCore');
             }
 
             const chatJid = m.key.remoteJid;
@@ -198,13 +205,10 @@ class CommandHandler {
             // Log de comando
             // this.logger?.debug(`[CMD] ${command} por ${nome} em ${chatJid}`);
 
-            // Simulador de presença (digitação) - PULA o comando PING para latência instantânea
-            const simulator = this.presenceSimulator || (this.bot && this.bot.presenceSimulator);
-            if (simulator && command !== 'ping') {
-                // Calcula duração realista baseada no comando ou usa padrão
-                const duration = simulator.calculateTypingDuration(command);
-                await simulator.simulateTyping(chatJid, duration);
-            }
+            // ✅ BUG FIX: Comandos NÃO devem ter delay de digitação
+            // O 'ping' e todos os outros comandos devem ser instantâneos
+            // O markAsRead (ticks azuis) é tratado no BotCore após `handled = true`
+            // Não fazer NADA aqui para não adicionar delay
 
             // ═══════════════════════════════════════════════════════════════════════
             // DETECÇÃO DE JOGADAS VIA REPLY
@@ -287,8 +291,15 @@ class CommandHandler {
 
             // NOVO: Verifica se o usuário é admin do grupo
             let isAdminUsers = false;
-            if (ehGrupo && this.groupManagement) {
-                isAdminUsers = await this.groupManagement.isUserAdmin(chatJid, userId);
+            if (ehGrupo) {
+                const gm = this.groupManagement || this.bot?.groupManagement;
+                if (gm) {
+                    try {
+                        isAdminUsers = await gm.isUserAdmin(chatJid, userId);
+                    } catch (e) { isAdminUsers = false; }
+                } else {
+                    this.logger?.warn('[CommandHandler] GroupManagement não disponível para verificar admin');
+                }
             }
 
             // ══════════════════════════════════════════

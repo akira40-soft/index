@@ -654,11 +654,13 @@ class BotCore {
                         const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto, replyInfo, ehGrupo });
                         if (handled) {
                             this.logger.info(`⚡ Comando: ${texto.substring(0, 30)}`);
+                            // ✅ markAsRead: Marca como lido (2 ticks azuis) após tratar comando
+                            if (this.presenceSimulator) this.presenceSimulator.simulateTicks(m, true).catch(() => { });
                             if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem && this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
                                 const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 5);
                                 if (xp) this.logger.info(`📈 [LEVEL] ${nome} +5 XP`);
                             }
-                            return; // Comando tratado, não prossegue para IA
+                            return;
                         }
                     }
                 } catch (err: any) {
@@ -669,8 +671,8 @@ class BotCore {
                 return;
             }
 
-            // 3. Lógica de Decisão de Resposta (deveResponder)
-            const deveResponder = this.shouldRespondToAI(m, texto, ehGrupo, replyInfo);
+            // 3. Decisão de resposta da IA (passa nome e numero para verificar Morena exclusiva)
+            const deveResponder = this.shouldRespondToAI(m, texto, ehGrupo, replyInfo, nome, numeroReal);
 
             if (!deveResponder) {
                 this.logger.debug(`⏭️ Ignorado: ${texto.substring(0, 50)}`);
@@ -713,13 +715,13 @@ class BotCore {
                 reply_metadata: replyMetadata
             });
 
-            // ✅ BUG FIX #3: PRESENCE CORRETO
-            // O 'composing' deve comecar ANTES de chamar a API.
-            // Assim o usuario ve 'digitando' enquanto a IA processa. Natural e realista.
-            // O stop() sera chamado ANTES de enviar a resposta.
+            // ✅ Inicia composing ANTES da API com delay mínimo de 800ms
+            // Garante que o usuário sempre vê o status 'digitando' antes da resposta
             if (this.presenceSimulator) {
                 this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid).catch(() => { });
             }
+            // Delay mínimo: garante que o composing aparece na UI antes da mensagem
+            const composingStart = Date.now();
 
             const resultado = await this.apiClient.processMessage(payload);
             if (!resultado.success) {
@@ -728,6 +730,10 @@ class BotCore {
                 await this.sock.sendMessage(m.key.remoteJid, { text: 'Tive um problema. Tenta de novo?' });
                 return;
             }
+
+            // Garante delay mínimo de 800ms de composing para qualquer resposta
+            const elapsed = Date.now() - composingStart;
+            if (elapsed < 800) await delay(800 - elapsed);
 
             const resposta = resultado.resposta || 'Sem resposta';
 
@@ -770,7 +776,10 @@ class BotCore {
 
             this.logger.info(`✅ [RESPONDIDO] ${resposta.substring(0, 80)}`);
         } catch (error: any) {
-            this.logger.error('❌ Erro texto:', error.message);
+            // ✅ BUG FIX: Imprime o erro completo, não apenas .message (que pode ser undefined)
+            const errMsg = error?.message || String(error) || 'erro desconhecido';
+            const errStack = error?.stack ? `\n${error.stack.split('\n').slice(0, 3).join('\n')}` : '';
+            this.logger.error(`❌ Erro texto: ${errMsg}${errStack}`);
         }
     }
 
@@ -838,26 +847,35 @@ class BotCore {
     /**
      * Lógica central de decisão de resposta da IA
      */
-    shouldRespondToAI(m: any, texto: string, ehGrupo: boolean, replyInfo: any): boolean {
-        if (!ehGrupo) return true; // No privado, responde sempre
+    shouldRespondToAI(m: any, texto: string, ehGrupo: boolean, replyInfo: any, nomeRemetente: string = '', numeroRemetente: string = ''): boolean {
+        // ✅ SHORT-CIRCUIT: No PV, SEMPRE responde (sem excepções)
+        if (!ehGrupo) return true;
 
+        // A partir daqui só para grupos
         const textoLower = (texto || '').toLowerCase();
         const botName = (this.config.BOT_NAME || 'akira').toLowerCase();
 
-        // 1. Responde se for menção direta ao bot (marcado @244...)
+        // 1. Responde se for menção direta ao bot (@JID)
         if (this.messageProcessor.isBotMentioned(m)) return true;
 
-        // 1.1 Verificação extra de menção por texto (@número ou número)
+        // 1.1 Verificação extra de menção por número no texto
         const myNum = this.sock?.user?.id?.split(':')[0];
         if (myNum && (texto.includes(`@${myNum}`) || texto.includes(myNum))) return true;
 
-        // 2. Responde se for resposta (reply) a uma mensagem do próprio bot
+        // 2. Responde se for reply ao bot
         if (replyInfo?.ehRespostaAoBot) return true;
 
-        // 3. Responde se o nome do bot for citado explicitamente
-        if (textoLower.includes(botName) || textoLower.includes('akira')) return true;
+        // 3. Responde ao nome público do bot (qualquer um pode chamar)
+        if (textoLower.includes(botName)) return true;
 
-        // 4. Se for resposta a outra pessoa no grupo, ignora
+        // 4. ✅ BUG FIX: 'Morena'/'Morema' é EXCLUSIVO do Dono
+        // Não-donos que usam 'morena' no texto são completamente ignorados
+        const isOwner = typeof this.config?.isDono === 'function'
+            ? this.config.isDono(numeroRemetente, nomeRemetente)
+            : false;
+        if ((textoLower.includes('morena') || textoLower.includes('morema')) && isOwner) return true;
+
+        // 5. Se for reply a outra pessoa no grupo, ignora
         if (replyInfo?.isReply && !replyInfo?.ehRespostaAoBot) return false;
 
         return false;
