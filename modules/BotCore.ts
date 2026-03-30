@@ -170,19 +170,27 @@ class BotCore {
             this.economySystem = new EconomySystem(this.logger);
 
             try {
-                // @ts-ignore
-                this.gridTacticsGame = new GridTacticsGame(this.logger, this.config);
-                // @ts-ignore
-                this.gameSystem = new GameSystem(this.logger, this.config, this.gridTacticsGame);
-
                 this.commandHandler = new CommandHandler(this.sock, this.config, this, this.messageProcessor);
                 this.commandHandler.economySystem = this.economySystem;
-                this.commandHandler.gameSystem = this.gameSystem;
-                this.commandHandler.gridTacticsGame = this.gridTacticsGame;
-                this.logger.debug('✅ CommandHandler inicializado');
-            } catch (err: any) {
-                this.logger.warn(`⚠️ CommandHandler: ${err.message}`);
+                this.logger.debug('✅ CommandHandler inicializado raiz');
+            } catch (e: any) {
+                this.logger.warn(`⚠️ ERRO CRÍTICO NO COMMAND HANDLER: ${e.message}`);
                 this.commandHandler = null;
+            }
+
+            try {
+                // @ts-ignore
+                this.gridTacticsGame = typeof GridTacticsGame === 'function' ? new GridTacticsGame(this.logger, this.config) : (GridTacticsGame?.default ? new GridTacticsGame.default(this.logger, this.config) : null);
+                // @ts-ignore
+                this.gameSystem = typeof GameSystem === 'function' ? new GameSystem(this.logger, this.config, this.gridTacticsGame) : (GameSystem?.default ? new GameSystem.default(this.logger, this.config, this.gridTacticsGame) : null);
+
+                if (this.commandHandler) {
+                    this.commandHandler.gameSystem = this.gameSystem;
+                    this.commandHandler.gridTacticsGame = this.gridTacticsGame;
+                }
+                this.logger.debug('✅ Componentes de Jogo inicializados');
+            } catch (err: any) {
+                this.logger.warn(`⚠️ Erro ao inicializar módulos de Jogos: ${err.message}`);
             }
 
             const poToken = this.config?.YT_PO_TOKEN;
