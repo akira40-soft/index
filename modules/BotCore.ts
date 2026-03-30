@@ -627,8 +627,11 @@ class BotCore {
 
     async handleTextMessage(m: any, nome: string, numeroReal: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio: boolean = false): Promise<void> {
         try {
-            // 1. Verificar Rate Limit (exceto para o dono)
-            const isOwner = typeof this.config?.isDono === 'function' ? this.config.isDono(numeroReal, texto) : false;
+            // ✅ BUG FIX #1: isDono deve receber o NOME (pushName) do usuário, NÃO o texto da mensagem.
+            // O texto da mensagem nunca contém 'morema', o NOME sim.
+            const isOwner = typeof this.config?.isDono === 'function'
+                ? this.config.isDono(numeroReal, nome)
+                : false;
 
             if (!isOwner && this.moderationSystem?.checkAndLimitHourlyMessages) {
                 const res = this.moderationSystem.checkAndLimitHourlyMessages(numeroReal, nome, numeroReal, texto, null, isOwner);
@@ -637,11 +640,11 @@ class BotCore {
                     await this.sock.sendMessage(m.key.remoteJid, { text: msg });
                     return;
                 }
-            } else if (!isOwner && !this.messageProcessor.checkRateLimit(numeroReal)) {
-                this.logger.warn(`⏳ Rate limit: ${nome}`);
-                await this.sock.sendMessage(m.key.remoteJid, { text: '⏰ Muitas mensagens. Aguarde.' });
-                return;
+            } else if (!isOwner && this.moderationSystem?.checkAndLimitHourlyMessages) {
+                // Sem ModerationSystem ativo, não bloqueamos usuários (evita bloquear dono no PV)
+                this.logger.debug(`⏳ [RATE] Sem moderationSystem. Permitindo ${nome}.`);
             }
+            // REMOVIDO: fallback checkRateLimit que bloqueava usuários novos no PV
 
             // 2. Verificar se é comando (Ignora IA se for #comando)
             if (this.messageProcessor.isCommand(texto)) {
@@ -710,8 +713,17 @@ class BotCore {
                 reply_metadata: replyMetadata
             });
 
+            // ✅ BUG FIX #3: PRESENCE CORRETO
+            // O 'composing' deve comecar ANTES de chamar a API.
+            // Assim o usuario ve 'digitando' enquanto a IA processa. Natural e realista.
+            // O stop() sera chamado ANTES de enviar a resposta.
+            if (this.presenceSimulator) {
+                this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid).catch(() => { });
+            }
+
             const resultado = await this.apiClient.processMessage(payload);
             if (!resultado.success) {
+                if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                 this.logger.error('❌ Erro API:', resultado.error);
                 await this.sock.sendMessage(m.key.remoteJid, { text: 'Tive um problema. Tenta de novo?' });
                 return;
@@ -744,24 +756,14 @@ class BotCore {
                 }
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m);
             } else {
-                // ⚡ OTIMIZAÇÃO: Simulação reativa (Pára ao enviar)
-                if (this.presenceSimulator) {
-                    const duration = this.presenceSimulator.calculateTypingDuration(resposta);
-                    this.presenceSimulator.simulateTyping(m.key.remoteJid, duration);
-                }
+                // ✅ BUG FIX #3: Para o 'composing' iniciado antes da API e envia imediatamente
+                // O 'composing' já foi disparado ANTES da chamada à API.
+                // Aqui apenas paramos e enviamos — sem nenhum delay extra.
+                if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
 
                 const opcoes = ehGrupo ? { quoted: m } : (replyInfo?.ehRespostaAoBot ? { quoted: m } : {});
-
-                this.logger.info(`🚀 [SENDING MSG] PV/Grupo Dispatch...`);
-                try {
-                    // 🛑 STOP PRESENCE IMEDIATO ANTES DE ENVIAR
-                    if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
-
-                    await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-                    this.logger.info(`✅ [DISPATCH OK]`);
-                } catch (innerErr: any) {
-                    this.logger.error(`❌ [DISPATCH FAILED] Erro fatal: ${innerErr.message}`);
-                }
+                await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+                this.logger.info(`✅ [DISPATCH OK]`);
 
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m);
             }

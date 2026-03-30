@@ -125,64 +125,53 @@ class GroupManagement {
     /**
      * Obtém metadados do grupo com cache e retry
      */
-    private async _getGroupMetadata(groupJid: string, retries: number = 3): Promise<any | null> {
+    private async _getGroupMetadata(groupJid: string, retries: number = 2): Promise<any | null> {
         // Verifica cache
         const cached = this.metadataCache.get(groupJid);
         if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
             return cached.data;
         }
 
-        // Aguarda socket estar pronto
+        // ✅ BUG FIX #5: Se socket não está pronto, usa cache de emergência IMEDIATAMENTE
+        // Sem retries com delays que travam a resposta por 3-7 segundos
         if (!this._checkSocket()) {
-            this.logger.error('❌ [GroupManagement] Socket não disponível');
+            if (cached) {
+                this.logger?.debug(`✨ [GroupManagement] Socket indisponível. Usando cache para ${groupJid}`);
+                return cached.data;
+            }
+            this.logger.warn(`❌ [GroupManagement] Socket não disponível e sem cache para ${groupJid}`);
             return null;
         }
 
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                if (!this._checkSocket()) {
-                    if (cached) {
-                        this.logger?.warn(`⚠️ [GroupManagement] Socket não pronto, usando cache expirado como emergência.`);
-                        return cached.data;
-                    }
-                    if (attempt < retries) {
-                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-                        continue;
-                    }
-                    return null;
-                }
+        // Socket disponível — tenta buscar metadados (1 tentativa, fallback para cache)
+        try {
+            const metadata = await this.sock.groupMetadata(groupJid);
+            this.metadataCache.set(groupJid, { data: metadata, timestamp: Date.now() });
 
-                const metadata = await this.sock.groupMetadata(groupJid);
-                this.metadataCache.set(groupJid, { data: metadata, timestamp: Date.now() });
+            const admins = metadata.participants
+                .filter((p: any) => p.admin || p.isAdmin || p.isSuperAdmin)
+                .map((p: any) => p.id);
+            this.adminCache.set(groupJid, { admins, timestamp: Date.now() });
 
-                // Atualiza cache de admins também
-                const admins = metadata.participants
-                    .filter((p: any) => p.admin || p.isAdmin || p.isSuperAdmin)
-                    .map((p: any) => p.id);
-                this.adminCache.set(groupJid, { admins, timestamp: Date.now() });
+            return metadata;
+        } catch (e: any) {
+            const isConnClosed = e.message?.includes('Connection Closed') || e.message?.includes('515');
 
-                return metadata;
-            } catch (e: any) {
-                const isConnectionClosed = e.message?.includes('Connection Closed') || e.message?.includes('515');
-                const logLvl = isConnectionClosed ? 'warn' : 'error';
-
-                this.logger[logLvl](`❌ [GroupManagement] Erro ao obter metadados (tentativa ${attempt}/${retries}):`, e.message);
-
-                // ESTRATÉGIA DE RESILIÊNCIA: Se a conexão fechou e temos cache (mesmo expirado), USAR O CACHE
-                if (isConnectionClosed && cached) {
-                    this.logger.info(`✨ [GroupManagement] Usando cache de emergência para ${groupJid} devido a falha de conexão.`);
-                    return cached.data;
-                }
-
-                if (attempt < retries) {
-                    const delayMs = Math.pow(2, attempt - 1) * 1000;
-                    this.logger.info(`⏳ [GroupManagement] Aguardando ${delayMs}ms antes de retry...`);
-                    await new Promise(resolve => setTimeout(resolve, delayMs));
-                }
+            // Se falhou por instabilidade e temos cache (mesmo expirado), usa sem delay
+            if (cached) {
+                this.logger?.warn(`⚠️ [GroupManagement] Falha ao buscar metadados (${e.message?.substring(0, 40)}). Usando cache.`);
+                return cached.data;
             }
-        }
 
-        return null;
+            // Sem cache, tenta 1 vez com delay mínimo
+            if (!isConnClosed && retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 800));
+                return this._getGroupMetadata(groupJid, retries - 1);
+            }
+
+            this.logger.error(`❌ [GroupManagement] Sem cache e sem conexão para ${groupJid}`);
+            return null;
+        }
     }
 
     /**

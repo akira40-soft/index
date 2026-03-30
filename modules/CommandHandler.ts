@@ -120,14 +120,16 @@ class CommandHandler {
     public setSocket(sock: any): void {
         this.sock = sock;
 
-        // Garante inicialização dos módulos dependentes de sock
+        // ✅ Propaga o socket para TODOS os sub-módulos que já existem
+        // Nunca cria novas instâncias aqui — as instâncias são controladas pelo BotCore
+        if (this.groupManagement?.setSocket) this.groupManagement.setSocket(sock);
+        if (this.stickerHandler?.setSocket) this.stickerHandler.setSocket(sock);
+        if (this.userProfile?.setSocket) this.userProfile.setSocket(sock);
+        if (this.botProfile?.setSocket) this.botProfile.setSocket(sock);
+        if (this.presenceSimulator) this.presenceSimulator.sock = sock;
+
+        // Inicializa apenas se não existirem ainda (primeiro boot com socket nulo)
         if (!this.stickerHandler) this.stickerHandler = new StickerViewOnceHandler(sock, this.config);
-        if (!this.groupManagement) {
-            this.groupManagement = new GroupManagement(sock, this.config, this.moderationSystem);
-            this.userProfile = new UserProfile(sock, this.config);
-            this.botProfile = new BotProfile(sock, this.config);
-            this.imageEffects = new ImageEffects(this.config);
-        }
         if (!this.presenceSimulator) this.presenceSimulator = new PresenceSimulator(sock);
     }
 
