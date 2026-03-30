@@ -94,8 +94,7 @@ class MediaProcessor {
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const poToken = this.config?.YT_PO_TOKEN;
 
-        // Padrão Industrial: Se houver Deno, use-o. Caso contrário, deixa o yt-dlp decidir.
-        const jsRuntime = fs.existsSync('/usr/local/bin/deno') || fs.existsSync('/root/.deno/bin/deno') ? '--js-runtime deno' : '';
+        // Padrão Industrial: Deixa o yt-dlp decidir o melhor runtime (evita crashs de binários faltantes)
 
         // Clientes normatizados em ordem de prioridade
         const clients = options.clientOverride || 'android_vr,ios,android,web_embedded,tv,web';
@@ -105,11 +104,8 @@ class MediaProcessor {
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
-            jsRuntime,
             '--force-ipv4',
             '--no-check-certificates',
-            '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"',
-            '--add-header "Accept-Language:en-US,en;q=0.9"',
             '--ignore-config',
             '--no-warnings',
             '--no-playlist',
@@ -120,11 +116,11 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Remove -f "ba/b" rigoroso. Usa apenas extração final. Se não, yt-dlp falha em 428 e formatos restritos
-            actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Apenas extrai áudio e converte para mp3 sem forçar qualidades estritas
+            actionFlags = `-x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Para vídeo, usa seleção padrão (bv+ba) mas força container mp4 e reencode de vídeo apenas se necessário (fallback para h264 se o original for vp9 incompatível com whatsapp)
-            actionFlags = `-S "res:720,ext:mp4:m4a" --recode-video mp4 -o "${options.output}"`;
+            // Sem -S "res..." para não falhar se só houver formatos limitados
+            actionFlags = `--recode-video mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -154,13 +150,12 @@ class MediaProcessor {
             const cookiePath = this._findCookiePath();
 
             // ================================================================
-            // GAMBIARRAS ANTI-BLOQUEIO: yt-dlp padrão web (Sem formatos restritos)
+            // GAMBIARRAS ANTI-BLOQUEIO: yt-dlp nativo sem forçar web
             // ================================================================
-            this.logger?.info(`[ÁUDIO] Tentando yt-dlp puro com cliente web padrão...`);
+            this.logger?.info(`[ÁUDIO] Tentando yt-dlp nativo...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'audio',
-                output: outputPath,
-                clientOverride: 'web,mweb'
+                output: outputPath
             });
 
             try {
@@ -205,14 +200,13 @@ class MediaProcessor {
             const outputPath = this.generateRandomFilename('mp4');
 
             // ================================================================
-            // GAMBIARRAS ANTI-BLOQUEIO: yt-dlp padrão web (Sem formatos restritos)
+            // GAMBIARRAS ANTI-BLOQUEIO: yt-dlp nativo sem restrições
             // O yt-dlp fará a seleção nativa e juntará tudo em MP4
             // ================================================================
-            this.logger?.info(`[VÍDEO] Tentando yt-dlp puro com cliente web padrão...`);
+            this.logger?.info(`[VÍDEO] Tentando yt-dlp nativo...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'video',
-                output: outputPath,
-                clientOverride: 'web,mweb'
+                output: outputPath
             });
 
             try {
