@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "currency": "BRL",
+  "webhookSecret": "",
+  "kofiPage": "seu_usuario_kofi",
+  "btcAddress": "0xdb5f66e7707de55859b253adbee167e2e8594ba6",
+  "plans": {
+    "vip_7d": {
+      "name": "VIP Semanal",
+      "price": 5,
+      "days": 7
+    },
+    "vip_30d": {
+      "name": "VIP Mensal",
+      "price": 15,
+      "days": 30
+    }
+  }
+}

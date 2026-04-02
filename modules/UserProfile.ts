@@ -7,6 +7,7 @@
  */
 
 import ConfigManager from './ConfigManager.js';
+import JidUtils from './JidUtils.js';
 
 class UserProfile {
     public sock: any;
@@ -28,8 +29,7 @@ class UserProfile {
     */
     formatJidToNumber(jid: string): string {
         if (!jid) return 'Desconhecido';
-        // Remove @s.whatsapp.net
-        return jid.replace('@s.whatsapp.net', '');
+        return JidUtils.getNumber(jid);
     }
 
     /**
@@ -105,8 +105,8 @@ class UserProfile {
 
             return {
                 success: true,
-                jid: userJid,
-                number: this.formatJidToNumber(userJid),
+                jid: JidUtils.normalize(userJid),
+                number: JidUtils.getNumber(userJid),
                 hasPhoto: photoResult.hasPhoto,
                 photoUrl: photoResult.url,
                 status: statusResult.status,

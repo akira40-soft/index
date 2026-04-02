@@ -8,6 +8,7 @@
  */
 
 import ConfigManager from './ConfigManager.js';
+import JidUtils from './JidUtils.js';
 
 class BotProfile {
     public sock: any;
@@ -35,7 +36,7 @@ class BotProfile {
     * Obtém JID do bot
     */
     getBotJid(): string | null {
-        return this.sock?.user?.id || null;
+        return JidUtils.normalize(this.sock?.user?.id || null);
     }
 
     /**
@@ -214,7 +215,7 @@ class BotProfile {
             ]);
 
             const botJid = this.getBotJid();
-            const number = botJid ? botJid.replace('@s.whatsapp.net', '') : 'Desconhecido';
+            const number = JidUtils.getNumber(botJid);
 
             return {
                 success: true,

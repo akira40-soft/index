@@ -9,6 +9,7 @@
 
 import { getContentType } from '@whiskeysockets/baileys';
 import ConfigManager from './ConfigManager.js';
+import JidUtils from './JidUtils.js';
 
 let parsePhoneNumberFromString: any = null;
 try {
@@ -40,37 +41,30 @@ class MessageProcessor {
     extractUserNumber(message: any) {
         try {
             const key = message.key || {};
+            const participant = key.participant || null;
             const remoteJid = key.remoteJid || '';
 
-            // Se for PV (não termina com @g.us)
-            if (!String(remoteJid).endsWith('@g.us')) {
-                return String(remoteJid).split(':')[0].split('@')[0];
+            // ✅ PRIORIDADE 1: Usar phone_number se disponível na estrutura metadata
+            if (message.phoneNumber) {
+                const phoneNum = JidUtils.extractPhoneNumber(String(message.phoneNumber));
+                if (phoneNum) return phoneNum;
             }
 
-            // Se for grupo, obtém do participant
-            if (key.participant) {
-                const participant = String(key.participant);
-                if (participant.includes('@s.whatsapp.net')) {
-                    return participant.split(':')[0].split('@')[0];
+            // ✅ PRIORIDADE 2: Usar participant se disponível
+            if (participant) {
+                const normalized = JidUtils.normalize(String(participant));
+                const number = JidUtils.getNumber(normalized);
+                if (number) {
+                    // ✅ CORREÇÃO: Garantir que é apenas dígitos, não JID com @lid
+                    return JidUtils.cleanPhoneNumber(number);
                 }
-                if (participant.includes('@lid')) {
-                    const limpo = participant.split(':')[0];
-                    const digitos = limpo.replace(/\D/g, '');
+            }
 
-                    // Otimização: Uso de defaultCountry estático baseado no bot
-                    const defaultCountry = this.config?.BOT_NUMERO_REAL?.startsWith('244') ? 'AO' : 'BR';
-
-                    if (parsePhoneNumberFromString && digitos.length > 5) {
-                        try {
-                            const pn = parsePhoneNumberFromString(digitos, defaultCountry as any);
-                            if (pn && pn.isValid()) {
-                                return String(pn.number).replace(/^\+/, '');
-                            }
-                        } catch (err) { }
-                    }
-
-                    if (digitos.length > 0) return digitos;
-                }
+            // ✅ PRIORIDADE 3: Use remoteJid para PV
+            if (remoteJid && !String(remoteJid).endsWith('@g.us')) {
+                const number = JidUtils.getNumber(String(remoteJid));
+                // ✅ CORREÇÃO: Garantir que é apenas dígitos, não JID com @lid  
+                return JidUtils.cleanPhoneNumber(number);
             }
 
             return 'desconhecido';
@@ -421,11 +415,10 @@ class MessageProcessor {
     isReplyToBot(jid: string | null | undefined): boolean {
         if (!jid) return false;
 
-        const jidStr = String(jid).toLowerCase();
-        const jidNumero = jidStr.split('@')[0].split(':')[0];
-        const botNumero = String(this.config.BOT_NUMERO_REAL).toLowerCase();
+        const jidNumero = JidUtils.getNumber(String(jid));
+        const botNumero = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
-        return jidNumero === botNumero || jidStr.includes(botNumero);
+        return jidNumero === botNumero;
     }
 
     /**

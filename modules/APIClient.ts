@@ -9,6 +9,7 @@
 
 import axios from 'axios';
 import ConfigManager from './ConfigManager.js';
+import JidUtils from './JidUtils.js';
 
 class APIClient {
     private config: any;
@@ -44,27 +45,40 @@ class APIClient {
             imagem_dados = null,
             grupo_id = null,
             grupo_nome = null,
-            forcar_pesquisa = false
+            forcar_pesquisa = false,
+            is_bot_self_response = false,
+            is_group = false,
+            sender_is_bot = false
         } = messageData;
+
+        // ✅ CORREÇÃO: Garantir que numero é sempre apenas dígitos (sem @lid, @s.whatsapp.net, etc)
+        const numeroLimpo = JidUtils.cleanPhoneNumber(numero) || 'desconhecido';
 
         const payload: any = {
             usuario: String(usuario || 'anonimo').substring(0, 50),
-            numero: String(numero || 'desconhecido').substring(0, 20),
+            numero: numeroLimpo.substring(0, 20),
             mensagem: String(mensagem || '').substring(0, 2000),
             tipo_conversa: ['pv', 'grupo'].includes(tipo_conversa) ? tipo_conversa : 'pv',
             tipo_mensagem: ['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
             historico: [],
-            forcar_busca: Boolean(forcar_pesquisa)
+            forcar_busca: Boolean(forcar_pesquisa),
+            // ✅ NOVOS CAMPOS DE VALIDAÇÃO
+            is_bot_self_response: Boolean(is_bot_self_response),
+            is_group: Boolean(is_group),
+            sender_is_bot: Boolean(sender_is_bot)
         };
 
         // Adiciona contexto de reply se existir
         if (mensagem_citada) {
+            // ✅ CORREÇÃO: Também garantir que quoted_author_numero é sempre apenas dígitos
+            const quotedAuthorNumerolimpo = JidUtils.cleanPhoneNumber(reply_metadata.quoted_author_numero) || 'desconhecido';
+            
             payload.mensagem_citada = String(mensagem_citada).substring(0, 3000);
             payload.reply_metadata = {
                 is_reply: true,
                 reply_to_bot: Boolean(reply_metadata.reply_to_bot),
                 quoted_author_name: String(reply_metadata.quoted_author_name || 'desconhecido').substring(0, 50),
-                quoted_author_numero: String(reply_metadata.quoted_author_numero || 'desconhecido'),
+                quoted_author_numero: quotedAuthorNumerolimpo,
                 quoted_type: String(reply_metadata.quoted_type || 'texto'),
                 quoted_text_original: String(reply_metadata.quoted_text_original || '').substring(0, 200),
                 context_hint: String(reply_metadata.context_hint || '')
@@ -90,6 +104,7 @@ class APIClient {
         if (grupo_id) {
             payload.grupo_id = grupo_id;
             payload.contexto_grupo = grupo_nome || 'Grupo';
+            payload.grupo_nome = grupo_nome;
         }
 
         return payload;

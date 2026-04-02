@@ -1,0 +1,9 @@
+[2026-04-01T14:28:15.835Z] ⚠️ WARN | User: 146967489470550 | Violação de rate limit (1/3)
+[2026-04-01T14:29:00.918Z] ⚠️ WARN | User: 146967489470550 | Violação de rate limit (2/3)
+[2026-04-01T14:29:04.542Z] ⚠️ WARN | User: 146967489470550 | Violação de rate limit (3/3)
+[2026-04-01T14:29:04.545Z] 🚫 BAN | User: 146967489470550 | Adicionado à blacklist por excesso de violações
+[2026-04-01T14:29:49.620Z] ⚠️ WARN | User: 37460822245397 | Violação de rate limit (1/3)
+[2026-04-02T00:55:54.583Z] ⚠️ WARN | User: 153296643850299 | Violação de rate limit (1/3)
+[2026-04-02T00:55:55.227Z] ⚠️ WARN | User: 153296643850299 | Violação de rate limit (2/3)
+[2026-04-02T00:55:56.186Z] ⚠️ WARN | User: 153296643850299 | Violação de rate limit (3/3)
+[2026-04-02T00:55:56.190Z] 🚫 BAN | User: 153296643850299 | Adicionado à blacklist por excesso de violações

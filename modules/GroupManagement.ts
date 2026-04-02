@@ -9,6 +9,7 @@
 import ConfigManager from './ConfigManager.js';
 import fs from 'fs';
 import path from 'path';
+import JidUtils from './JidUtils.js';
 
 class GroupManagement {
     public sock: any;
@@ -29,20 +30,39 @@ class GroupManagement {
      * Cria uma lista de alvos a partir da mensagem, incluindo mentions e
      * usuário citado no reply. Retorna array vazio se nenhum alvo encontrado.
      */
-    private _extractTargets(m: any): string[] {
+    private _extractTargets(m: any, args: any[] = []): string[] {
+        // ✅ 1. Tenta extrair de menções diretas na mensagem
         const mentioned: string[] = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
         if (mentioned.length > 0) {
             return mentioned;
         }
 
+        // ✅ 2. Tenta extrair de resposta (reply)
         const replyInfo = m.replyInfo || m._replyInfo;
         if (replyInfo?.quemEscreveuCitacaoJid) {
             return [replyInfo.quemEscreveuCitacaoJid];
         }
 
+        // ✅ 3. Tenta extrair de participante em contexto
         const participant = m.message?.extendedTextMessage?.contextInfo?.participant;
         if (participant) {
             return [participant];
+        }
+
+        // ✅ 4. NOVO: Extrai de argumentos (ex: #ban @123 ou #ban 123)
+        if (args && args.length > 0) {
+            const extracted: string[] = [];
+            for (const arg of args) {
+                // Remove @ e extrai números
+                const num = String(arg).replace(/\D/g, '');
+                if (num && num.length >= 10) {
+                    // Garante formato correto de JID
+                    extracted.push(`${num}@s.whatsapp.net`);
+                }
+            }
+            if (extracted.length > 0) {
+                return extracted;
+            }
         }
 
         return [];
@@ -81,7 +101,7 @@ class GroupManagement {
 
         const admins = metadata.participants
             .filter((p: any) => p.admin === 'admin' || p.admin === 'superadmin')
-            .map((p: any) => p.id ? p.id.split('@')[0].split(':')[0] + '@s.whatsapp.net' : '');
+            .map((p: any) => p.id ? JidUtils.normalize(p.id) : '');
 
         this.adminCache.set(groupJid, { admins, timestamp: Date.now() });
         return admins;
@@ -867,24 +887,42 @@ class GroupManagement {
     async kickUser(m: any, args: any[]): Promise<boolean> {
         if (!this._checkSocket()) return true;
         const groupJid = m.key.remoteJid;
-        const targets = this._extractTargets(m);
+        const targets = this._extractTargets(m, args);
 
         if (targets.length === 0) {
-            await this.sock.sendMessage(groupJid, { text: '❌ Mencione ou responda a alguém para remover.' }, { quoted: m });
+            await this.sock.sendMessage(groupJid, { text: '❌ Mencione, responda ou informe o número para remover.\\n\\nExemplo: #ban 123456789' }, { quoted: m });
             return true;
         }
 
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
-        const botId = this.sock.user.id.split(':')[0] + '@s.whatsapp.net';
+        // ✅ Usar BOT_NUMERO_REAL formatado como @lid (padrão WhatsApp multi-device)
+        const botNumero = String(this.config.BOT_NUMERO_REAL).replace(/\D/g, '');
+        const botId = `${botNumero}@lid`;
+        
+        console.log(`🔍 [GroupManagement] Bot ID (BOT_NUMERO_REAL): ${botId}`);
+        console.log(`🔍 [GroupManagement] Admins (normalizados): ${admins.join(', ')}`);
+        console.log(`🔍 [GroupManagement] Targets: ${targets.join(', ')}`);
+        
         if (!admins.includes(botId)) {
+            console.log(`❌ [GroupManagement] Bot NÃO está na lista de admins!`);
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para remover membros.' }, { quoted: m });
             return true;
         }
+        
+        console.log(`✅ [GroupManagement] Bot está na lista de admins!`);
 
         try {
-            await this.sock.groupParticipantsUpdate(groupJid, targets, 'remove');
-            const mentions = targets.map((t: string) => `@${t.split('@')[0]}`);
+            console.log(`👢 [GroupManagement] Removendo: ${targets.join(', ')}`);
+            const result = await this.sock.groupParticipantsUpdate(groupJid, targets, 'remove');
+            console.log(`✅ [GroupManagement] Resultado: ${JSON.stringify(result)}`);
+            
+            const mentions = targets.map((t: string) => {
+                // Remove sufixo de JID
+                const num = t.split('@')[0].split(':')[0];
+                return `@${num}`;
+            });
+            
             await this.sock.sendMessage(groupJid, {
                 text: `👢 *Membro(s) removido(s):* ${mentions.join(', ')}`,
                 mentions: targets
@@ -892,8 +930,9 @@ class GroupManagement {
             this.clearMetadataCache(groupJid);
             return true;
         } catch (e: any) {
-            this.logger.error(`❌ [GroupManagement] Erro ao expulsar:`, e.message);
-            await this.sock.sendMessage(groupJid, { text: '❌ Erro ao tentar remover membro. Talvez ele seja admin?' }, { quoted: m });
+            console.error(`❌ [GroupManagement] Erro ao expulsar:`, e.message);
+            console.error(`❌ [GroupManagement] Stack: ${e.stack}`);
+            await this.sock.sendMessage(groupJid, { text: `❌ Erro ao tentar remover membro: ${e.message}` }, { quoted: m });
             return true;
         }
     }
@@ -910,7 +949,8 @@ class GroupManagement {
 
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
-        const botId = this.sock.user.id.split(':')[0] + '@s.whatsapp.net';
+        const botNumero = String(this.config.BOT_NUMERO_REAL).replace(/\D/g, '');
+        const botId = `${botNumero}@lid`;
         if (!admins.includes(botId)) {
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para adicionar membros.' }, { quoted: m });
             return true;
@@ -1018,7 +1058,7 @@ class GroupManagement {
      */
     async isUserAdmin(groupJid: string, userJid: string): Promise<boolean> {
         const admins = await this._getGroupAdmins(groupJid);
-        const normalizedUserJid = userJid ? userJid.split('@')[0].split(':')[0] + '@s.whatsapp.net' : '';
+        const normalizedUserJid = userJid ? JidUtils.normalize(userJid) : '';
         return admins.includes(normalizedUserJid);
     }
 
@@ -1235,7 +1275,9 @@ class GroupManagement {
 
             admins.forEach((p: any, index: number) => {
                 const role = p.admin === 'superadmin' ? '👑 Criador' : '⭐ Admin';
-                text += `${index + 1}. @${p.id.split('@')[0]} - ${role}\n`;
+                // ✅ Remove sufixo de JID (ex: :68) para mostrar número correto
+                const num = p.id.split('@')[0].split(':')[0];
+                text += `${index + 1}. @${num} - ${role}\n`;
             });
 
             await this.sock.sendMessage(groupJid, {
@@ -1466,6 +1508,25 @@ class GroupManagement {
             this.logger.error(`❌ [GroupManagement] Erro ao buscar rank:`, e.message);
             await this.sock.sendMessage(groupJid, { text: '❌ Erro ao buscar informações de rank.' }, { quoted: m });
             return true;
+        }
+    }
+
+    /**
+     * Verifica se usuário é admin do grupo
+     */
+    async isGroupAdmin(groupJid: string, userNumber: string): Promise<boolean> {
+        try {
+            const admins = await this._getGroupAdmins(groupJid);
+            // Normaliza o número do usuário
+            const userNum = String(userNumber).replace(/\D/g, '');
+            // Procura por admin que contém esse número
+            return admins.some(admin => {
+                const adminNum = admin.split('@')[0].split(':')[0];
+                return adminNum === userNum;
+            });
+        } catch (e) {
+            console.error(`❌ [GroupManagement] Erro ao verificar admin:`, e);
+            return false;
         }
     }
 }

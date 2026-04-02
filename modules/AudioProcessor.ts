@@ -222,6 +222,10 @@ class AudioProcessor {
                 host: 'https://translate.google.com'
             });
 
+            if (!audioUrl || typeof audioUrl !== 'string') {
+                throw new Error('URL de áudio TTS inválida');
+            }
+
             const outputPath = this.generateRandomFilename('mp3');
 
             // Download do áudio
@@ -229,13 +233,13 @@ class AudioProcessor {
                 url: audioUrl,
                 method: 'GET',
                 responseType: 'arraybuffer',
-                timeout: 15000
+                timeout: 20000,
+                validateStatus: (status) => status >= 200 && status < 300
             });
 
-            const audioBuffer = Buffer.from(response.data);
-
-            if (audioBuffer.length === 0) {
-                throw new Error('Audio buffer vazio');
+            const audioBuffer = Buffer.from(response.data || []);
+            if (!audioBuffer || audioBuffer.length === 0) {
+                throw new Error('Audio buffer vazio ou inválido');
             }
 
             await fs.promises.writeFile(outputPath, audioBuffer);

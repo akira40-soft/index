@@ -48,6 +48,35 @@ export class JidUtils {
     public static toNumeric(jid: string | null | undefined): string {
         return this.getNumber(jid);
     }
+
+    /**
+     * Extrai número de phone_number vindo do socket WhatsApp.
+     * Prioriza phone_number quando disponível, fallback para JID.
+     * Exemplo: "244956464620@s.whatsapp.net" -> "244956464620"
+     */
+    public static extractPhoneNumber(phoneNumberOrJid: string | null | undefined): string {
+        if (!phoneNumberOrJid) return "";
+        
+        // Se contém @, é um JID/phone_number do WhatsApp
+        if (phoneNumberOrJid.includes('@')) {
+            return phoneNumberOrJid.split('@')[0];
+        }
+        
+        // Se é apenas número puro
+        return phoneNumberOrJid.replace(/\D/g, '');
+    }
+
+    /**
+     * Garante que um número de telefone seja apenas dígitos, remover qualquer JID/LID/sufixo.
+     * Útil para garantir que o payload enviado à API contenha apenas números limpos.
+     * Exemplo: "244956464620@lid" -> "244956464620"
+     * Exemplo: "244956464620@s.whatsapp.net" -> "244956464620"
+     */
+    public static cleanPhoneNumber(input: string | null | undefined): string {
+        if (!input) return "";
+        // Remove tudo exceto dígitos
+        return String(input).replace(/\D/g, '');
+    }
 }
 
 export default JidUtils;

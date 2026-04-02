@@ -92,17 +92,17 @@ class ConfigManager {
 
         // ═══ PORTAS E URLS ═══
         this.PORT = Number(process.env?.PORT || process.env?.HF_PORT || 3000);
-        this.API_URL = process.env?.API_URL || process.env?.HF_API_URL || 'https://akra35567-akira-index.hf.space/api';
+        this.API_URL = process.env?.API_URL || process.env?.HF_API_URL || 'https://akra35567-akira-softedge.hf.space/api';
         this.API_TIMEOUT = Number(process.env?.API_TIMEOUT || 120000);
         this.API_RETRY_ATTEMPTS = Number(process.env?.API_RETRY_ATTEMPTS || 3);
         this.API_RETRY_DELAY = Number(process.env?.API_RETRY_DELAY || 1000);
         this.BASE_URL = process.env?.BASE_URL || 'https://index-js21-production.up.railway.app'; // URL de Produção
 
         // ═══ BOT IDENTITY ═══
-        this.BOT_NUMERO_REAL = process.env?.BOT_NUMERO || '40755431264474';
-        this.BOT_NAME = process.env?.BOT_NAME || 'belmira';
+this.BOT_NUMERO_REAL = process.env?.BOT_NUMERO || '37839265886398';
+        this.BOT_NAME = process.env?.BOT_NAME || 'Akira';
         this.BOT_VERSION = 'v21.1.02.2025';
-        this.PREFIXO = process.env?.PREFIXO || '*';
+        this.PREFIXO = process.env?.PREFIXO || '#';
 
         // ═══ PATHS E FOLDERS ═══
         const isHuggingFaceSpace = process.env?.HF_SPACE === 'true';
@@ -204,14 +204,14 @@ class ConfigManager {
         this.LOG_DETAILED_MESSAGES = process.env?.LOG_DETAILED_MESSAGES !== 'false';
 
         // ═══ PERMISSÕES - DONO(S) ═══
-        this.DONO_USERS = [
+this.DONO_USERS = [
+            { numero: '37839265886398', nomeExato: 'Bot Admin' }, // PRIMARY: Multi-device LID number (fixes replies/owner checks)
+            { numero: '244952786417', nomeExato: 'Isaac Quarenta' }, // Current session JID
             { numero: '244937035662', nomeExato: 'Isaac Quarenta' },
             { numero: '244978787009', nomeExato: 'Isaac Quarenta' },
             { numero: '202391978787009', nomeExato: 'Isaac Quarenta' },
             { numero: '24491978787009', nomeExato: 'Isaac Quarenta' },
-            { numero: '24478787009', nomeExato: 'Isaac Quarenta' },
-            { numero: '244952786417', nomeExato: 'Isaac Quarenta' }, // Adicionado número do log
-            { numero: '37839265886398', nomeExato: 'Bot Admin' }
+            { numero: '24478787009', nomeExato: 'Isaac Quarenta' }
         ];
 
         // ═══ FEATURES ═══
@@ -314,7 +314,7 @@ class ConfigManager {
         console.log('⚙️ CONFIGURAÇÕES DO BOT');
         console.log('═'.repeat(70));
         console.log(` 🤖 Nome: ${this.BOT_NAME}`);
-        console.log(` 📱 Número: ${this.BOT_NUMERO_REAL}`);
+        console.log(` 📱 Número: ${this.BOT_NUMERO_REAL} (Multi-device Primary)`);
         console.log(` 📌 Versão: ${this.BOT_VERSION}`);
         console.log(` 🎛️ Prefixo: ${this.PREFIXO}`);
         console.log(` 🔌 API: ${this.API_URL?.substring(0, 50)}...`);

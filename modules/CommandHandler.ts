@@ -1,3 +1,4 @@
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * COMMAND HANDLER - AKIRA BOT V21 - ENTERPRISE EDITION
@@ -37,12 +38,11 @@ import EconomySystem from './EconomySystem.js';
 import GameSystem from './GameSystem.js';
 import GridTacticsGame from './GridTacticsGame.js';
 import ModerationSystem from './ModerationSystem.js';
+import JidUtils from './JidUtils.js';
 
 // Sistema de rate limiting para features premium (1x a cada 3 meses para users)
-const premiumFeatureUsage = new Map();
 
-// Log de ações administrativas
-const adminLog = new Map();
+
 
 // O PresenceSimulator é gerenciado via instância do BotCore ou localmente
 
@@ -65,8 +65,20 @@ class CommandHandler {
     public botProfile: any;
     public imageEffects: any;
     public presenceSimulator: any;
+public rateLimiter: any;
+    public securityLogger: any;
     public logger: any;
     public gridTacticsGame: any;
+    async initAsyncModules() {
+        try {
+            this.rateLimiter = this.bot?.rateLimiter ?? new (await import('./RateLimiter.js')).default(this.config);
+            this.securityLogger = this.bot?.securityLogger ?? new (await import('./SecurityLogger.js')).default(this.config);
+        } catch (error: any) {
+            this.logger.warn(`⚠️ Erro ao carregar módulos async: ${error.message}`);
+            this.rateLimiter = this.bot?.rateLimiter;
+            this.securityLogger = this.bot?.securityLogger;
+        }
+    }
 
     constructor(sock: any, config: any, bot: any = null, messageProcessor: any = null) {
         this.logger = config?.logger || bot?.logger || console;
@@ -81,39 +93,32 @@ class CommandHandler {
         const EconomyClass = (EconomySystem as any).default || EconomySystem;
         const MediaClass = (MediaProcessor as any).default || MediaProcessor;
 
-        // @ts-ignore
-        this.permissionManager = bot?.permissionManager || new PermissionManager(this.logger, bot?.registrationSystem);
-        // @ts-ignore
-        this.registrationSystem = bot?.registrationSystem || new RegistrationClass(this.logger);
-        // @ts-ignore
-        this.levelSystem = bot?.levelSystem || new LevelClass(this.logger);
-        // @ts-ignore
-        this.economySystem = bot?.economySystem || new EconomyClass(this.logger);
+        this.permissionManager = bot?.permissionManager ?? new PermissionManager(this.logger, bot?.registrationSystem ?? null);
+        this.registrationSystem = bot?.registrationSystem ?? new RegistrationClass(this.logger);
+        this.levelSystem = bot?.levelSystem ?? new LevelClass(this.logger);
+        this.economySystem = bot?.economySystem ?? new EconomyClass(this.logger);
 
         // Handlers de mídia
         this.mediaProcessor = bot?.mediaProcessor || new MediaClass(this.logger);
 
+        // Módulos async serão inicializados depois (RateLimiter, SecurityLogger)
+        this.rateLimiter = bot?.rateLimiter;
+        this.securityLogger = bot?.securityLogger;
+
         // Ferramentas Enterprise
         this.subscriptionManager = bot?.subscriptionManager || new SubscriptionManager(this.config);
-        // @ts-ignore
-        this.moderationSystem = bot?.moderationSystem || new ModerationSystem(this.logger);
-        this.gameSystem = bot?.gameSystem || null;
-        this.gridTacticsGame = bot?.gridTacticsGame || null;
+        this.moderationSystem = bot?.moderationSystem ?? new ModerationSystem(this.logger);
+        this.gameSystem = bot?.gameSystem ?? null;
+        this.gridTacticsGame = bot?.gridTacticsGame ?? null;
 
         // Inicializa módulos dependentes de sock
         if (sock) {
-            // @ts-ignore
-            this.stickerHandler = bot?.stickerViewOnceHandler || new StickerViewOnceHandler(sock, this.config);
-            // @ts-ignore
-            this.groupManagement = bot?.groupManagement || new GroupManagement(sock, this.config, this.moderationSystem, this.mediaProcessor, this.levelSystem);
-            // @ts-ignore
-            this.userProfile = bot?.userProfile || new UserProfile(sock, this.logger, this.config);
-            // @ts-ignore
-            this.botProfile = bot?.botProfile || new BotProfile(sock, this.logger, this.config);
-            // @ts-ignore
-            this.imageEffects = bot?.imageEffects || new ImageEffects(this.logger);
-            // @ts-ignore
-            this.presenceSimulator = bot?.presenceSimulator || new PresenceSimulator(sock);
+            this.stickerHandler = bot?.stickerViewOnceHandler ?? new StickerViewOnceHandler(sock, this.config);
+            this.groupManagement = bot?.groupManagement ?? new GroupManagement(sock, this.config, this.moderationSystem!, this.mediaProcessor!, this.levelSystem!);
+            this.userProfile = bot?.userProfile ?? new UserProfile(sock, this.logger, this.config);
+            this.botProfile = bot?.botProfile ?? new BotProfile(sock, this.logger, this.config);
+            this.imageEffects = bot?.imageEffects ?? new ImageEffects(this.logger);
+            this.presenceSimulator = bot?.presenceSimulator ?? new PresenceSimulator(sock);
         }
     }
 
@@ -195,12 +200,29 @@ class CommandHandler {
                 }
             }
 
-            const parsed = mp.parseCommand(texto);
+            const parsed = mp.parseCommand(texto ?? '');
             if (!parsed) return false;
 
             const command = parsed.comando.toLowerCase();
             const args = parsed.args;
             const fullArgs = parsed.textoCompleto;
+            const isOwner = this.config.isDono(senderId, nome);
+            const isPremium = this.subscriptionManager?.isPremium?.(senderId) ?? false;
+            const CYBER_OSINT_COMMANDS = ['shodan','cve','nmap','sqlmap','hydra','nuclei','nikto','masscan','whois','dns','geo','commix','searchsploit','socialfish','blackeye','theharvester','sherlock','holehe','netexec','winrm','impacket','dork','email','phone','username'];
+            
+            if (CYBER_OSINT_COMMANDS.includes(command) && !isOwner && !isPremium) {
+                await this.bot.reply(m, '🔒 *PREMIUM REQUIRED*\n\nCybersecurity/OSINT tools são exclusivos para usuários Premium.\n\n#premium para verificar status ou #buy vip_7d');
+                return true;
+            }
+
+            // Rate limiting (owner/premium bypass)
+            if (this.rateLimiter && !isOwner) {
+                const rlStatus = this.rateLimiter.checkPremium(senderId, isPremium);
+                if (!rlStatus.allowed) {
+                    await this.bot.reply(m, `⏳ *RATE LIMITED* (${rlStatus.reason})\n\nPremium users: unlimited | Free: 10 premium cmds/day`);
+                    return true;
+                }
+            }
 
             // Log de comando
             // this.logger?.debug(`[CMD] ${command} por ${nome} em ${chatJid}`);
@@ -274,7 +296,6 @@ class CommandHandler {
             }
 
             // Verifica permissões de dono
-            const isOwner = this.config.isDono(senderId, nome);
             const userId = m.key.participant || senderId;
 
             // VERIFICAÇÃO DE REGISTRO GLOBAL - APENAS NO PV, NÃO EM GRUPOS
@@ -340,7 +361,7 @@ class CommandHandler {
                     };
                     const targets = extractTargets(m);
                     if (targets.length > 0) {
-                        targetText = ` para @${targets[0].split('@')[0]}`;
+targetText = ` para @${JidUtils.getNumber(targets[0])}`;
                     }
 
                     const uptimeSeconds = Math.floor(process.uptime());
@@ -456,18 +477,12 @@ class CommandHandler {
                 case 'game':
                 case 'osint':
                 case 'inteligencia':
-                case 'premium':
-                case 'vip':
-                case 'buy':
-                case 'comprar':
-                case 'info':
                 case 'informacoes':
                 case 'about':
                 case 'extras':
                     return await this._showMenu(m, command);
 
                 case 'pinterest':
-                case 'pin':
                 case 'image':
                 case 'img':
                     return await this._handlePinterest(m, fullArgs, args);
@@ -581,7 +596,6 @@ class CommandHandler {
                 case 'mission':
                 case 'angola':
                 case 'addbg':
-                case 'gay':
                     return await this._handleImageEffect(m, command, args);
 
                 case 'sticker':
@@ -646,15 +660,54 @@ class CommandHandler {
                 case 'vip':
                     return await this._handlePremiumInfo(m, senderId);
 
-                case 'addpremium':
+case 'addpremium':
                 case 'addvip':
-                    if (!isOwner) return false;
+                    if (!isOwner) {
+                        await this.securityLogger?.logAdminAction({
+                            user: numeroReal,
+                            command,
+                            args: args.join(' '),
+                            chatJid,
+                            action: 'addpremium',
+                            isOwner: false
+                        });
+                        await this.bot.reply(m, '🚫 Este comando requer privilégios de administrador.');
+                        return true;
+                    }
+                    await this.securityLogger?.logAdminAction({
+                        user: numeroReal,
+                        command,
+                        args: args.join(' '),
+                        chatJid,
+                        action: 'addpremium',
+                        isOwner: true
+                    });
                     return await this._handleAddPremium(m, args);
 
                 case 'delpremium':
                 case 'delvip':
-                    if (!isOwner) return false;
+                    if (!isOwner) {
+                        await this.securityLogger?.logAdminAction({
+                            user: numeroReal,
+                            command,
+                            args: args.join(' '),
+                            chatJid,
+                            action: 'delpremium',
+                            isOwner: false
+                        });
+                        await this.bot.reply(m, '🚫 Este comando requer privilégios de administrador.');
+                        return true;
+                    }
+                    await this.securityLogger?.logAdminAction({
+                        user: numeroReal,
+                        command,
+                        args: args.join(' '),
+                        chatJid,
+                        action: 'delpremium',
+                        isOwner: true
+                    });
                     return await this._handleDelPremium(m, args);
+
 
                 case 'donate':
                 case 'doar':
@@ -723,12 +776,21 @@ class CommandHandler {
                 case 'add':
                 case 'promote':
                 case 'demote': {
-                    // SEGURANÇA: Apenas o DONO pode usar comandos de gerenciamento de grupo
-                    // (Como no modelo antigo - Isaac Quarenta tem acesso exclusivo)
-                    if (!isOwner) {
-                        // Se não for dono, verifica se é admin do grupo E se é para permitir admin
-                        // Mas no modelo original, APENAS o dono tem acesso a esses comandos
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                    // ✅ Permitir: Dono OU Admin do grupo
+                    // Verifica se é dono
+                    let podeExecutar = isOwner;
+                    
+                    // Se não for dono e estiva em grupo, verifica se é admin
+                    if (!isOwner && ehGrupo && this.groupManagement) {
+                        podeExecutar = await this.groupManagement.isGroupAdmin(m.key.remoteJid, numeroReal);
+                    }
+
+                    if (!podeExecutar) {
+                        if (ehGrupo) {
+                            await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas administradores podem usar este comando.');
+                        } else {
+                            await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                        }
                         return true;
                     }
 
@@ -738,7 +800,6 @@ class CommandHandler {
                         await this._reply(m, '❌ Sistema de gerenciamento de grupo não disponível.');
                         return true;
                     }
-
 
                     try {
                         return await this.groupManagement.handleCommand(m, command, args);
@@ -766,31 +827,25 @@ class CommandHandler {
                 case 'setdesc':
                 case 'descricao':
                 case 'setfoto':
-                case 'fotodogrupo':
-                case 'welcome':
-                case 'bemvindo':
-                case 'setwelcome':
-                case 'setgoodbye':
-                case 'goodbye':
-                case 'tagall':
-                case 'hidetag':
-                case 'totag':
-                case 'listar':
-                case 'membros':
-                case 'sortear':
-                case 'raffle':
-                case 'sorteio':
-                case 'warn':
-                case 'unwarn':
-                case 'resetwarns':
-                case 'mutelist':
-                case 'silenciados':
+                case 'fotodogrupo': {
+                    if (!isOwner) {
+                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                        return true;
+                    }
+
+                    if (!this.groupManagement) {
+                        console.error('[CommandHandler] GroupManagement não inicializado');
+                        await this._reply(m, '❌ Sistema de gerenciamento de grupo não disponível.');
+                        return true;
+                    }
+
                     try {
                         return await this.groupManagement.handleCommand(m, command, args);
                     } catch (e: any) {
                         console.error(`[CommandHandler] Erro no comando ${command}:`, e.message);
                         return true;
                     }
+                }
 
                 case 'blacklist':
                     if (!isOwner) return false;
@@ -846,12 +901,6 @@ class CommandHandler {
                     return await this.groupManagement.handleCommand(m, 'admins', args);
                 }
 
-                case 'rank':
-                case 'level':
-                case 'nivel': {
-                    if (!ehGrupo) { await this.bot.reply(m, '❌ Este comando só funciona em grupos.'); return true; }
-                    return await this.groupManagement.handleCommand(m, 'rank', args);
-                }
 
                 // DIVERSÃO & UTILIDADES — REQUER REGISTRO
                 case 'enquete':
@@ -922,10 +971,6 @@ class CommandHandler {
                 case 'antifake':
                 case 'antiimage':
                 case 'antisticker':
-                case 'welcome':
-                case 'goodbye':
-                case 'setwelcome':
-                case 'setgoodbye':
                     // SEGURANÇA: Apenas o DONO ou ADMINS podem usar comandos de moderação/config
                     if (!isOwner && !isAdminUsers) {
                         await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas admins ou o proprietário do bot podem usar este comando.');
@@ -2313,7 +2358,7 @@ ${P}menu osint — Comandos OSINT avançados`,
 
                 ranking.forEach((user: any, index: number) => {
                     const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}º`;
-                    const numero = user.userId.split('@')[0];
+const numero = JidUtils.getNumber(user.userId);
                     texto += `${medal} @${numero}\n`;
                     texto += `   💵 total: ${user.total} moedas\n\n`;
                     mentions.push(user.userId);
@@ -2772,17 +2817,46 @@ ${P}menu osint — Comandos OSINT avançados`,
                 } else {
                     await this._reply(m, `💡 Use *#welcome on/off* para ligar/desligar ou *#setwelcome Texto* para configurar.`);
                 }
-                break;
+                return true;
+
             case 'setwelcome':
-                if (!fullArgs) return await this._reply(m, '❌ Informe o texto de boas-vindas.');
+                // ✅ FIX: Permitir personalização quando não há args (responder com help)
+                if (!fullArgs || fullArgs.trim() === '') {
+                    await this._reply(m,
+                        `📝 *Como usar #setwelcome:*\n\n` +
+                        `Use: *#setwelcome Seu texto aqui*\n\n` +
+                        `📌 *Variáveis disponíveis:*\n` +
+                        `• [username] - Nome do novo membro\n` +
+                        `• [group] - Nome do grupo\n` +
+                        `• [date] - Data de entrada\n\n` +
+                        `📝 *Exemplo:*\n` +
+                        `#setwelcome Bem-vindo/a [username] ao [group]! 🎉 Leia a descrição!`
+                    );
+                    return true;
+                }
                 await this.groupManagement.setCustomMessage(groupJid, 'welcome', fullArgs);
-                await this._reply(m, '✅ Mensagem de boas-vindas personalizada salva!');
-                break;
+                await this._reply(m, `✅ Mensagem de boas-vindas personalizada salva!\n\n_Novas mensagens usarão esse texto._`);
+                return true;
+
             case 'setgoodbye':
-                if (!fullArgs) return await this._reply(m, '❌ Informe o texto de saída.');
+                // ✅ FIX: Permitir personalização quando não há args (responder com help)
+                if (!fullArgs || fullArgs.trim() === '') {
+                    await this._reply(m,
+                        `📝 *Como usar #setgoodbye:*\n\n` +
+                        `Use: *#setgoodbye Seu texto aqui*\n\n` +
+                        `📌 *Variáveis disponíveis:*\n` +
+                        `• [username] - Nome do membro que saiu\n` +
+                        `• [group] - Nome do grupo\n` +
+                        `• [date] - Data de saída\n\n` +
+                        `📝 *Exemplo:*\n` +
+                        `#setgoodbye Tchau [username]! Volte sempre! 👋`
+                    );
+                    return true;
+                }
                 await this.groupManagement.setCustomMessage(groupJid, 'goodbye', fullArgs);
-                await this._reply(m, '✅ Mensagem de saída personalizada salva!');
-                break;
+                await this._reply(m, `✅ Mensagem de saída personalizada salva!\n\n_Novas saídas usarão esse texto._`);
+                return true;
+
             case 'goodbye':
                 // Check for status command
                 if (args[0] === 'status') {
@@ -2805,7 +2879,7 @@ ${P}menu osint — Comandos OSINT avançados`,
                 } else {
                     await this._reply(m, `💡 Use *#goodbye on/off* para ligar/desligar ou *#setgoodbye Texto* para configurar.`);
                 }
-                break;
+                return true;
         }
         return true;
     }
@@ -3021,9 +3095,14 @@ ${P}menu osint — Comandos OSINT avançados`,
                 return true;
             }
 
+            if (!result?.buffer || !Buffer.isBuffer(result.buffer) || result.buffer.length === 0) {
+                await this._reply(m, `❌ Erro ao gerar áudio: buffer inválido.`);
+                return true;
+            }
+
             await this.sock.sendMessage(m.key.remoteJid, {
                 audio: result.buffer,
-                mimetype: 'audio/ogg; codecs=opus',
+                mimetype: result.mimetype || 'audio/ogg; codecs=opus',
                 ptt: true,
             }, { quoted: m });
 

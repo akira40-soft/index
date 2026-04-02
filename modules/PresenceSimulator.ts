@@ -5,6 +5,7 @@
  * ✅ Simulações hiper-realistas de presença
  * ✅ Não-bloqueante: Não trava o fluxo de resposta do bot
  * ✅ Sincronizado: Pára de digitar IMEDIATAMENTE ao enviar msg
+ * ✅ SEMPRE DISPONÍVEL: Nunca fica offline completamente
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -14,11 +15,47 @@ class PresenceSimulator {
     public sock: any;
     public logger: any;
     private activeSimulations: Map<string, AbortController>;
+    private availabilityTimer: NodeJS.Timeout | null = null;
+    private lastAvailabilityUpdate: number = Date.now();
+    private readonly AVAILABILITY_INTERVAL: number = 45000; // 45 segundos
 
     constructor(sock: any) {
         this.sock = sock;
         this.logger = console;
         this.activeSimulations = new Map();
+    }
+
+    /**
+     * ✅ NOVA FUNÇÃO: Mantém o bot sempre em status "available"
+     * Previne que o bot apareça como offline ao ficar inativo
+     */
+    async maintainAvailablePresence() {
+        if (this.availabilityTimer) {
+            clearInterval(this.availabilityTimer);
+        }
+
+        // Envia inicial imediatamente
+        await this.safeSendPresenceUpdate('available', 'status@broadcast');
+
+        // Depois mantém a cada 45 segundos (bem antes de expirar em 60s)
+        this.availabilityTimer = setInterval(async () => {
+            try {
+                await this.safeSendPresenceUpdate('available', 'status@broadcast');
+                this.lastAvailabilityUpdate = Date.now();
+            } catch (e) {
+                // Silencia - não é crítico se falhar
+            }
+        }, this.AVAILABILITY_INTERVAL);
+    }
+
+    /**
+     * Para de manter presença disponível (ex: desconexão)
+     */
+    stopMaintainingPresence() {
+        if (this.availabilityTimer) {
+            clearInterval(this.availabilityTimer);
+            this.availabilityTimer = null;
+        }
     }
 
     /**
@@ -117,22 +154,64 @@ class PresenceSimulator {
     }
 
     /**
-     * Simula leitura e ticks de confirmação
+     * ✅ MELHORADA: Simula leitura e ticks de confirmação
+     * - wasActivated = false: Envia "delivered" (2 ticks cinzas)
+     * - wasActivated = true: Envia "read" (2 ticks azuis)
+     * - isGroup: Ajusta sintaxe para grupos vs PV
      */
-    async simulateTicks(m: any, wasActivated: boolean = true) {
+    async simulateTicks(m: any, wasActivated: boolean = true, isGroup: boolean = false) {
         if (!this.sock || !m?.key) return false;
 
         const jid = m.key.remoteJid;
-        const participant = m.key.participant;
         const messageId = m.key.id;
+        const participant = m.key.participant;
 
         try {
+            // ✅ LÓGICA MELHORADA:
+            // - Se foi ativado (processando): marca como lido (visto) = 2 ticks azuis
+            // - Se não foi ativado: apenas marca como entregue = 2 ticks cinzas
             if (wasActivated) {
-                await this.sock.readMessages([m.key]);
+                // ✅ 2 ticks azuis - visto/lido (READ - marcado como lido)
+                try {
+                    await this.sock.readMessages([m.key]);
+                    return true;
+                } catch (e) {
+                    // Fallback: se não conseguir marcar como lido, pelo menos tenta delivered
+                    try {
+                        await this.sock.sendReadReceipt(jid, null, [messageId], 'received');
+                    } catch (e2) {
+                        // Último fallback silencioso
+                    }
+                    return false;
+                }
             } else {
-                await this.sock.sendReadReceipt(jid, participant, [messageId], 'delivered');
+                // ✅ 2 ticks cinzas - ENTREGUE (RECEIVED - recebido mas não lido)
+                // Estratégia agressiva: tenta múltiplas formas se necessário
+                
+                // Tentativa 1: Direct sendReadReceipt com 'received'
+                try {
+                    await this.sock.sendReadReceipt(jid, null, [messageId], 'received');
+                    return true;
+                } catch (e1) {
+                    // Tentativa 2: Sem especificar status (pode usar default 'received')
+                    try {
+                        await this.sock.sendReadReceipt(jid, null, [messageId]);
+                        return true;
+                    } catch (e2) {
+                        // Tentativa 3: Tentar via participante (para PV)
+                        if (participant && !isGroup) {
+                            try {
+                                await this.sock.sendReadReceipt(jid, participant, [messageId], 'received');
+                                return true;
+                            } catch (e3) {
+                                // Se tudo falhar, apenas retorna false
+                                return false;
+                            }
+                        }
+                        return false;
+                    }
+                }
             }
-            return true;
         } catch (e) {
             return false;
         }
@@ -141,8 +220,8 @@ class PresenceSimulator {
     /**
      * Alias retrocompatível com código antigo
      */
-    async markAsRead(m: any) {
-        return this.simulateTicks(m, true);
+    async markAsRead(m: any, isGroup: boolean = false) {
+        return this.simulateTicks(m, true, isGroup);
     }
 
     /**

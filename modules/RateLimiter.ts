@@ -100,9 +100,9 @@ class RateLimiter {
         return this.blacklist.has(userId);
     }
 
-    public check(userId: string, isOwner: boolean = false): { allowed: boolean, reason?: string, wait?: number, remaining?: number } {
+    public check(userId: string, isOwner: boolean = false): { allowed: boolean, reason?: string, wait?: string, remaining?: number, violations?: number } {
         if (isOwner) return { allowed: true }; // Dono imune
-        if (this.blacklist.has(userId)) return { allowed: false, reason: 'BLACKLISTED' };
+        if (this.blacklist.has(userId)) return { allowed: false, reason: 'BLACKLISTED', violations: 999 };
 
         const now = Date.now();
 
@@ -124,28 +124,40 @@ class RateLimiter {
 
         // Verifica limite
         if (userUsage.count > this.HOURLY_LIMIT) {
-            this._handleViolation(userId);
+            const violations = this._handleViolation(userId);
+            
+            // Calcula tempo exato até reset (formato HH:MM:SS)
+            const timeRemaining = this.HOURLY_WINDOW - (now - userUsage.startTime);
+            const hours = Math.floor(timeRemaining / 1000 / 60 / 60);
+            const minutes = Math.floor((timeRemaining / 1000 / 60) % 60);
+            const seconds = Math.floor((timeRemaining / 1000) % 60);
+            const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
             return {
                 allowed: false,
                 reason: 'RATE_LIMIT_EXCEEDED',
-                wait: Math.ceil((this.HOURLY_WINDOW - (now - userUsage.startTime)) / 60000)
+                wait: formattedTime,
+                violations
             };
         }
 
         return { allowed: true, remaining: this.HOURLY_LIMIT - userUsage.count };
     }
 
-    private _handleViolation(userId: string): void {
+    private _handleViolation(userId: string): number {
         const violations = (this.violations.get(userId) || 0) + 1;
         this.violations.set(userId, violations);
 
         this._log('WARN', userId, `Violação de rate limit (${violations}/${this.MAX_VIOLATIONS})`);
 
+        // Auto-blacklist na 3ª violação
         if (violations >= this.MAX_VIOLATIONS) {
             this.blacklist.add(userId);
             this._saveBlacklist();
             this._log('BAN', userId, 'Adicionado à blacklist por excesso de violações');
         }
+
+        return violations;
     }
 
     private _cleanup(): void {
@@ -156,6 +168,39 @@ class RateLimiter {
                 this.usage.delete(userId);
             }
         }
+    }
+
+    /**
+     * Método compatível com CommandHandler - rate limit para Premium
+     * Premium users têm limite 10x maior
+     */
+    public checkPremium(userId: string, isPremium: boolean = false): { allowed: boolean; reason?: string } {
+        if (this.blacklist.has(userId)) {
+            return { allowed: false, reason: 'BLACKLISTED' };
+        }
+
+        const now = Date.now();
+        if (!this.usage.has(userId)) {
+            this.usage.set(userId, { count: 0, startTime: now });
+        }
+
+        const userUsage = this.usage.get(userId)!;
+
+        // Reset janela de tempo
+        if (now - userUsage.startTime > this.HOURLY_WINDOW) {
+            userUsage.count = 0;
+            userUsage.startTime = now;
+        }
+
+        // Premium tem limite 10x maior
+        const limit = isPremium ? this.HOURLY_LIMIT * 10 : this.HOURLY_LIMIT;
+        userUsage.count++;
+
+        if (userUsage.count > limit) {
+            return { allowed: false, reason: isPremium ? 'PREMIUM_LIMIT' : 'FREE_LIMIT' };
+        }
+
+        return { allowed: true };
     }
 
     // Comandos manuais para admins
