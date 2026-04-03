@@ -159,19 +159,26 @@ class MediaProcessor {
      * - Node.js como runtime JS obrigatório
      * - Desabilita verificações de bot
      * - Skip DASH manifest para formatos simples
+     * - Usa formatos progressivamente mais genéricos em retries
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, retryCount?: number }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
+        const retryCount = options.retryCount || 0;
 
         // GAMBIARRAS REAIS CONTRA BLOQUEIO YOUTUBE 2024-2026:
         // 1. web_embedded menos bloqueado que web
         // 2. Formatos que FUNCIONAM agora (18=360p, 22=720p, com fallbacks para best)
         // 3. Node.js como runtime obrigatório
         // 4. Força IPv4 para evitar problemas
-        const extractorArgs = 'youtube:player_client=web_embedded,skip_dash_manifest=true';
+        // 5. Em retries, remove extractor-args para tentar com configuração padrão
+        let extractorArgs = 'youtube:player_client=web_embedded,skip_dash_manifest=true';
+        if (retryCount > 0) {
+            // Retry 1+: Usar web_embedded sem skip_dash_manifest restritivos
+            extractorArgs = 'youtube:player_client=web_embedded';
+        }
 
-        const bypassFlags = [
+        const bypassFlags = retryCount === 0 ? [
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
             '--allow-unplayable-formats',
@@ -182,18 +189,22 @@ class MediaProcessor {
             '--no-warnings',
             '--geo-bypass',
             '--no-playlist'
+        ].filter(Boolean).join(' ') : [
+            // Retry: Reduzir flags agressivos
+            `--extractor-args "${extractorArgs}"`,
+            '--no-warnings',
+            '--socket-timeout 60'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // AUDIO: Tenta formatos em cascata com fallbacks
-            // 18=MP4 small (tem audio), 22=MP4 HD (tem audio), 251=opus, 140=m4a
-            // Se nenhum funciona, tenta best[ext=m4a] depois best
-            actionFlags = `-f "18[ext=m4a],18,22[ext=m4a],22,251,140,best[ext=m4a],best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // ✅ CORRIGIDO: Não especificar IDs de formato (18, 22, 251, etc)
+            // Cada vídeo tem formatos diferentes disponíveis
+            // Deixar yt-dlp escolher automaticamente com -x + --audio-format mp3
+            actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // VIDEO: Tenta formatos em cascata com fallbacks
-            // 18 = MP4 360p, 22 = MP4 720p, best[ext=mp4] = best MP4 available, best = fallback
-            actionFlags = `-f "18[ext=mp4],22[ext=mp4],18,22,best[ext=mp4],best" --merge-output-format mp4 -o "${options.output}"`;
+            // ✅ CORRIGIDO: Deixar yt-dlp escolher melhor formato disponível automaticamente
+            actionFlags = `--merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -210,7 +221,7 @@ class MediaProcessor {
      */
     async downloadYouTubeAudio(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
+            this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount}/2)` : ''}`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -223,7 +234,8 @@ class MediaProcessor {
             this.logger?.info(`[ÁUDIO] Rodando yt-dlp com gambiarra web_embedded...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'audio',
-                output: outputPath
+                output: outputPath,
+                retryCount: retryCount  // ✅ PASS retryCount para usar formatos progressivamente mais genéricos
             });
 
             try {
@@ -233,11 +245,10 @@ class MediaProcessor {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
                 
-                // ✅ RETRY COM FALLBACK: Se falhar por formato, tentar sem extractor-args restritivos
+                // ✅ RETRY COM FALLBACK: Se falhar por formato, tentar com extractor-args MENOS restritivos
                 if (msg.includes('format not available') && retryCount < 2) {
-                    this.logger?.info(`🔄 Retry ${retryCount + 1}: Tentando com filtro mais flexível...`);
-                    // Tenta novamente recursivamente - vai usar fallback no _buildYtdlpCommand
-                    await new Promise(r => setTimeout(r, 2000)); // Aguarda 2s antes de retry
+                    this.logger?.info(`🔄 Retry ${retryCount + 1}/2: Tentando com formatos mais flexíveis...`);
+                    await new Promise(r => setTimeout(r, 2000));
                     return this.downloadYouTubeAudio(url, retryCount + 1);
                 }
                 

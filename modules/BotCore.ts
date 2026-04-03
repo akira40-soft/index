@@ -716,15 +716,19 @@ class BotCore {
                 this.presenceSimulator.simulateTyping(m.key.remoteJid, this.presenceSimulator.calculateTypingDuration(resposta)).catch(() => { });
             }
 
-            // ✅ LÓGICA DE REPLY CONDICIONAL:
-            // - PV: responde em reply APENAS se usuario mandou em reply
-            // - Grupo: SEMPRE em reply (para manter contexto)
+            // ✅ LÓGICA DE REPLY CONDICIONAL - CORRIGIDA:
+            // - PV NORMAL: responde SEM quote (opes vazio)
+            // - PV REPLY: responde COM quote (quoted: m)
+            // - GRUPO: SEMPRE com quote
             const opcoes: any = {};
             if (ehGrupo) {
-                opcoes.quoted = m; // Grupo: sempre reply
+                // Grupo: sempre reply
+                opcoes.quoted = m;
             } else if (replyInfo?.isReply) {
-                opcoes.quoted = m; // PV: reply apenas se user mandou em reply
+                // PV reply: responde em reply
+                opcoes.quoted = m;
             }
+            // Se PV normal: opcoes fica vazio, responde normal
             
             await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
             await this.presenceSimulator.simulateTicks(m, true, ehGrupo);
@@ -866,7 +870,7 @@ class BotCore {
                 if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                 this.logger.error('❌ Erro API:', resultado.error);
                 
-                // ✅ Mesmo padrão de reply condicional em caso de erro
+                // ✅ MESMO PADRÃO DE REPLY CONDICIONAL EM CASO DE ERRO
                 const opcoes: any = {};
                 if (ehGrupo) {
                     opcoes.quoted = m;
