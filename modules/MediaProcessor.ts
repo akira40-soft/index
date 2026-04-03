@@ -208,9 +208,9 @@ class MediaProcessor {
      * DOWNLOAD DE ÁUDIO - yt-dlp COM GAMBIARRAS CONTRA BLOQUEIO DO YOUTUBE
      * ═══════════════════════════════════════════════════════════════════════
      */
-    async downloadYouTubeAudio(url: string): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+    async downloadYouTubeAudio(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎧 Download áudio: ${url}`);
+            this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -232,6 +232,15 @@ class MediaProcessor {
             } catch (e: any) {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
+                
+                // ✅ RETRY COM FALLBACK: Se falhar por formato, tentar sem extractor-args restritivos
+                if (msg.includes('format not available') && retryCount < 2) {
+                    this.logger?.info(`🔄 Retry ${retryCount + 1}: Tentando com filtro mais flexível...`);
+                    // Tenta novamente recursivamente - vai usar fallback no _buildYtdlpCommand
+                    await new Promise(r => setTimeout(r, 2000)); // Aguarda 2s antes de retry
+                    return this.downloadYouTubeAudio(url, retryCount + 1);
+                }
+                
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
 

@@ -716,8 +716,16 @@ class BotCore {
                 this.presenceSimulator.simulateTyping(m.key.remoteJid, this.presenceSimulator.calculateTypingDuration(resposta)).catch(() => { });
             }
 
-            // ✅ SEMPRE reply em grupos
-            const opcoes = ehGrupo ? { quoted: m } : {};
+            // ✅ LÓGICA DE REPLY CONDICIONAL:
+            // - PV: responde em reply APENAS se usuario mandou em reply
+            // - Grupo: SEMPRE em reply (para manter contexto)
+            const opcoes: any = {};
+            if (ehGrupo) {
+                opcoes.quoted = m; // Grupo: sempre reply
+            } else if (replyInfo?.isReply) {
+                opcoes.quoted = m; // PV: reply apenas se user mandou em reply
+            }
+            
             await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
             await this.presenceSimulator.simulateTicks(m, true, ehGrupo);
         } catch (error: any) {
@@ -857,7 +865,15 @@ class BotCore {
             if (!resultado.success) {
                 if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                 this.logger.error('❌ Erro API:', resultado.error);
-                const opcoes = ehGrupo ? { quoted: m } : {};
+                
+                // ✅ Mesmo padrão de reply condicional em caso de erro
+                const opcoes: any = {};
+                if (ehGrupo) {
+                    opcoes.quoted = m;
+                } else if (replyInfo?.isReply) {
+                    opcoes.quoted = m;
+                }
+                
                 await this.sock.sendMessage(m.key.remoteJid, { text: 'Tive um problema. Tenta de novo?' }, opcoes);
                 return;
             }
@@ -899,8 +915,16 @@ class BotCore {
                 // Aqui apenas paramos e enviamos — sem nenhum delay extra.
                 if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
 
-                // ✅ SEMPRE reply em grupos - Akira responde diretamente ao usuário
-                const opcoes = ehGrupo ? { quoted: m } : {};
+                // ✅ LÓGICA DE REPLY CONDICIONAL (MESMO DO IMAGEMESSAGE):
+                // - PV: responde em reply APENAS se usuario mandou em reply
+                // - Grupo: SEMPRE em reply (para manter contexto)
+                const opcoes: any = {};
+                if (ehGrupo) {
+                    opcoes.quoted = m; // Grupo: sempre reply
+                } else if (replyInfo?.isReply) {
+                    opcoes.quoted = m; // PV: reply apenas se user mandou em reply
+                }
+                
                 await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
                 this.logger.info(`✅ [DISPATCH OK]`);
 
