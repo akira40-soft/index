@@ -168,16 +168,11 @@ class MediaProcessor {
 
         // GAMBIARRAS REAIS CONTRA BLOQUEIO YOUTUBE 2024-2026:
         // 1. web_embedded menos bloqueado que web
-        // 2. Formatos que FUNCIONAM agora (18=360p, 22=720p, com fallbacks para best)
-        // 3. Node.js como runtime obrigatório
-        // 4. Força IPv4 para evitar problemas
-        // 5. Em retries, remove extractor-args para tentar com configuração padrão
-        let extractorArgs = 'youtube:player_client=web_embedded,skip_dash_manifest=true';
-        if (retryCount > 0) {
-            // Retry 1+: Usar web_embedded sem skip_dash_manifest restritivos
-            extractorArgs = 'youtube:player_client=web_embedded';
-        }
-
+        // 2. Node.js como runtime obrigatório
+        // 3. Força IPv4 para evitar problemas
+        // 4. Em retries, remove flags restritivos
+        let extractorArgs = 'youtube:player_client=web_embedded';
+        
         const bypassFlags = retryCount === 0 ? [
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
@@ -188,7 +183,8 @@ class MediaProcessor {
             '--buffer-size 16K',
             '--no-warnings',
             '--geo-bypass',
-            '--no-playlist'
+            '--no-playlist',
+            '--prefer-free-formats'
         ].filter(Boolean).join(' ') : [
             // Retry: Reduzir flags agressivos
             `--extractor-args "${extractorArgs}"`,
@@ -198,12 +194,13 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ✅ CORRIGIDO: Usar -f best para selecionar melhor stream, depois extrair áudio
-            // Sem especificar formato exato - deixa yt-dlp converter para melhor disponível
-            actionFlags = `-f best -x -o "${options.output}"`;
+            // ✅ CORRIGIDO FINAL: SEM -f best, apenas -x
+            // Deixar yt-dlp escolher format automaticamente sem restrições
+            // Cada vídeo tem streams diferentes - não forçar nenhum formato específico
+            actionFlags = `-x -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // ✅ CORRIGIDO: Usar -f best para selecionar melhor stream automaticamente
-            actionFlags = `-f best --merge-output-format mp4 -o "${options.output}"`;
+            // ✅ CORRIGIDO FINAL: SEM -f best, apenas output
+            actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
