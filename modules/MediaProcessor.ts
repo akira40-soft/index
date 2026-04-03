@@ -171,8 +171,8 @@ class MediaProcessor {
         // 2. Node.js como runtime obrigatório
         // 3. Força IPv4 para evitar problemas
         // 4. Em retries, remove flags restritivos
-        let extractorArgs = 'youtube:player_client=web_embedded';
-        
+        let extractorArgs = 'youtube:player_client=web_embedded,skip_dash_manifest=true';
+
         const bypassFlags = retryCount === 0 ? [
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
@@ -183,8 +183,7 @@ class MediaProcessor {
             '--buffer-size 16K',
             '--no-warnings',
             '--geo-bypass',
-            '--no-playlist',
-            '--prefer-free-formats'
+            '--no-playlist'
         ].filter(Boolean).join(' ') : [
             // Retry: Reduzir flags agressivos
             `--extractor-args "${extractorArgs}"`,
@@ -194,12 +193,9 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ✅ CORRIGIDO FINAL: SEM -f best, apenas -x
-            // Deixar yt-dlp escolher format automaticamente sem restrições
-            // Cada vídeo tem streams diferentes - não forçar nenhum formato específico
-            actionFlags = `-x -o "${options.output}"`;
+            // ✅ FINAL: Não restringe formato, extrai áudio do melhor stream possível
+            actionFlags = `-x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // ✅ CORRIGIDO FINAL: SEM -f best, apenas output
             actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
