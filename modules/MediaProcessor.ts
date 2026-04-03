@@ -170,10 +170,12 @@ class MediaProcessor {
         // 1. web_embedded menos bloqueado que web
         // 2. Node.js como runtime obrigatório
         // 3. Força IPv4 para evitar problemas
-        // 4. Em retries, remove flags restritivos
-        let extractorArgs = 'youtube:player_client=web_embedded,skip_dash_manifest=true';
+        // 4. Em retries, troca player_client
+        const playerClient = options.playerClient || 'web_embedded';
+        let extractorArgs = `youtube:player_client=${playerClient},skip_dash_manifest=true`;
 
         const bypassFlags = retryCount === 0 ? [
+            '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
             '--allow-unplayable-formats',
@@ -185,7 +187,7 @@ class MediaProcessor {
             '--geo-bypass',
             '--no-playlist'
         ].filter(Boolean).join(' ') : [
-            // Retry: Reduzir flags agressivos
+            '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
             '--no-warnings',
             '--socket-timeout 60'
@@ -193,8 +195,9 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ✅ FINAL: Não restringe formato, extrai áudio do melhor stream possível
-            actionFlags = `-x --audio-format mp3 -o "${options.output}"`;
+            // Cascade de formatos para máxima compatibilidade
+            const formatCascade = 'ba[ext=m4a]/ba[ext=webm]/ba/best[ext=m4a]/best[ext=webm]/best';
+            actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
             actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
@@ -233,49 +236,52 @@ class MediaProcessor {
             try {
                 this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
                 await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
-            } catch (e: any) {
-                const msg = (e.stderr || e.message || '').split('\n')[0];
-                this.logger?.error(`❌ yt-dlp erro: ${msg}`);
-                
-                // ✅ RETRY COM FALLBACK: Se falhar por formato, tentar com extractor-args MENOS restritivos
-                if (msg.includes('format not available') && retryCount < 2) {
-                    this.logger?.info(`🔄 Retry ${retryCount + 1}/2: Tentando com formatos mais flexíveis...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                    return this.downloadYouTubeAudio(url, retryCount + 1);
+            try {
+                this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount}/4)` : ''} (player_client=${playerClient})`);
+
+                const metadata = await this._getYouTubeMetadataSimple(url);
+                const finalUrl = metadata.url || url;
+                const outputPath = this.generateRandomFilename('mp3');
+
+                this.logger?.info(`[ÁUDIO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
+                const cmd = this._buildYtdlpCommand(finalUrl, {
+                    type: 'audio',
+                    output: outputPath,
+                    retryCount: retryCount,
+                    playerClient: playerClient
+                });
+
+                try {
+                    this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
+                    await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
+                } catch (e: any) {
+                    const msg = (e.stderr || e.message || '').split('\n')[0];
+                    this.logger?.error(`❌ yt-dlp erro: ${msg}`);
+
+                    // Retry com cascade de player_client
+                    if (msg.includes('format not available') && retryCount < 4) {
+                        const clients = ['web', 'ios', 'android', 'tv'];
+                        const nextClient = clients[retryCount] || clients[clients.length - 1];
+                        this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Tentando player_client=${nextClient}...`);
+                        await new Promise(r => setTimeout(r, 2000));
+                        return this.downloadYouTubeAudio(url, retryCount + 1, nextClient);
+                    }
+
+                    return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
                 }
-                
-                return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
+
+                if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 10000) {
+                    return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
+                }
+
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+
+            } catch (error: any) {
+                this.logger?.error(`❌ Erro download audio: ${error.message}`);
+                return { sucesso: false, error: error.message };
             }
-
-            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 10000) {
-                return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
-            }
-
-            const buffer = await fs.promises.readFile(outputPath);
-            await this.cleanupFile(outputPath);
-            return { sucesso: true, buffer, metadata };
-
-        } catch (error: any) {
-            this.logger?.error(`❌ Erro download audio: ${error.message}`);
-            return { sucesso: false, error: error.message };
-        }
-    }
-
-    /**
-     * ═══════════════════════════════════════════════════════════════════════
-     * DOWNLOAD DE VÍDEO - yt-dlp COM GAMBIARRAS CONTRA BLOQUEIO
-     * ═══════════════════════════════════════════════════════════════════════
-     */
-    async downloadYouTubeVideo(url: string, quality: string = '720'): Promise<{ sucesso: boolean; buffer?: Buffer; error?: string; metadata?: any }> {
-        try {
-            this.logger?.info(`🎥 Download vídeo: ${url} (qualidade: ${quality})`);
-
-            const metadata = await this._getYouTubeMetadataSimple(url);
-            if (!metadata.sucesso) {
-                return { sucesso: false, error: 'Metadados não encontrados.' };
-            }
-
-            const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
             this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra web_embedded...`);
