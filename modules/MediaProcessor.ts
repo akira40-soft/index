@@ -11,7 +11,20 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
-import sharp from 'sharp';
+// ✅ Sharp com lazy loading - importado apenas quando necessário
+let sharp: any = null;
+const loadSharp = async () => {
+    if (!sharp) {
+        try {
+            // @ts-ignore - Sharp pode não estar instalado
+            sharp = await import('sharp').then(m => m.default || m);
+        } catch (e: any) {
+            console.warn('⚠️ Sharp não disponível. Stickers usarão ffmpeg como fallback.');
+            return null;
+        }
+    }
+    return sharp;
+};
 import { exec, execSync } from 'child_process';
 import util from 'util';
 const execAsync = util.promisify(exec);
@@ -151,19 +164,19 @@ class MediaProcessor {
         const cookiePath = this._findCookiePath();
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
 
-        // GAMBIARRAS REAIS:
-        // 1. web_embedded é menos bloqueado que web ou android
-        // 2. skip_dash_manifest força uso de formatos progressivos (audio+video em um)
-        // 3. Node.js OBRIGATÓRIO como JS runtime
-        // 4. Força IPv4 para evitar problemas de conectividade
-        const extractorArgs = 'youtube:player_client=web_embedded;skip_dash_manifest=true';
+        // GAMBIARRAS REAIS CONTRA BLOQUEIO YOUTUBE 2024-2026:
+        // 1. web_embedded menos bloqueado que web
+        // 2. Formatos que FUNCIONAM agora (18=360p, 22=720p, com fallbacks para best)
+        // 3. Node.js como runtime obrigatório
+        // 4. Força IPv4 para evitar problemas
+        const extractorArgs = 'youtube:player_client=web_embedded,skip_dash_manifest=true';
 
         const bypassFlags = [
             `--extractor-args "${extractorArgs}"`,
-            '--js-runtimes node',  // ESPECÍFICO: Node.js que TEMOS instalado
+            '--js-runtimes node',
             '--allow-unplayable-formats',
             '--socket-timeout 90',
-            '--retries 3',
+            '--retries 5',
             '--http-chunk-size 10M',
             '--buffer-size 16K',
             '--no-warnings',
@@ -173,11 +186,14 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Formato progressivo: busca arquivo único com áudio bom
-            actionFlags = `-f "18,22,43,44,45,46,251,394,395,396,397,398,399,best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // AUDIO: Tenta formatos em cascata com fallbacks
+            // 18=MP4 small (tem audio), 22=MP4 HD (tem audio), 251=opus, 140=m4a
+            // Se nenhum funciona, tenta best[ext=m4a] depois best
+            actionFlags = `-f "18[ext=m4a],18,22[ext=m4a],22,251,140,best[ext=m4a],best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Formato progressivo MP4: single file com video+audio
-            actionFlags = `-f "18,22,43,44,45,46,best" --merge-output-format mp4 -o "${options.output}"`;
+            // VIDEO: Tenta formatos em cascata com fallbacks
+            // 18 = MP4 360p, 22 = MP4 720p, best[ext=mp4] = best MP4 available, best = fallback
+            actionFlags = `-f "18[ext=mp4],22[ext=mp4],18,22,best[ext=mp4],best" --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -1310,78 +1326,34 @@ class MediaProcessor {
      * Cria sticker de imagem
      */
     async createStickerFromImage(imageBuffer: Buffer, metadata: any = {}): Promise<any> {
+        const inputPath = this.generateRandomFilename('jpg');
+        const outputPath = this.generateRandomFilename('webp');
+        
         try {
             const { packName = 'akira-bot', author = 'Akira-Bot' } = metadata;
             
-            // ✅ FALLBACK: Usar Sharp em vez de ffmpeg (mais confiável)
-            try {
-                let processado = sharp(imageBuffer);
-                
-                // Redimensionar para 512x512
-                processado = processado
-                    .resize(512, 512, {
-                        fit: 'cover',
-                        position: 'center'
-                    })
-                    .webp({
-                        lossless: false,
-                        quality: 75,
-                        effort: 6
-                    });
-
-                const webpBuffer = await processado.toBuffer();
-                const stickerComMetadados = await this.addStickerMetadata(webpBuffer, packName, author);
-
-                return {
-                    sucesso: true,
-                    buffer: stickerComMetadados,
-                    tipo: 'sticker_image',
-                    size: stickerComMetadados.length
-                };
-            } catch (sharpError: any) {
-                this.logger?.warn(`⚠️ Sharp falhou: ${sharpError.message}, tentando ffmpeg...`);
-                
-                // FALLBACK: Tentar com ffmpeg se sharp falhar
-                const inputPath = this.generateRandomFilename('jpg');
-                const outputPath = this.generateRandomFilename('webp');
-
-                await fs.promises.writeFile(inputPath, imageBuffer);
-
-                const videoFilter = 'scale=512:512:flags=lanczos:force_original_aspect_ratio=increase,crop=512:512';
-
+            // ✅ NOVO: Carregar sharp dinamicamente
+            const sharpLib = await loadSharp();
+            
+            if (sharpLib) {
+                // ✅ FALLBACK: Usar Sharp em vez de ffmpeg (mais confiável)
                 try {
-                    await new Promise((resolve, reject) => {
-                        const proc = ffmpeg(inputPath)
-                            .outputOptions([
-                                '-vcodec', 'libwebp',
-                                '-vf', videoFilter,
-                                '-s', '512x512',
-                                '-lossless', '0',
-                                '-compression_level', '4',
-                                '-q:v', '75',
-                                '-preset', 'default',
-                                '-y'
-                            ])
-                            .on('start', (cmd: string) => {
-                                this.logger?.debug(`🎬 ffmpeg cmd: ${cmd}`);
-                            })
-                            .on('end', () => resolve(void 0))
-                            .on('error', (err: any) => {
-                                this.logger?.error(`❌ ffmpeg error: ${err.message}`);
-                                reject(err);
-                            })
-                            .save(outputPath);
-                    });
+                    let processado = sharpLib(imageBuffer);
+                    
+                    // Redimensionar para 512x512
+                    processado = processado
+                        .resize(512, 512, {
+                            fit: 'cover',
+                            position: 'center'
+                        })
+                        .webp({
+                            lossless: false,
+                            quality: 75,
+                            effort: 6
+                        });
 
-                    if (!fs.existsSync(outputPath)) {
-                        throw new Error('Arquivo não criado pelo ffmpeg');
-                    }
-
-                    const stickerBuffer = await fs.promises.readFile(outputPath);
-                    const stickerComMetadados = await this.addStickerMetadata(stickerBuffer, packName, author);
-
-                    await this.cleanupFile(inputPath);
-                    await this.cleanupFile(outputPath);
+                    const webpBuffer = await processado.toBuffer();
+                    const stickerComMetadados = await this.addStickerMetadata(webpBuffer, packName, author);
 
                     return {
                         sucesso: true,
@@ -1389,12 +1361,61 @@ class MediaProcessor {
                         tipo: 'sticker_image',
                         size: stickerComMetadados.length
                     };
-                } catch (ffmpegError: any) {
-                    this.logger?.error(`❌ ffmpeg também falhou: ${ffmpegError.message}`);
-                    await this.cleanupFile(inputPath);
-                    await this.cleanupFile(outputPath);
-                    throw ffmpegError;
+                } catch (sharpError: any) {
+                    this.logger?.warn(`⚠️ Sharp falhou: ${sharpError.message}, tentando ffmpeg...`);
                 }
+            }
+            
+            // FALLBACK: Tentar com ffmpeg se sharp falhar ou não estiver disponível
+            await fs.promises.writeFile(inputPath, imageBuffer);
+
+            const videoFilter = 'scale=512:512:flags=lanczos:force_original_aspect_ratio=increase,crop=512:512';
+
+            try {
+                await new Promise((resolve, reject) => {
+                    const proc = ffmpeg(inputPath)
+                        .outputOptions([
+                            '-vcodec', 'libwebp',
+                            '-vf', videoFilter,
+                            '-s', '512x512',
+                            '-lossless', '0',
+                            '-compression_level', '4',
+                            '-q:v', '75',
+                            '-preset', 'default',
+                            '-y'
+                        ])
+                        .on('start', (cmd: string) => {
+                            this.logger?.debug(`🎬 ffmpeg cmd: ${cmd}`);
+                        })
+                        .on('end', () => resolve(void 0))
+                        .on('error', (err: any) => {
+                            this.logger?.error(`❌ ffmpeg error: ${err.message}`);
+                            reject(err);
+                        })
+                        .save(outputPath);
+                });
+
+                if (!fs.existsSync(outputPath)) {
+                    throw new Error('Arquivo não criado pelo ffmpeg');
+                }
+
+                const stickerBuffer = await fs.promises.readFile(outputPath);
+                const stickerComMetadados = await this.addStickerMetadata(stickerBuffer, packName, author);
+
+                await this.cleanupFile(inputPath);
+                await this.cleanupFile(outputPath);
+
+                return {
+                    sucesso: true,
+                    buffer: stickerComMetadados,
+                    tipo: 'sticker_image',
+                    size: stickerComMetadados.length
+                };
+            } catch (ffmpegError: any) {
+                this.logger?.error(`❌ ffmpeg também falhou: ${ffmpegError.message}`);
+                await this.cleanupFile(inputPath);
+                await this.cleanupFile(outputPath);
+                throw ffmpegError;
             }
         } catch (error: any) {
             this.logger?.error(`❌ Erro ao criar sticker: ${error.message}`);

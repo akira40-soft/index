@@ -3,6 +3,45 @@
  * CLASSE: BotCore
  * ═══════════════════════════════════════════════════════════════════════════
  * Núcleo central do bot Akira.
+ * 
+ * 📋 ARQUITETURA DE RATE LIMIT (Profissional):
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 
+ * ORDEM DE PROCESSAMENTO:
+ * 1. Mensagem chega → shouldRespondToAI() FILTRA
+ * 2. Se retorna FALSE → Mensagem NÃO conta no rate limit (ignora)
+ * 3. Se retorna TRUE → Mensagem CONTA no rate limit (check executed)
+ * 
+ * CONTEXTO PV (tipoConversa = 'pv'):
+ * ├─ shouldRespondToAI() → SEMPRE true (toda msg é direcionada por definição)
+ * ├─ Rate limit: 50 msgs/hora (free) | ilimitado (premium/owner)
+ * └─ Logs: ⏱️ [RATE LIMIT ATIVO] 💬 PV (todas as msgs)
+ * 
+ * CONTEXTO GRUPO (tipoConversa = 'grupo'):
+ * ├─ MENSAGEM GENÉRICA ("oi tudo bem"):
+ * │  ├─ shouldRespondToAI() → FALSE
+ * │  ├─ ⏭️ [IGNORADO] (genérico em grupo)
+ * │  └─ ❌ NÃO e conta no rate limit
+ * │
+ * ├─ MENÇÃO (@bot):
+ * │  ├─ shouldRespondToAI() → TRUE
+ * │  ├─ ⏱️ [RATE LIMIT ATIVO] 👥 GRUPO (menção/reply/comando)
+ * │  └─ ✅ CONTA no rate limit: 100 msgs/hora (free)
+ * │
+ * ├─ COMANDO (#comando):
+ * │  ├─ shouldRespondToAI() → TRUE (via CommandHandler)
+ * │  ├─ ⏱️ [RATE LIMIT ATIVO] 👥 GRUPO (menção/reply/comando)
+ * │  └─ ✅ CONTA no rate limit: 100 msgs/hora (free)
+ * │
+ * └─ REPLY AO BOT:
+ *    ├─ shouldRespondToAI() → TRUE
+ *    ├─ ⏱️ [RATE LIMIT ATIVO] 👥 GRUPO (menção/reply/comando)
+ *    └─ ✅ CONTA no rate limit: 100 msgs/hora (free)
+ * 
+ * IMUNIDADE:
+ * ├─ Owner (isOwner=true) → SEM LIMITE
+ * └─ Premium (isPremium=true) → SEM LIMITE
+ * 
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -491,21 +530,6 @@ class BotCore {
                 return;
             }
 
-            // [NFA] Rate Limit Check - Militar
-            if (this.rateLimiter) {
-                const isOwner = this.config.isDono(numeroReal);
-                const limitStatus = this.rateLimiter.check(numeroReal, isOwner);
-                if (!limitStatus.allowed) {
-                    this.logger.warn(`⏳ [RATE LIMIT] ${nome} (${numeroReal}) bloqueado. Motivo: ${limitStatus.reason}`);
-                    if (limitStatus.reason === 'RATE_LIMIT_EXCEEDED') {
-                        await this.handleViolation(m, 'rate_limit', limitStatus);
-                    } else if (limitStatus.reason === 'BLACKLISTED') {
-                        // Ignorar silenciosamente (não enviar mensagem)
-                    }
-                    return;
-                }
-            }
-
             const texto = this.messageProcessor.extractText(m);
             const temImagem = this.messageProcessor.hasImage(m);
             const temAudio = this.messageProcessor.hasAudio(m);
@@ -533,20 +557,29 @@ class BotCore {
             const deveResponder = this.shouldRespondToAI(m, textoFinal, ehGrupo, replyInfo, nome, numeroReal);
 
             if (!deveResponder) {
-                this.logger.debug(`⏭️ Ignorado: ${textoFinal.substring(0, 50)}`);
+                this.logger.debug(`⏭️ [IGNORADO] ${nome}: "${textoFinal.substring(0, 50)}" (genérico${ehGrupo ? ' em grupo' : ''})`);
                 return;
             }
 
-            // [NFA] Rate Limit Check - Militar (APENAS mensagens que o bot vai responder)
+            // ✅ AQUI: Mensagem está sendo tratada - VAI CONTAR no rate limit
+            const tipoRateLimit = ehGrupo ? '👥 GRUPO (menção/reply/comando)' : '💬 PV (todas as msgs)';
+            this.logger.info(`⏱️ [RATE LIMIT ATIVO] ${tipoRateLimit} | ${nome}: "${textoFinal.substring(0, 50)}"`);
+
+            // [NFA] Rate Limit Check - APENAS APÓS verificar se bot vai responder
+            // Passa tipoConversa corretamente: grupo ou pv
             if (this.rateLimiter) {
                 const isOwner = this.config.isDono(numeroReal);
-                const limitStatus = this.rateLimiter.check(numeroReal, isOwner);
+                const tipoConversa = ehGrupo ? 'grupo' : 'pv'; // ✅ BUG FIX: Passa tipo de conversa
+                const isPremium = false; // ✅ BotCore não tem info de premium (cmdHandler cuida disso)
+                const limitStatus = this.rateLimiter.check(numeroReal, isOwner, isPremium, tipoConversa);
                 if (!limitStatus.allowed) {
-                    this.logger.warn(`⏳ [RATE LIMIT] ${nome} (${numeroReal}) bloqueado. Motivo: ${limitStatus.reason}`);
+                    this.logger.warn(`⏳ [RATE LIMIT BLOQUEADO] ${nome} (${numeroReal}) - ${limitStatus.reason}`);
                     if (limitStatus.reason === 'RATE_LIMIT_EXCEEDED') {
                         await this.handleViolation(m, 'rate_limit', limitStatus);
                     }
                     return;
+                } else {
+                    this.logger.debug(`✅ [RATE LIMIT OK] ${nome}: ${limitStatus.remaining} mensagens restantes`);
                 }
             }
 
@@ -932,14 +965,15 @@ class BotCore {
                 // MENSAGENS AGRESSIVAS BASEADO NO NÚMERO DE VIOLAÇÕES
                 const violations = limitStatus?.violations || 1;
                 const waitTime = limitStatus?.wait || '01:00:00';
+                const resetAt = limitStatus?.resetAt || '?'; // ✅ Hora exata do reset
                 let mensagem = '';
 
                 if (violations === 1) {
                     // 1ª AVISO: Educado (ainda)
-                    mensagem = `⏳ *LIMITE DE MENSAGENS EXCEDIDO* ⏳\n\n@${numeroReal}, você excedeu o limite de 50ms por hora.\n\n⏱️ *Seu contador será recarregado em:* ${waitTime}\n\nAguarde esse tempo para continuar usando a Akira.`;
+                    mensagem = `⏳ *LIMITE DE MENSAGENS EXCEDIDO* ⏳\n\n@${numeroReal}, você excedeu o limite de mensagens por hora.\n\n⏱️ *Tempo restante:* ${waitTime}\n🕐 *Poderá enviar novamente às:* ${resetAt}\n\nAguarde esse tempo para continuar usando a Akira.`;
                 } else if (violations === 2) {
                     // 2ª AVISO: AGRESSIVO
-                    mensagem = `⚠️ *PARE DE INCOMODAR!* ⚠️\n\n@${numeroReal}, você já foi avisado!\n\n*Para de incomodar e espera caralho!*\n\nMais uma tentativa e você será bloqueado PERMANENTEMENTE.`;
+                    mensagem = `⚠️ *PARE DE INCOMODAR!* ⚠️\n\n@${numeroReal}, você já foi avisado!\n\n*Para de incomodar e espera caralho!*\n\n🕐 *Acesso liberado às:* ${resetAt}\n\nMais uma tentativa e você será bloqueado PERMANENTEMENTE.`;
                 } else if (violations >= 3) {
                     // 3ª AVISO: MUITO AGRESSIVO + BLOQUEIO
                     mensagem = `🚫 *VOCÊ É UMA MERDA!* 🚫\n\n@${numeroReal}, você é uma merda mesmo... é por isso que a namorada dele terminou com você!\n\n*BLOQUEADO PERMANENTEMENTE!*\n\nSe tentar mandar mensagem de novo, será ignorado pela Akira PARA SEMPRE.`;
@@ -964,9 +998,14 @@ class BotCore {
      * Lógica central de decisão de resposta da IA
      */
     shouldRespondToAI(m: any, texto: string, ehGrupo: boolean, replyInfo: any, nomeRemetente: string = '', numeroRemetente: string = ''): boolean {
-        // Removed PV short-circuit per user request
+        // ✅ PV: SEMPRE responde (é conversa direcionada por definição)
+        // Grupo: Só responde a mencoes, replies, nome do bot, owner exclusivo
+        if (!ehGrupo) {
+            // ✅ Em PV, toda mensagem é direcionada a Akira
+            return true;
+        }
 
-        // Universal logic
+        // ═══ LÓGICA PARA GRUPOS ═══
         const textoLower = (texto || '').toLowerCase();
         const botName = (this.config.BOT_NAME || 'akira').toLowerCase();
 
@@ -996,6 +1035,7 @@ class BotCore {
         // 5. Se for reply a outra pessoa no grupo, ignora
         if (replyInfo?.isReply && !replyInfo?.ehRespostaAoBot) return false;
 
+        // ❌ Em grupos: mensagens genéricas NÃO são respondidas
         return false;
     }
 

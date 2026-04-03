@@ -216,10 +216,13 @@ public rateLimiter: any;
             }
 
             // Rate limiting (owner/premium bypass)
+            // TIPO_CONVERSA: Se é grupo, não aplica rate limit
             if (this.rateLimiter && !isOwner) {
-                const rlStatus = this.rateLimiter.checkPremium(senderId, isPremium);
+                const tipoConversa = ehGrupo ? 'grupo' : 'pv'; // ✅ BUG FIX #2: Diferencia grupo vs PV
+                const rlStatus = this.rateLimiter.checkPremium(senderId, isPremium, tipoConversa);
                 if (!rlStatus.allowed) {
-                    await this.bot.reply(m, `⏳ *RATE LIMITED* (${rlStatus.reason})\n\nPremium users: unlimited | Free: 10 premium cmds/day`);
+                    const resetAt = rlStatus.resetAt ? `\n🕐 *Acesso em:* ${rlStatus.resetAt}` : '';
+                    await this.bot.reply(m, `⏳ *LIMITE EXEDIDO* (${rlStatus.reason})${resetAt}`);
                     return true;
                 }
             }

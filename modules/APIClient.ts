@@ -48,18 +48,26 @@ class APIClient {
             forcar_pesquisa = false,
             is_bot_self_response = false,
             is_group = false,
-            sender_is_bot = false
+            sender_is_bot = false,
+            isGameCommand = false // ✅ NOVA: Detectar se é comando de jogo
         } = messageData;
 
         // ✅ CORREÇÃO: Garantir que numero é sempre apenas dígitos (sem @lid, @s.whatsapp.net, etc)
         const numeroLimpo = JidUtils.cleanPhoneNumber(numero) || 'desconhecido';
+
+        // ✅ SINCRONIZAÇÃO: Detectar tipo_mensagem (inclui 'game' para comandos de jogo)
+        const gameCommands = ['#play', '#game', '#grid', '#tactics', '#economy', '#level'];
+        const isGameCmd = isGameCommand || gameCommands.some(cmd => (mensagem || '').toLowerCase().startsWith(cmd));
+        
+        const finalTipoMensagem = isGameCmd ? 'game' : 
+                                  (['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto');
 
         const payload: any = {
             usuario: String(usuario || 'anonimo').substring(0, 50),
             numero: numeroLimpo.substring(0, 20),
             mensagem: String(mensagem || '').substring(0, 2000),
             tipo_conversa: ['pv', 'grupo'].includes(tipo_conversa) ? tipo_conversa : 'pv',
-            tipo_mensagem: ['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto',
+            tipo_mensagem: finalTipoMensagem, // ✅ Agora pode ser 'game'
             historico: [],
             forcar_busca: Boolean(forcar_pesquisa),
             // ✅ NOVOS CAMPOS DE VALIDAÇÃO
