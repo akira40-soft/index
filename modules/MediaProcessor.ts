@@ -198,13 +198,12 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ✅ CORRIGIDO: Não especificar IDs de formato (18, 22, 251, etc)
-            // Cada vídeo tem formatos diferentes disponíveis
-            // Deixar yt-dlp escolher automaticamente com -x + --audio-format mp3
-            actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // ✅ CORRIGIDO: Usar -f best para selecionar melhor stream, depois extrair áudio
+            // Sem especificar formato exato - deixa yt-dlp converter para melhor disponível
+            actionFlags = `-f best -x -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // ✅ CORRIGIDO: Deixar yt-dlp escolher melhor formato disponível automaticamente
-            actionFlags = `--merge-output-format mp4 -o "${options.output}"`;
+            // ✅ CORRIGIDO: Usar -f best para selecionar melhor stream automaticamente
+            actionFlags = `-f best --merge-output-format mp4 -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
