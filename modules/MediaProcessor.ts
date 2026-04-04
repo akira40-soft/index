@@ -166,22 +166,21 @@ class MediaProcessor {
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const retryCount = options.retryCount || 0;
 
-        // ANTI-PO_TOKEN: Salta o manifest DASH (que requer PO_TOKEN) e força streams legados pre-merged
-        // ATENÇÃO: no Linux/Railway as aspas simples são necessárias dentro da string do shell
-        const skipDashArg = `--extractor-args 'youtube:skip=dash'`;
-        const bypassFlags = `--ignore-config ${skipDashArg} --js-runtimes node --no-warnings --no-playlist --no-mtime --socket-timeout 60`;
+        // ESTRATÉGIA: usa player_client=tv_embedded que NÃO precisa de PO_TOKEN
+        // e fornece nativamente streams pre-merged (itags 18/22) sem DASH.
+        // Muito mais fiável que skip=dash que mata TODOS os formatos em vídeos modernos.
+        const extractorArgs = `--extractor-args 'youtube:player_client=tv_embedded'`;
+        const bypassFlags = `--ignore-config ${extractorArgs} --js-runtimes node --no-warnings --no-playlist --socket-timeout 90`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Cascade: itag 140(m4a audio) → itag 18(360p mp4) → itag 22(720p mp4) → best pre-merged
-            // Estes itags NUNCA são bloqueados pelo YouTube mesmo sem PO_TOKEN
-            actionFlags = `-f "140/18/22/b" -x --audio-format mp3 -o "${options.output}"`;
+            // Tenta 18 (360p mp4 pre-merged) ou 22 (720p mp4), então best.
+            // Com tv_embedded estes itags existem na resposta mesmo sem PO_TOKEN.
+            actionFlags = `-f "18/22/best" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Sem DASH, força 720p mp4 ou 360p mp4 (pre-merged)
-            actionFlags = `-f "22/18/b" -o "${options.output}"`;
+            actionFlags = `-f "22/18/best" -o "${options.output}"`;
         } else if (options.type === 'json') {
-            // Para metadata também skipa dash para consistência
-            actionFlags = `--extractor-args 'youtube:skip=dash' --dump-json --no-download`;
+            actionFlags = '--dump-json --no-download';
         }
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
