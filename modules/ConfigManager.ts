@@ -223,7 +223,7 @@ class ConfigManager {
         this.FEATURE_YT_DOWNLOAD = process.env?.FEATURE_YT !== 'false';
         this.FEATURE_STICKERS = process.env?.FEATURE_STICKERS !== 'false';
         this.FEATURE_MODERATION = process.env?.FEATURE_MODERATION !== 'false';
-        this.FEATURE_LEVELING = process.env?.FEATURE_LEVELING === 'true';
+        this.FEATURE_LEVELING = process.env?.FEATURE_LEVELING !== 'false';
         this.FEATURE_VISION = process.env?.FEATURE_VISION !== 'false';
 
         ConfigManager.instance = this;

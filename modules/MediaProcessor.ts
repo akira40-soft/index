@@ -171,11 +171,11 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // A flag -x já sinaliza internamente para o yt-dlp buscar bestaudio preferencialmente
-            actionFlags = `-x --audio-format mp3 -o "${options.output}"`;
+            // Tenta bestaudio. Se o YouTube bloquear por causa do PO_TOKEN ou Cookies banidos,
+            // cai para o itag 18 (360p legado infalível) ou best unificado.
+            actionFlags = `-f "ba/18/b" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Deixa a escolha do melhor mux (bv+ba) para uso geral nativo
-            actionFlags = `-o "${options.output}"`;
+            actionFlags = `-f "bv*+ba/18/b" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }

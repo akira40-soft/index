@@ -88,6 +88,7 @@ class LevelSystem {
         const base = this.config.LEVEL_BASE_XP || 100;
         const multiplier = this.config.LEVEL_XP_MULTIPLIER || 10;
         if (level >= this.maxLevel) return Infinity;
+        if (level === 0) return base; // Previne 0 XP required inicial
         // Nova fórmula polinomial: level * base + level^2 * multiplier
         return Math.floor((level * base) + (level * level * multiplier));
     }
