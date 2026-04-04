@@ -161,27 +161,27 @@ class MediaProcessor {
      * - Skip DASH manifest para formatos simples
      * - Usa formatos progressivamente mais genéricos em retries
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, retryCount?: number, playerClient?: string }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, formats?: string }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
-        const retryCount = options.retryCount || 0;
 
-        // ESTRATÉGIA: usa player_client=tv_embedded que NÃO precisa de PO_TOKEN
-        // e fornece nativamente streams pre-merged (itags 18/22) sem DASH.
-        // Muito mais fiável que skip=dash que mata TODOS os formatos em vídeos modernos.
-        const extractorArgs = `--extractor-args 'youtube:player_client=tv_embedded'`;
-        const bypassFlags = `--ignore-config ${extractorArgs} --js-runtimes node --no-warnings --no-playlist --socket-timeout 90`;
+        // Se o playerClient for passado, usamos nas extractor-args
+        const clientArg = options.playerClient && options.playerClient !== 'default'
+            ? `--extractor-args 'youtube:player_client=${options.playerClient}'`
+            : '';
+
+        const bypassFlags = `--ignore-config ${clientArg} --js-runtimes node --no-warnings --no-playlist --socket-timeout 90`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Tenta 18 (360p mp4 pre-merged) ou 22 (720p mp4), então best.
-            // Com tv_embedded estes itags existem na resposta mesmo sem PO_TOKEN.
-            // A flag --compat-options no-youtube-unavailable-videos garante que se 18 não existir num trailer velho, não crashe.
-            actionFlags = `-f "140/m4a/18/22/b/best" --compat-options no-youtube-unavailable-videos -x --audio-format mp3 -o "${options.output}"`;
+            const fmt = options.formats || "140/m4a/18/22/b/best";
+            actionFlags = `-f "${fmt}" --compat-options no-youtube-unavailable-videos -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            actionFlags = `-f "22/18/b/best" --compat-options no-youtube-unavailable-videos -o "${options.output}"`;
+            const fmt = options.formats || "22/18/b/best";
+            actionFlags = `-f "${fmt}" --compat-options no-youtube-unavailable-videos -o "${options.output}"`;
         } else if (options.type === 'json') {
-            actionFlags = '--dump-json --no-download';
+            // Json metadata doesn't strictly need a format but we bypass DASH to be safe
+            actionFlags = `--extractor-args 'youtube:player_client=android' --dump-json --no-download`;
         }
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
@@ -206,30 +206,42 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            this.logger?.info(`[ÁUDIO] Rodando yt-dlp genérico...`);
-            const cmd = this._buildYtdlpCommand(finalUrl, {
-                type: 'audio',
-                output: outputPath,
-                retryCount: retryCount
-            });
+            // Cadeia de tentativas: Android (Bypassa PO_TOKEN muito bem), tv_embedded (pre-merged lega), default com bestaudio
+            const fallbacks = [
+                { client: 'android', fmt: 'ba/b/best' },
+                { client: 'tv_embedded', fmt: '140/m4a/18/22/b/best' },
+                { client: 'default', fmt: 'ba/b/best' }
+            ];
 
-            try {
-                this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
-                await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
-            } catch (e: any) {
-                const msg = (e.stderr || e.message || '').split('\n')[0];
-                this.logger?.error(`❌ yt-dlp erro: ${msg}`);
+            let lastError = '';
+            for (let i = 0; i < fallbacks.length; i++) {
+                const fb = fallbacks[i];
+                this.logger?.info(`[ÁUDIO] Tentativa ${i + 1}/${fallbacks.length} (cliente: ${fb.client}, format: ${fb.fmt})...`);
 
-                return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
+                const cmd = this._buildYtdlpCommand(finalUrl, {
+                    type: 'audio',
+                    output: outputPath,
+                    playerClient: fb.client,
+                    formats: fb.fmt
+                });
+
+                try {
+                    this.logger?.debug(`Comando executado: ${cmd.substring(0, 150)}...`);
+                    await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
+
+                    if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    }
+                } catch (e: any) {
+                    const msg = (e.stderr || e.message || '').split('\n')[0];
+                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg}`);
+                    lastError = msg;
+                }
             }
 
-            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 10000) {
-                return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
-            }
-
-            const buffer = await fs.promises.readFile(outputPath);
-            await this.cleanupFile(outputPath);
-            return { sucesso: true, buffer, metadata };
+            return { sucesso: false, error: `yt-dlp bloqueado após 3 métodos: ${lastError}` };
 
         } catch (error: any) {
             this.logger?.error(`❌ Erro download audio: ${error.message}`);
@@ -254,33 +266,57 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            this.logger?.info(`[VÍDEO] Rodando yt-dlp genérico...`);
-            const cmd = this._buildYtdlpCommand(finalUrl, {
-                type: 'video',
-                output: outputPath,
-                retryCount: retryCount
-            });
+            // Cadeia de tentativas: Android, tv_embedded, default
+            const fallbacks = [
+                { client: 'android', fmt: 'bv*+ba/b' },
+                { client: 'tv_embedded', fmt: '22/18/b/best' },
+                { client: 'default', fmt: 'bv*+ba/b' }
+            ];
 
-            try {
-                this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
-                await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
-            } catch (e: any) {
-                const msg = (e.stderr || e.message || '').split('\n')[0];
-                this.logger?.error(`❌ yt-dlp erro: ${msg}`);
+            let lastError = '';
+            for (let i = 0; i < fallbacks.length; i++) {
+                const fb = fallbacks[i];
+                this.logger?.info(`[VÍDEO] Tentativa ${i + 1}/${fallbacks.length} (cliente: ${fb.client}, format: ${fb.fmt})...`);
 
-                return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
+                const cmd = this._buildYtdlpCommand(finalUrl, {
+                    type: 'video',
+                    output: outputPath,
+                    playerClient: fb.client,
+                    formats: fb.fmt
+                });
+
+                try {
+                    this.logger?.debug(`Comando executado: ${cmd.substring(0, 150)}...`);
+                    await execAsync(cmd, { timeout: 300000, maxBuffer: 300 * 1024 * 1024 }); // 5 mins
+
+                    if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 50000) { // Vídeo deve ser maior que 50KB
+                        const stats = fs.statSync(outputPath);
+                        if (stats.size > this.config.YT_MAX_SIZE_MB * 1024 * 1024) {
+                            await this.cleanupFile(outputPath);
+                            return { sucesso: false, error: 'O vídeo final excedeu o tamanho máximo permitido.' };
+                        }
+
+                        // Buffer para vídeo (< 50MB) ou filepath
+                        if (stats.size < 50 * 1024 * 1024) {
+                            const buffer = await fs.promises.readFile(outputPath);
+                            await this.cleanupFile(outputPath);
+                            return { sucesso: true, buffer, metadata };
+                        } else {
+                            // Retorna o ficheiro para ser processado via stream se for imenso
+                            return { sucesso: true, filePath: outputPath, metadata };
+                        }
+                    }
+                } catch (e: any) {
+                    const msg = (e.stderr || e.message || '').split('\n')[0];
+                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg}`);
+                    lastError = msg;
+                }
             }
 
-            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 100000) {
-                return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
-            }
-
-            const buffer = await fs.promises.readFile(outputPath);
-            await this.cleanupFile(outputPath);
-            return { sucesso: true, buffer, metadata };
+            return { sucesso: false, error: `yt-dlp bloqueado após 3 métodos: ${lastError}` };
 
         } catch (error: any) {
-            this.logger?.error(`❌ Erro download video: ${error.message}`);
+            this.logger?.error(`❌ Erro download vídeo: ${error.message}`);
             return { sucesso: false, error: error.message };
         }
     }
