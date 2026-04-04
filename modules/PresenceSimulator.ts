@@ -15,7 +15,7 @@ class PresenceSimulator {
     public sock: any;
     public logger: any;
     private activeSimulations: Map<string, AbortController>;
-    private availabilityTimer: NodeJS.Timeout | null = null;
+    private availabilityTimer: ReturnType<typeof setInterval> | null = null;
     private lastAvailabilityUpdate: number = Date.now();
     private readonly AVAILABILITY_INTERVAL: number = 45000; // 45 segundos
 
@@ -35,12 +35,12 @@ class PresenceSimulator {
         }
 
         // Envia inicial imediatamente
-        await this.safeSendPresenceUpdate('available', 'status@broadcast');
+        await this.safeSendPresenceUpdate('available');
 
         // Depois mantém a cada 45 segundos (bem antes de expirar em 60s)
         this.availabilityTimer = setInterval(async () => {
             try {
-                await this.safeSendPresenceUpdate('available', 'status@broadcast');
+                await this.safeSendPresenceUpdate('available');
                 this.lastAvailabilityUpdate = Date.now();
             } catch (e) {
                 // Silencia - não é crítico se falhar
@@ -61,10 +61,14 @@ class PresenceSimulator {
     /**
      * Envia atualização de presença de forma segura
      */
-    async safeSendPresenceUpdate(type: 'composing' | 'recording' | 'paused' | 'available', jid: string) {
-        if (!jid || !this.sock) return false;
+    async safeSendPresenceUpdate(type: 'composing' | 'recording' | 'paused' | 'available', jid?: string) {
+        if (!this.sock) return false;
         try {
-            await this.sock.sendPresenceUpdate(type, jid);
+            if (jid) {
+                await this.sock.sendPresenceUpdate(type, jid);
+            } else {
+                await this.sock.sendPresenceUpdate(type);
+            }
             return true;
         } catch (e: any) {
             // Silencia erros de conexão fechada para não poluir o log
@@ -186,31 +190,9 @@ class PresenceSimulator {
                 }
             } else {
                 // ✅ 2 ticks cinzas - ENTREGUE (RECEIVED - recebido mas não lido)
-                // Estratégia agressiva: tenta múltiplas formas se necessário
-                
-                // Tentativa 1: Direct sendReadReceipt com 'received'
-                try {
-                    await this.sock.sendReadReceipt(jid, null, [messageId], 'received');
-                    return true;
-                } catch (e1) {
-                    // Tentativa 2: Sem especificar status (pode usar default 'received')
-                    try {
-                        await this.sock.sendReadReceipt(jid, null, [messageId]);
-                        return true;
-                    } catch (e2) {
-                        // Tentativa 3: Tentar via participante (para PV)
-                        if (participant && !isGroup) {
-                            try {
-                                await this.sock.sendReadReceipt(jid, participant, [messageId], 'received');
-                                return true;
-                            } catch (e3) {
-                                // Se tudo falhar, apenas retorna false
-                                return false;
-                            }
-                        }
-                        return false;
-                    }
-                }
+                // Enviar "received" manualmente costuma causar conflitos na bailey.
+                // O Multi-device já envia recibos de entrega automaticamente, deixamos quieto para não bugar.
+                return true;
             }
         } catch (e) {
             return false;

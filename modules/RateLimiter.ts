@@ -2,7 +2,13 @@
  * ═══════════════════════════════════════════════════════════════════════════
  * CLASSE: RateLimiter (SEGURANÇA MILITAR)
  * ═══════════════════════════════════════════════════════════════════════════
- * ✅ Limite de 100 mensagens/hora por usuário (não-dono)
+ * ✅ LIMITES POR CONTEXTO:
+ *    PV (Conversa Privada):
+ *       - Free: 50 msgs/hora
+ *       - Premium: 500 msgs/hora
+ *    Grupo (Apenas mensagens direcionadas a Akira):
+ *       - Free: 100 msgs/hora
+ *       - Premium: 1000 msgs/hora
  * ✅ Auto-blacklist após 3 tentativas reincidentes
  * ✅ Logs detalhados com timestamp, usuário, número, mensagem, citação
  * ✅ Imune a bypass - dono não é afetado
@@ -100,18 +106,24 @@ class RateLimiter {
         return this.blacklist.has(userId);
     }
 
-    public check(userId: string, isOwner: boolean = false): { allowed: boolean, reason?: string, wait?: string, remaining?: number, violations?: number } {
-        if (isOwner) return { allowed: true }; // Dono imune
+    public check(userId: string, isOwner: boolean = false, isPremium: boolean = false, tipoConversa: string = 'pv'): { allowed: boolean, reason?: string, wait?: string, remaining?: number, violations?: number, resetAt?: string } {
+        // ✅ IMUNIDADE TOTAL: Owner e Premium não têm limite
+        if (isOwner) return { allowed: true }; // Dono sem limite
+        if (isPremium) return { allowed: true }; // Premium sem limite
         if (this.blacklist.has(userId)) return { allowed: false, reason: 'BLACKLISTED', violations: 999 };
 
+        // ✅ CORREÇÃO: Grupos têm limite de 100 msgs/hora (apenas mensagens direcionadas contam)
+        // As mensagens genéricas já são filtradas por shouldRespondToAI() em BotCore
+        // Usando HOURLY_LIMIT (padrão 100) para grupos também
         const now = Date.now();
+        const usageKey = `${userId}:${tipoConversa}`; // Contexto separado por tipo
 
         // Inicializa registro do usuário
-        if (!this.usage.has(userId)) {
-            this.usage.set(userId, { count: 0, startTime: now });
+        if (!this.usage.has(usageKey)) {
+            this.usage.set(usageKey, { count: 0, startTime: now });
         }
 
-        const userUsage = this.usage.get(userId)!;
+        const userUsage = this.usage.get(usageKey)!;
 
         // Reset janela de tempo
         if (now - userUsage.startTime > this.HOURLY_WINDOW) {
@@ -122,26 +134,48 @@ class RateLimiter {
         // Incrementa contador
         userUsage.count++;
 
+        // ✅ Applica limite DIFERENTE por contexto
+        // PV: 50 msgs/hora (mais restritivo)
+        // Grupo: 100 msgs/hora (mas apenas msgs direcionadas contam via shouldRespondToAI)
+        const CONTEXT_LIMITS = {
+            'pv': 50,
+            'grupo': 100
+        };
+        const limit = CONTEXT_LIMITS[tipoConversa as keyof typeof CONTEXT_LIMITS] || 50;
+
         // Verifica limite
-        if (userUsage.count > this.HOURLY_LIMIT) {
+        if (userUsage.count > limit) {
             const violations = this._handleViolation(userId);
-            
-            // Calcula tempo exato até reset (formato HH:MM:SS)
+
+            // ✅ Calcula tempo restante E hora exata do reset
             const timeRemaining = this.HOURLY_WINDOW - (now - userUsage.startTime);
+            const resetTimestamp = now + timeRemaining;
+            const resetDate = new Date(resetTimestamp);
+
+            // Tempo restante em HH:MM:SS
             const hours = Math.floor(timeRemaining / 1000 / 60 / 60);
             const minutes = Math.floor((timeRemaining / 1000 / 60) % 60);
             const seconds = Math.floor((timeRemaining / 1000) % 60);
             const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
+            // Mensagem com hora exata (fuso horário de Angola para consistência)
+            let resetAtTime;
+            try {
+                resetAtTime = resetDate.toLocaleTimeString('pt-BR', { timeZone: 'Africa/Luanda' });
+            } catch (e) {
+                resetAtTime = resetDate.toLocaleTimeString(); // Fallback se timezone falhar
+            }
+
             return {
                 allowed: false,
                 reason: 'RATE_LIMIT_EXCEEDED',
                 wait: formattedTime,
+                resetAt: resetAtTime,
                 violations
             };
         }
 
-        return { allowed: true, remaining: this.HOURLY_LIMIT - userUsage.count };
+        return { allowed: true, remaining: limit - userUsage.count };
     }
 
     private _handleViolation(userId: string): number {
@@ -172,19 +206,31 @@ class RateLimiter {
 
     /**
      * Método compatível com CommandHandler - rate limit para Premium
-     * Premium users têm limite 10x maior
+     * ✅ IMPORTANTE: 
+     *    - Owner: SEM LIMITE (imune total)
+     *    - Premium: SEM LIMITE (usuarios pagos)
+     *    - Free: TEM LIMITE (usuarios normais)
      */
-    public checkPremium(userId: string, isPremium: boolean = false): { allowed: boolean; reason?: string } {
+    public checkPremium(userId: string, isPremium: boolean = false, tipoConversa: string = 'pv'): { allowed: boolean; reason?: string; resetAt?: string } {
+        // ✅ Premium e Owner têm imunidade total
+        if (isPremium) {
+            return { allowed: true }; // Premium user - sem limite
+        }
+
         if (this.blacklist.has(userId)) {
             return { allowed: false, reason: 'BLACKLISTED' };
         }
 
+        // ✅ APLICA LIMITE APENAS PARA USUÁRIOS FREE
+        // PV: 50 msgs/hora
+        // Grupo: 100 msgs/hora (apenas msgs direcionadas)
         const now = Date.now();
-        if (!this.usage.has(userId)) {
-            this.usage.set(userId, { count: 0, startTime: now });
+        const usageKey = `${userId}:${tipoConversa}`; // Contexto separado
+        if (!this.usage.has(usageKey)) {
+            this.usage.set(usageKey, { count: 0, startTime: now });
         }
 
-        const userUsage = this.usage.get(userId)!;
+        const userUsage = this.usage.get(usageKey)!;
 
         // Reset janela de tempo
         if (now - userUsage.startTime > this.HOURLY_WINDOW) {
@@ -192,12 +238,29 @@ class RateLimiter {
             userUsage.startTime = now;
         }
 
-        // Premium tem limite 10x maior
-        const limit = isPremium ? this.HOURLY_LIMIT * 10 : this.HOURLY_LIMIT;
+        // ✅ LIMITE SÓ PARA FREE (não premium)
+        const FREE_CONTEXT_LIMITS = {
+            'pv': 50,      // PV: 50 msgs/hora
+            'grupo': 100   // Grupo: 100 msgs/hora (só direcionadas)
+        };
+        const limit = FREE_CONTEXT_LIMITS[tipoConversa as keyof typeof FREE_CONTEXT_LIMITS] || 50;
+
         userUsage.count++;
 
         if (userUsage.count > limit) {
-            return { allowed: false, reason: isPremium ? 'PREMIUM_LIMIT' : 'FREE_LIMIT' };
+            // ✅ Calcula hora exata do reset
+            const timeRemaining = this.HOURLY_WINDOW - (now - userUsage.startTime);
+            const resetTimestamp = now + timeRemaining;
+            const resetDate = new Date(resetTimestamp);
+
+            let resetAt;
+            try {
+                resetAt = resetDate.toLocaleTimeString('pt-BR', { timeZone: 'Africa/Luanda' });
+            } catch (e) {
+                resetAt = resetDate.toLocaleTimeString();
+            }
+
+            return { allowed: false, reason: 'FREE_LIMIT', resetAt };
         }
 
         return { allowed: true };

@@ -228,10 +228,10 @@ class BotCore {
                     this.commandHandler.economySystem = this.economySystem;
                     this.commandHandler.gameSystem = this.gameSystem;
                     this.commandHandler.gridTacticsGame = this.gridTacticsGame;
-                    
+
                     // Inicializa módulos async do CommandHandler
                     await this.commandHandler.initAsyncModules();
-                    
+
                     this.logger.debug('✅ CommandHandler inicializado (ESM Safe + Async Modules)');
                 }
             } catch (err: any) {
@@ -302,7 +302,7 @@ class BotCore {
                 },
                 browser: Browsers.macOS('Akira-Bot'),
                 generateHighQualityLinkPreview: true,
-                getMessage: async (key: any) => ({ conversation: 'hello' }),
+                getMessage: async (key: any) => undefined,
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
                 keepAliveIntervalMs: 10000,
@@ -331,12 +331,12 @@ class BotCore {
                 if (connection === 'close') {
                     this.isConnected = false;
                     this.currentQR = null;
-                    
+
                     // ✅ NOVO: Parar de manter presença disponível quando desconectar
                     if (this.presenceSimulator) {
                         this.presenceSimulator.stopMaintainingPresence();
                     }
-                    
+
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     const shouldReconnect = reason !== DisconnectReason.loggedOut;
                     this.logger.warn(`🔴 Conexão fechada. Motivo: ${reason}. Reconectar: ${shouldReconnect}`);
@@ -372,13 +372,13 @@ class BotCore {
                     this.BOT_JID = this.sock.user?.id;
                     const normalizedJid = JidUtils.normalize(this.BOT_JID);
                     this.logger.info(`🤖 Logado como: ${normalizedJid}`);
-                    
+
                     // ✅ NOVO: Manter bot sempre disponível (nunca offline)
                     if (this.presenceSimulator) {
                         await this.presenceSimulator.maintainAvailablePresence();
                         this.logger.info('🟢 Status de presença: SEMPRE DISPONÍVEL');
                     }
-                    
+
                     if (this.eventListeners.onConnected) this.eventListeners.onConnected(normalizedJid);
                 }
             });
@@ -463,7 +463,7 @@ class BotCore {
             if (shouldLog) this.logger.debug('🔹 [PIPELINE] Iniciando');
             if (!m) { this.logger.debug('🔹 [PIPELINE] m null'); return; }
             if (!m.message) { this.logger.debug('🔹 [PIPELINE] msg vazia'); return; }
-            
+
             // ✅ VALIDAÇÃO RÍGIDA: Ignorar mensagens do próprio bot
             if (m.key.fromMe) {
                 if (shouldLog) this.logger.debug('⏭️ Mensagem é do bot (fromMe=true)');
@@ -483,7 +483,7 @@ class BotCore {
             if (shouldLog) this.logger.debug('🔹 [PIPELINE] Válida');
 
             const remoteJid = String(m.key.remoteJid || '');
-            
+
             // ✅ VALIDAÇÃO CORRETA: Usar métodos Type-Safe para detectar tipo de conversa
             const ehGrupo = remoteJid.endsWith('@g.us');
             const ehStatus = remoteJid === 'status@broadcast';
@@ -503,7 +503,7 @@ class BotCore {
             // Extrair informações ANTES de qualquer processamento
             const numero = this.messageProcessor.extractUserNumber(m);
             const conversationType = this.messageProcessor.getConversationType(m);
-            
+
             // ✅ VALIDAÇÃO DUPLA: Também verificar se o numero é do bot
             const botNumero = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
             const numeroLimpo = JidUtils.getNumber(numero);
@@ -522,7 +522,7 @@ class BotCore {
             const conversaType = conversationType;
 
             if (shouldLog) {
-                this.logger.debug(`🔹 [PIPELINE] ${numeroReal} (${conversaType}) remoteJid=${remoteJid.substring(0,20)} ehGrupo=${ehGrupo}`);
+                this.logger.debug(`🔹 [PIPELINE] ${numeroReal} (${conversaType}) remoteJid=${remoteJid.substring(0, 20)} ehGrupo=${ehGrupo}`);
             }
 
             if (this.moderationSystem?.isBlacklisted(numeroReal)) {
@@ -729,7 +729,7 @@ class BotCore {
                 opcoes.quoted = m;
             }
             // Se PV normal: opcoes fica vazio, responde normal
-            
+
             await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
             await this.presenceSimulator.simulateTicks(m, true, ehGrupo);
         } catch (error: any) {
@@ -785,28 +785,28 @@ class BotCore {
             // REMOVIDO: fallback checkRateLimit que bloqueava usuários novos no PV
 
             // 2. Verificar se é comando (Ignora IA se for #comando)
-                if (this.messageProcessor.isCommand(texto)) {
-                    this.logger.info(`⚡ COMANDO: ${texto.substring(0, 30)}`);
-                    try {
-                        const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto, replyInfo, ehGrupo });
-                        if (handled) {
-                            // MARK AS READ - ticks azuis instantâneos para comandos
-                            if (this.presenceSimulator) {
-                                this.presenceSimulator.simulateTicks(m, true, ehGrupo).catch(() => {});
-                            }
-                            // XP para comandos em grupos com leveling
-                            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem && 
-                                this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
-                                const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 5);
-                                if (xp) this.logger.info(`📈 [LEVEL] ${nome} +5 XP (comando)`);
-                            }
-                            return; // COMANDO PROCESSADO ✓
+            if (this.messageProcessor.isCommand(texto)) {
+                this.logger.info(`⚡ COMANDO: ${texto.substring(0, 30)}`);
+                try {
+                    const handled = await this.commandHandler.handle(m, { nome, numeroReal, texto, replyInfo, ehGrupo });
+                    if (handled) {
+                        // MARK AS READ - ticks azuis instantâneos para comandos
+                        if (this.presenceSimulator) {
+                            this.presenceSimulator.simulateTicks(m, true, ehGrupo).catch(() => { });
                         }
-                    } catch (err: any) {
-                        this.logger.error(`❌ CommandHandler erro: ${err.message}`);
+                        // XP para comandos em grupos com leveling
+                        if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
+                            this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
+                            const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 5);
+                            if (xp) this.logger.info(`📈 [LEVEL] ${nome} +5 XP (comando)`);
+                        }
+                        return; // COMANDO PROCESSADO ✓
                     }
-                    // Fallback: comando desconhecido continua para AI
+                } catch (err: any) {
+                    this.logger.error(`❌ CommandHandler erro: ${err.message}`);
                 }
+                // Fallback: comando desconhecido continua para AI
+            }
 
             // 3. Decisão de resposta da IA (passa nome e numero para verificar Morena exclusiva)
             const deveResponder = this.shouldRespondToAI(m, texto, ehGrupo, replyInfo, nome, numeroReal);
@@ -869,7 +869,7 @@ class BotCore {
             if (!resultado.success) {
                 if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
                 this.logger.error('❌ Erro API:', resultado.error);
-                
+
                 // ✅ MESMO PADRÃO DE REPLY CONDICIONAL EM CASO DE ERRO
                 const opcoes: any = {};
                 if (ehGrupo) {
@@ -877,7 +877,7 @@ class BotCore {
                 } else if (replyInfo?.isReply) {
                     opcoes.quoted = m;
                 }
-                
+
                 await this.sock.sendMessage(m.key.remoteJid, { text: 'Tive um problema. Tenta de novo?' }, opcoes);
                 return;
             }
@@ -893,20 +893,20 @@ class BotCore {
                 if (this.presenceSimulator) await this.presenceSimulator.simulateRecording(m.key.remoteJid, 2000);
                 try {
                     const tts = await this.audioProcessor.textToSpeech(resposta);
-                const bufferValid = tts?.buffer && Buffer.isBuffer(tts.buffer) && tts.buffer.length > 0;
-                if (!tts.sucesso || !bufferValid) {
-                    this.logger.warn('⚠️ Falha TTS', tts?.error || tts?.message || 'sem buffer de áudio');
-                    if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
-                    await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
-                } else {
-                    this.logger.info('📤 Voice Note...');
-                    if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
-                    await this.sock.sendMessage(m.key.remoteJid, {
-                        audio: tts.buffer,
-                        mimetype: tts.mimetype || 'audio/ogg; codecs=opus',
-                        ptt: true
-                    }, { quoted: m });
-                }
+                    const bufferValid = tts?.buffer && Buffer.isBuffer(tts.buffer) && tts.buffer.length > 0;
+                    if (!tts.sucesso || !bufferValid) {
+                        this.logger.warn('⚠️ Falha TTS', tts?.error || tts?.message || 'sem buffer de áudio');
+                        if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
+                        await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
+                    } else {
+                        this.logger.info('📤 Voice Note...');
+                        if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
+                        await this.sock.sendMessage(m.key.remoteJid, {
+                            audio: tts.buffer,
+                            mimetype: tts.mimetype || 'audio/ogg; codecs=opus',
+                            ptt: true
+                        }, { quoted: m });
+                    }
                 } catch (err: any) {
                     this.logger.error(`❌ Erro TTS: ${err.message}`);
                     if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
@@ -928,7 +928,7 @@ class BotCore {
                 } else if (replyInfo?.isReply) {
                     opcoes.quoted = m; // PV: reply apenas se user mandou em reply
                 }
-                
+
                 await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
                 this.logger.info(`✅ [DISPATCH OK]`);
 
@@ -1043,7 +1043,7 @@ class BotCore {
         // 1.1 Verificação extra de menção por número do bot (config.BOT_NUMERO_REAL para multi-device)
         const botNumber = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
         if (botNumber && (texto.includes(`@${botNumber}`) || texto.includes(botNumber))) {
-            this.logger.debug(`🔍 Mention by number detected: ${botNumber} in "${texto.substring(0,50)}"`);
+            this.logger.debug(`🔍 Mention by number detected: ${botNumber} in "${texto.substring(0, 50)}"`);
             return true;
         }
 
@@ -1143,12 +1143,12 @@ class BotCore {
     async disconnect(): Promise<void> {
         try {
             this.logger.info('🔴 Desconectando...');
-            
+
             // ✅ NOVO: Parar de manter presença quando desconectar
             if (this.presenceSimulator) {
                 this.presenceSimulator.stopMaintainingPresence();
             }
-            
+
             if (this.sock) {
                 try {
                     this.sock.ev.removeAllListeners();

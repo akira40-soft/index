@@ -161,7 +161,7 @@ class MediaProcessor {
      * - Skip DASH manifest para formatos simples
      * - Usa formatos progressivamente mais genéricos em retries
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, retryCount?: number }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, retryCount?: number, playerClient?: string }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const retryCount = options.retryCount || 0;
@@ -214,9 +214,9 @@ class MediaProcessor {
      * DOWNLOAD DE ÁUDIO - yt-dlp COM GAMBIARRAS CONTRA BLOQUEIO DO YOUTUBE
      * ═══════════════════════════════════════════════════════════════════════
      */
-    async downloadYouTubeAudio(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+    async downloadYouTubeAudio(url: string, retryCount: number = 0, playerClient: string = 'web_embedded'): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount}/2)` : ''}`);
+            this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount}/4)` : ''} (player_client=${playerClient})`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -226,62 +226,62 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            this.logger?.info(`[ÁUDIO] Rodando yt-dlp com gambiarra web_embedded...`);
+            this.logger?.info(`[ÁUDIO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'audio',
                 output: outputPath,
-                retryCount: retryCount  // ✅ PASS retryCount para usar formatos progressivamente mais genéricos
+                retryCount: retryCount,
+                playerClient: playerClient
             });
 
             try {
                 this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
                 await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
-            try {
-                this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount}/4)` : ''} (player_client=${playerClient})`);
+            } catch (e: any) {
+                const msg = (e.stderr || e.message || '').split('\n')[0];
+                this.logger?.error(`❌ yt-dlp erro: ${msg}`);
 
-                const metadata = await this._getYouTubeMetadataSimple(url);
-                const finalUrl = metadata.url || url;
-                const outputPath = this.generateRandomFilename('mp3');
-
-                this.logger?.info(`[ÁUDIO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
-                const cmd = this._buildYtdlpCommand(finalUrl, {
-                    type: 'audio',
-                    output: outputPath,
-                    retryCount: retryCount,
-                    playerClient: playerClient
-                });
-
-                try {
-                    this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
-                    await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
-                } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.error(`❌ yt-dlp erro: ${msg}`);
-
-                    // Retry com cascade de player_client
-                    if (msg.includes('format not available') && retryCount < 4) {
-                        const clients = ['web', 'ios', 'android', 'tv'];
-                        const nextClient = clients[retryCount] || clients[clients.length - 1];
-                        this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Tentando player_client=${nextClient}...`);
-                        await new Promise(r => setTimeout(r, 2000));
-                        return this.downloadYouTubeAudio(url, retryCount + 1, nextClient);
-                    }
-
-                    return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
+                // Retry com cascade de player_client
+                if (msg.includes('format not available') && retryCount < 4) {
+                    const clients = ['web', 'ios', 'android', 'tv'];
+                    const nextClient = clients[retryCount] || clients[clients.length - 1];
+                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Tentando player_client=${nextClient}...`);
+                    await new Promise(r => setTimeout(r, 2000));
+                    return await this.downloadYouTubeAudio(url, retryCount + 1, nextClient);
                 }
 
-                if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 10000) {
-                    return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
-                }
-
-                const buffer = await fs.promises.readFile(outputPath);
-                await this.cleanupFile(outputPath);
-                return { sucesso: true, buffer, metadata };
-
-            } catch (error: any) {
-                this.logger?.error(`❌ Erro download audio: ${error.message}`);
-                return { sucesso: false, error: error.message };
+                return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
+
+            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 10000) {
+                return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
+            }
+
+            const buffer = await fs.promises.readFile(outputPath);
+            await this.cleanupFile(outputPath);
+            return { sucesso: true, buffer, metadata };
+
+        } catch (error: any) {
+            this.logger?.error(`❌ Erro download audio: ${error.message}`);
+            return { sucesso: false, error: error.message };
+        }
+    }
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * DOWNLOAD DE VÍDEO - yt-dlp COM GAMBIARRAS
+     * ═══════════════════════════════════════════════════════════════════════
+     */
+    async downloadYouTubeVideo(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+        try {
+            this.logger?.info(`🎬 Download vídeo: ${url}`);
+
+            const metadata = await this._getYouTubeMetadataSimple(url);
+            if (!metadata.sucesso) {
+                return { sucesso: false, error: 'Não foi possível encontrar vídeo para esse nome.' };
+            }
+
+            const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
             this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra web_embedded...`);
@@ -1346,18 +1346,18 @@ class MediaProcessor {
     async createStickerFromImage(imageBuffer: Buffer, metadata: any = {}): Promise<any> {
         const inputPath = this.generateRandomFilename('jpg');
         const outputPath = this.generateRandomFilename('webp');
-        
+
         try {
             const { packName = 'akira-bot', author = 'Akira-Bot' } = metadata;
-            
+
             // ✅ NOVO: Carregar sharp dinamicamente
             const sharpLib = await loadSharp();
-            
+
             if (sharpLib) {
                 // ✅ FALLBACK: Usar Sharp em vez de ffmpeg (mais confiável)
                 try {
                     let processado = sharpLib(imageBuffer);
-                    
+
                     // Redimensionar para 512x512
                     processado = processado
                         .resize(512, 512, {
@@ -1383,7 +1383,7 @@ class MediaProcessor {
                     this.logger?.warn(`⚠️ Sharp falhou: ${sharpError.message}, tentando ffmpeg...`);
                 }
             }
-            
+
             // FALLBACK: Tentar com ffmpeg se sharp falhar ou não estiver disponível
             await fs.promises.writeFile(inputPath, imageBuffer);
 

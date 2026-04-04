@@ -99,7 +99,7 @@ class ConfigManager {
         this.BASE_URL = process.env?.BASE_URL || 'https://index-js21-production.up.railway.app'; // URL de Produção
 
         // ═══ BOT IDENTITY ═══
-this.BOT_NUMERO_REAL = process.env?.BOT_NUMERO || '37839265886398';
+        this.BOT_NUMERO_REAL = process.env?.BOT_NUMERO || '37839265886398';
         this.BOT_NAME = process.env?.BOT_NAME || 'Akira';
         this.BOT_VERSION = 'v21.1.02.2025';
         this.PREFIXO = process.env?.PREFIXO || '#';
@@ -127,8 +127,11 @@ this.BOT_NUMERO_REAL = process.env?.BOT_NUMERO || '37839265886398';
         this.TTS_SLOW = process.env?.TTS_SLOW === 'true';
 
         // ═══ RATE LIMITING ═══
-        this.RATE_LIMIT_WINDOW = Number(process.env?.RATE_LIMIT_WINDOW || 8);
-        this.RATE_LIMIT_MAX_CALLS = Number(process.env?.RATE_LIMIT_MAX_CALLS || 6);
+        // Forçamos limites sensatos, ignorando se as variáveis do Railway forem muito bloqueantes (ex: 6 mensagens)
+        const envWindow = Number(process.env?.RATE_LIMIT_WINDOW || 1);
+        const envCalls = Number(process.env?.RATE_LIMIT_MAX_CALLS || 100);
+        this.RATE_LIMIT_WINDOW = envWindow > 24 ? 1 : envWindow;
+        this.RATE_LIMIT_MAX_CALLS = envCalls < 10 ? 100 : envCalls;
 
         // ═══ MODERAÇÃO ═══
         this.MUTE_DEFAULT_MINUTES = Number(process.env?.MUTE_DEFAULT_MINUTES || 5);
@@ -204,7 +207,7 @@ this.BOT_NUMERO_REAL = process.env?.BOT_NUMERO || '37839265886398';
         this.LOG_DETAILED_MESSAGES = process.env?.LOG_DETAILED_MESSAGES !== 'false';
 
         // ═══ PERMISSÕES - DONO(S) ═══
-this.DONO_USERS = [
+        this.DONO_USERS = [
             { numero: '37839265886398', nomeExato: 'Bot Admin' }, // PRIMARY: Multi-device LID number (fixes replies/owner checks)
             { numero: '244952786417', nomeExato: 'Isaac Quarenta' }, // Current session JID
             { numero: '244937035662', nomeExato: 'Isaac Quarenta' },
