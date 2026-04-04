@@ -166,16 +166,18 @@ class MediaProcessor {
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const retryCount = options.retryCount || 0;
 
-        // SIMPLIFICAÇÃO EXTREMA: String minimalista
-        const bypassFlags = '--ignore-config --js-runtimes node --no-warnings --no-playlist --socket-timeout 60';
+        // ANTI-PO_TOKEN: Salta o manifest DASH (que requer PO_TOKEN) e força streams legados pre-merged
+        const skipDashArg = '--extractor-args "youtube:skip=dash"';
+        const bypassFlags = `--ignore-config ${skipDashArg} --js-runtimes node --no-warnings --no-playlist --socket-timeout 60`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Tenta bestaudio. Se o YouTube bloquear por causa do PO_TOKEN ou Cookies banidos,
-            // cai para o itag 18 (360p legado infalível) ou best unificado.
-            actionFlags = `-f "ba/18/b" -x --audio-format mp3 -o "${options.output}"`;
+            // Cascade: itag 140(m4a audio) → itag 18(360p mp4) → itag 22(720p mp4) → best pre-merged
+            // Estes itags NUNCA são bloqueados pelo YouTube mesmo sem PO_TOKEN
+            actionFlags = `-f "140/18/22/b" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            actionFlags = `-f "bv*+ba/18/b" -o "${options.output}"`;
+            // Sem DASH, força 720p mp4 ou 360p mp4 (pre-merged)
+            actionFlags = `-f "22/18/b" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }

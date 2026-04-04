@@ -899,30 +899,30 @@ class GroupManagement {
         // ✅ Usar BOT_NUMERO_REAL formatado como @lid (padrão WhatsApp multi-device)
         const botNumero = String(this.config.BOT_NUMERO_REAL).replace(/\D/g, '');
         const botId = `${botNumero}@lid`;
-        
+
         console.log(`🔍 [GroupManagement] Bot ID (BOT_NUMERO_REAL): ${botId}`);
         console.log(`🔍 [GroupManagement] Admins (normalizados): ${admins.join(', ')}`);
         console.log(`🔍 [GroupManagement] Targets: ${targets.join(', ')}`);
-        
+
         if (!admins.includes(botId)) {
             console.log(`❌ [GroupManagement] Bot NÃO está na lista de admins!`);
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para remover membros.' }, { quoted: m });
             return true;
         }
-        
+
         console.log(`✅ [GroupManagement] Bot está na lista de admins!`);
 
         try {
             console.log(`👢 [GroupManagement] Removendo: ${targets.join(', ')}`);
             const result = await this.sock.groupParticipantsUpdate(groupJid, targets, 'remove');
             console.log(`✅ [GroupManagement] Resultado: ${JSON.stringify(result)}`);
-            
+
             const mentions = targets.map((t: string) => {
                 // Remove sufixo de JID
                 const num = t.split('@')[0].split(':')[0];
                 return `@${num}`;
             });
-            
+
             await this.sock.sendMessage(groupJid, {
                 text: `👢 *Membro(s) removido(s):* ${mentions.join(', ')}`,
                 mentions: targets
@@ -1166,10 +1166,27 @@ class GroupManagement {
         const groupJid = m.key.remoteJid;
 
         try {
+            // Força fetch fresco (sem cache) para ter subject e desc atualizados
+            this.metadataCache.delete(groupJid);
             const metadata = await this._getGroupMetadata(groupJid);
             if (!metadata) {
                 await this.sock.sendMessage(groupJid, { text: '❌ Não foi possível obter informações do grupo.' }, { quoted: m });
                 return true;
+            }
+
+            // Normaliza nome do grupo (Baileys can sometimes return subject or name)
+            const groupName = metadata.subject || metadata.name || metadata.pushName || '(sem nome)';
+
+            // Normaliza descrição – Baileys v6 pode retornar string, ou objeto com .desc ou .description
+            let groupDesc: string = 'Sem descrição';
+            if (metadata.desc) {
+                if (typeof metadata.desc === 'string' && metadata.desc.trim()) {
+                    groupDesc = metadata.desc.trim();
+                } else if (typeof metadata.desc === 'object' && metadata.desc.desc) {
+                    groupDesc = String(metadata.desc.desc).trim() || 'Sem descrição';
+                }
+            } else if (metadata.description && typeof metadata.description === 'string') {
+                groupDesc = metadata.description.trim() || 'Sem descrição';
             }
 
             const creationDate = metadata.creation ? new Date(metadata.creation * 1000).toLocaleDateString('pt-BR') : 'Desconhecida';
@@ -1183,8 +1200,8 @@ class GroupManagement {
             const totalAdmins = admins.length;
 
             const infoText = `📊 *Informações do Grupo*\n\n` +
-                `🏷️ *Nome:* ${metadata.subject}\n` +
-                `📝 *Descrição:* ${metadata.desc || 'Sem descrição'}\n` +
+                `🏷️ *Nome:* ${groupName}\n` +
+                `📝 *Descrição:* ${groupDesc}\n` +
                 `👥 *Total de Membros:* ${totalMembers}\n` +
                 `👑 *Total de Admins:* ${totalAdmins}\n` +
                 `📅 *Criado em:* ${creationDate}\n` +
@@ -1196,7 +1213,7 @@ class GroupManagement {
                 mentions: metadata.participants.map((p: any) => p.id)
             }, { quoted: m });
 
-            this.logger.info(`✅ [GroupManagement] Info obtida para ${groupJid}`);
+            this.logger.info(`✅ [GroupManagement] Info obtida para ${groupJid}: "${groupName}"`);
         } catch (e: any) {
             this.logger.error(`❌ [GroupManagement] Erro ao obter info:`, e.message);
             await this.sock.sendMessage(groupJid, {

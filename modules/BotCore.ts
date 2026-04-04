@@ -808,7 +808,24 @@ class BotCore {
                 // Fallback: comando desconhecido continua para AI
             }
 
-            // 3. Decisão de resposta da IA (passa nome e numero para verificar Morena exclusiva)
+            // 3. XP para TODA mensagem de texto em grupo com leveling ativo
+            // (deve ser ANTES do deveResponder para contar msgs comuns do grupo)
+            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
+                this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
+                const xpResult = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 10);
+                if (xpResult?.leveled) {
+                    this.logger.info(`🎉 [LEVEL UP] ${nome} você foi elevado ao nível ${xpResult.rec?.level}!`);
+                    // Notifica o grupo sobre o level up
+                    this.sock.sendMessage(m.key.remoteJid, {
+                        text: `🎉 *@${numeroReal}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
+                        mentions: [m.key.participant || m.key.remoteJid]
+                    }).catch(() => { });
+                } else {
+                    this.logger.debug(`📈 [LEVEL] ${nome} +10 XP | total: ${xpResult?.rec?.xp}`);
+                }
+            }
+
+            // 4. Decisão de resposta da IA
             const deveResponder = this.shouldRespondToAI(m, texto, ehGrupo, replyInfo, nome, numeroReal);
 
             if (!deveResponder) {
@@ -816,13 +833,8 @@ class BotCore {
                 return;
             }
 
-            // 4. Processar Resposta via API
+            // 5. Processar Resposta via API
             this.logger.info(`🤖 Resposta para ${nome}: ${texto.substring(0, 30)}...`);
-
-            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem && this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
-                const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 10);
-                if (xp) this.logger.info(`📈 [LEVEL] ${nome} +10 XP`);
-            }
 
             const replyMetadata = replyInfo ? {
                 is_reply: replyInfo.isReply || true,
@@ -835,10 +847,7 @@ class BotCore {
                 priority_level: replyInfo.priorityLevel || 2
             } : { is_reply: false, reply_to_bot: false };
 
-            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem && this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
-                const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 10);
-                if (xp) this.logger.info(`📈 [LEVEL] ${nome} +10 XP`);
-            }
+            // XP já foi premiado em cima para cada mensagem do grupo
 
             const grupoNome = ehGrupo ? (m.key.remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
             const tipoConversa = ehGrupo ? 'grupo' : 'pv';
