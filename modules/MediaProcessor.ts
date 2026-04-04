@@ -161,9 +161,9 @@ class MediaProcessor {
      * - Skip DASH manifest para formatos simples
      * - Usa formatos progressivamente mais genéricos em retries
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, formats?: string }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, formats?: string, useCookies?: boolean }): string {
         const cookiePath = this._findCookiePath();
-        const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
+        const cookieArg = (cookiePath && options.useCookies !== false) ? `--cookies "${cookiePath}"` : '';
 
         // Se o playerClient for passado, usamos nas extractor-args
         const clientArg = options.playerClient && options.playerClient !== 'default'
@@ -206,23 +206,28 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // Cadeia de tentativas: Android (Bypassa PO_TOKEN muito bem), tv_embedded (pre-merged lega), default com bestaudio
-            const fallbacks = [
-                { client: 'android', fmt: 'ba/b/best' },
-                { client: 'tv_embedded', fmt: '140/m4a/18/22/b/best' },
-                { client: 'default', fmt: 'ba/b/best' }
+            // Cadeia de tentativas com e SEM cookies.
+            // CRÍTICO: se o cookies.txt estiver banido/flaggado pelo YouTube,
+            // ele retorna ZERO formatos disponíveis para QUALQUER cliente.
+            // A tentativa anónima (useCookies: false) bypassa esse bloqueio.
+            const fallbacks: { client: string; fmt: string; useCookies: boolean }[] = [
+                { client: 'android', fmt: 'bestaudio/best', useCookies: true }, // com cookies, cliente android
+                { client: 'default', fmt: 'bestaudio/best', useCookies: false }, // ANÓNIMO - bypassa cookie ban
+                { client: 'tv_embedded', fmt: '140/m4a/18/22/best', useCookies: false }, // tv client anónimo
+                { client: 'ios', fmt: 'bestaudio/best', useCookies: false }
             ];
 
             let lastError = '';
             for (let i = 0; i < fallbacks.length; i++) {
                 const fb = fallbacks[i];
-                this.logger?.info(`[ÁUDIO] Tentativa ${i + 1}/${fallbacks.length} (cliente: ${fb.client}, format: ${fb.fmt})...`);
+                this.logger?.info(`[ÁUDIO] Tentativa ${i + 1}/${fallbacks.length} (client: ${fb.client}, cookies: ${fb.useCookies})...`);
 
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'audio',
                     output: outputPath,
                     playerClient: fb.client,
-                    formats: fb.fmt
+                    formats: fb.fmt,
+                    useCookies: fb.useCookies
                 });
 
                 try {
@@ -266,23 +271,25 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // Cadeia de tentativas: Android, tv_embedded, default
-            const fallbacks = [
-                { client: 'android', fmt: 'bv*+ba/b' },
-                { client: 'tv_embedded', fmt: '22/18/b/best' },
-                { client: 'default', fmt: 'bv*+ba/b' }
+            // Cadeia de tentativas com e SEM cookies (mesmo motivo que no áudio)
+            const fallbacks: { client: string; fmt: string; useCookies: boolean }[] = [
+                { client: 'android', fmt: 'bv*+ba/b', useCookies: true },
+                { client: 'default', fmt: 'bv*+ba/b', useCookies: false }, // ANÓNIMO
+                { client: 'tv_embedded', fmt: '22/18/best', useCookies: false },
+                { client: 'ios', fmt: 'bv*+ba/b', useCookies: false }
             ];
 
             let lastError = '';
             for (let i = 0; i < fallbacks.length; i++) {
                 const fb = fallbacks[i];
-                this.logger?.info(`[VÍDEO] Tentativa ${i + 1}/${fallbacks.length} (cliente: ${fb.client}, format: ${fb.fmt})...`);
+                this.logger?.info(`[VÍDEO] Tentativa ${i + 1}/${fallbacks.length} (client: ${fb.client}, cookies: ${fb.useCookies})...`);
 
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'video',
                     output: outputPath,
                     playerClient: fb.client,
-                    formats: fb.fmt
+                    formats: fb.fmt,
+                    useCookies: fb.useCookies
                 });
 
                 try {
