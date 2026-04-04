@@ -178,6 +178,7 @@ class MediaProcessor {
             '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
+            '--allow-unplayable-formats',
             '--socket-timeout 90',
             '--retries 5',
             '--http-chunk-size 10M',
@@ -194,8 +195,8 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Usa alias modernos do yt-dlp: ba = bestaudio, b = best
-            const formatCascade = 'ba/b';
+            // Cascade de formatos para máxima compatibilidade
+            const formatCascade = 'ba[ext=m4a]/ba[ext=webm]/ba/best[ext=m4a]/best[ext=webm]/best';
             actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
             actionFlags = `-o "${options.output}"`;
@@ -240,7 +241,7 @@ class MediaProcessor {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
 
-                // Retry com cascade de player_client usando regex robusto para erros de formato
+                // Retry com cascade de player_client
                 if ((/format.*not available/i.test(msg) || /requested format/i.test(msg) || /no.*format/i.test(msg)) && retryCount < 4) {
                     const clients = ['web', 'ios', 'android', 'tv'];
                     const nextClient = clients[retryCount] || clients[clients.length - 1];
@@ -268,7 +269,7 @@ class MediaProcessor {
 
     /**
      * ═══════════════════════════════════════════════════════════════════════
-     * DOWNLOAD DE VÍDEO - yt-dlp COM GAMBIARRAS
+     * DOWNLOAD DE VÍDEO - yt-dlp
      * ═══════════════════════════════════════════════════════════════════════
      */
     async downloadYouTubeVideo(url: string, retryCount: number = 0, playerClient: string = 'web_embedded'): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
@@ -298,7 +299,6 @@ class MediaProcessor {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
 
-                // Retry com cascade de player_client usando regex robusto para erros de formato
                 if ((/format.*not available/i.test(msg) || /requested format/i.test(msg) || /no.*format/i.test(msg)) && retryCount < 4) {
                     const clients = ['web', 'ios', 'android', 'tv'];
                     const nextClient = clients[retryCount] || clients[clients.length - 1];
@@ -319,6 +319,7 @@ class MediaProcessor {
             return { sucesso: true, buffer, metadata };
 
         } catch (error: any) {
+            this.logger?.error(`❌ Erro download video: ${error.message}`);
             return { sucesso: false, error: error.message };
         }
     }

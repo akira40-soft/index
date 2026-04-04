@@ -750,26 +750,23 @@ class ModerationSystem {
         arr.push(entry);
 
         try {
-            fs.writeFileSync(
-                this.blacklistPath || './database/datauser/blacklist.json',
-                JSON.stringify(arr, null, 2)
-            );
+            this._saveBlacklist(arr);
 
             // LOG DETALHADO
             const timestamp = new Date().toLocaleString('pt-BR');
             const expiresStr = expiresAt === 'PERMANENT' ? 'PERMANENTE' : new Date(expiresAt).toLocaleString('pt-BR');
 
-            this.logger.log(`\n${'═'.repeat(100)}`);
-            this.logger.log(`🚫 [${timestamp}] BLACKLIST ADICIONADO - SEVERIDADE: ${entry.severity}`);
-            this.logger.log(`${'─'.repeat(100)}`);
-            this.logger.log(`👤 USUÁRIO`);
-            this.logger.log(` ├─ Nome: ${userName}`);
-            this.logger.log(` ├─ Número: ${userNumber}`);
-            this.logger.log(` └─ JID: ${userId}`);
-            this.logger.log(`📋 RAZÃO: ${reason}`);
-            this.logger.log(`⏰ EXPIRAÇÃO: ${expiresStr}`);
-            this.logger.log(`🔐 STATUS: Agora será ignorado completamente`);
-            this.logger.log(`${'═'.repeat(100)}\n`);
+            this.logger.info(`\n${'═'.repeat(100)}`);
+            this.logger.info(`🚫 [${timestamp}] BLACKLIST ADICIONADO - SEVERIDADE: ${entry.severity}`);
+            this.logger.info(`${'─'.repeat(100)}`);
+            this.logger.info(`👤 USUÁRIO`);
+            this.logger.info(` ├─ Nome: ${userName}`);
+            this.logger.info(` ├─ Número: ${userNumber}`);
+            this.logger.info(` └─ JID: ${userId}`);
+            this.logger.info(`📋 RAZÃO: ${reason}`);
+            this.logger.info(`⏰ EXPIRAÇÃO: ${expiresStr}`);
+            this.logger.info(`🔐 STATUS: Agora será ignorado completamente`);
+            this.logger.info(`${'═'.repeat(100)}\n`);
 
             return { success: true, entry };
         } catch (e: any) {
@@ -791,12 +788,9 @@ class ModerationSystem {
             arr.splice(index, 1);
 
             try {
-                fs.writeFileSync(
-                    this.blacklistPath || './database/datauser/blacklist.json',
-                    JSON.stringify(arr, null, 2)
-                );
+                this._saveBlacklist(arr);
 
-                this.logger.log(`✅ [BLACKLIST] ${removed.name} (${removed.number}) removido da blacklist`);
+                this.logger.info(`✅ [BLACKLIST] ${removed.name} (${removed.number}) removido da blacklist`);
                 return true;
             } catch (e: any) {
                 this.logger.error('Erro ao remover da blacklist:', e.message);
