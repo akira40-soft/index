@@ -2344,16 +2344,21 @@ ${P}menu osint — Comandos OSINT avançados`,
                 }
                 return [];
             };
+            // ✅ CRÍTICO: Normaliza userId para número puro (sem @s.whatsapp.net e sem :device)
+            // BotCore grava XP com 'numeroReal' (número puro), mas CommandHandler recebe o JID completo.
+            // Sem normalizar, os registros nunca batem e o #level sempre mostra 0.
+            const normalizeUid = (uid: string) => uid.split('@')[0].split(':')[0];
+            userId = normalizeUid(userId);
+
             const targets = extractTargets(m);
             if (targets.length > 0) {
-                userId = targets[0];
+                userId = normalizeUid(targets[0]);
             }
 
             const groupId = ehGrupo ? chatJid : 'global';
 
             // Verifica se está ativo para o grupo
             if (ehGrupo && !this.groupManagement.groupSettings[chatJid]?.leveling) {
-                // Se não for admin querendo ver o nível (permitir admin ver status mesmo desativado? Não, melhor avisar)
                 await this.bot.reply(m, '📊 O sistema de níveis está *DESATIVADO* neste grupo.\n\nUse: *#level on* para ativar (Apenas Admins).');
                 return true;
             }

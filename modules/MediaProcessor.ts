@@ -167,8 +167,9 @@ class MediaProcessor {
         const retryCount = options.retryCount || 0;
 
         // ANTI-PO_TOKEN: Salta o manifest DASH (que requer PO_TOKEN) e força streams legados pre-merged
-        const skipDashArg = '--extractor-args "youtube:skip=dash"';
-        const bypassFlags = `--ignore-config ${skipDashArg} --js-runtimes node --no-warnings --no-playlist --socket-timeout 60`;
+        // ATENÇÃO: no Linux/Railway as aspas simples são necessárias dentro da string do shell
+        const skipDashArg = `--extractor-args 'youtube:skip=dash'`;
+        const bypassFlags = `--ignore-config ${skipDashArg} --js-runtimes node --no-warnings --no-playlist --no-mtime --socket-timeout 60`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
@@ -179,7 +180,8 @@ class MediaProcessor {
             // Sem DASH, força 720p mp4 ou 360p mp4 (pre-merged)
             actionFlags = `-f "22/18/b" -o "${options.output}"`;
         } else if (options.type === 'json') {
-            actionFlags = '--dump-json --no-download';
+            // Para metadata também skipa dash para consistência
+            actionFlags = `--extractor-args 'youtube:skip=dash' --dump-json --no-download`;
         }
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
