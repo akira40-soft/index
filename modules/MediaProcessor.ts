@@ -194,8 +194,8 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Usa default nativo do yt-dlp amigável com --extract-audio
-            const formatCascade = 'bestaudio/best';
+            // Usa alias modernos do yt-dlp: ba = bestaudio, b = best
+            const formatCascade = 'ba/b';
             actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
             actionFlags = `-o "${options.output}"`;
