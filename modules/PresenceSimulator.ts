@@ -190,8 +190,19 @@ class PresenceSimulator {
                 }
             } else {
                 // ✅ 2 ticks cinzas - ENTREGUE (RECEIVED - recebido mas não lido)
-                // Enviar "received" manualmente costuma causar conflitos na bailey.
-                // O Multi-device já envia recibos de entrega automaticamente, deixamos quieto para não bugar.
+                try {
+                    // Tenta o padrao do multi-device
+                    if (this.sock.sendReceipt) {
+                        await this.sock.sendReceipt(jid, participant || jid, [messageId], undefined);
+                    }
+                } catch (e) {
+                    try {
+                        // Fallback legadas
+                        if (this.sock.sendReadReceipt) {
+                            await this.sock.sendReadReceipt(jid, participant || jid, [messageId], 'receipt');
+                        }
+                    } catch (e2) { }
+                }
                 return true;
             }
         } catch (e) {

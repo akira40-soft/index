@@ -166,39 +166,27 @@ class MediaProcessor {
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const retryCount = options.retryCount || 0;
 
-        // GAMBIARRAS REAIS CONTRA BLOQUEIO YOUTUBE 2024-2026:
-        // 1. web_embedded menos bloqueado que web
-        // 2. Node.js como runtime obrigatório
-        // 3. Força IPv4 para evitar problemas
-        // 4. Em retries, troca player_client
-        const playerClient = options.playerClient || 'web_embedded';
-        let extractorArgs = `youtube:player_client=${playerClient},skip_dash_manifest=true`;
-
+        // SIMPLIFICAÇÃO EXTREMA: Deixa o yt-dlp lidar com o client nativamente na nova versão
         const bypassFlags = retryCount === 0 ? [
             '--ignore-config',
-            `--extractor-args "${extractorArgs}"`,
-            '--js-runtimes node',
             '--allow-unplayable-formats',
             '--socket-timeout 90',
             '--retries 5',
-            '--http-chunk-size 10M',
-            '--buffer-size 16K',
             '--no-warnings',
             '--geo-bypass',
             '--no-playlist'
         ].filter(Boolean).join(' ') : [
             '--ignore-config',
-            `--extractor-args "${extractorArgs}"`,
             '--no-warnings',
             '--socket-timeout 60'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Cascade de formatos para máxima compatibilidade
-            const formatCascade = 'ba[ext=m4a]/ba[ext=webm]/ba/best[ext=m4a]/best[ext=webm]/best';
-            actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
+            // Sem forçar formatos específicos (-f). Deixa o yt-dlp usar o melhor formato nativo e extrair
+            actionFlags = `-x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
+            // Sem forçar formatos. Ele baixa o melhor nativamente.
             actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
@@ -214,9 +202,9 @@ class MediaProcessor {
      * DOWNLOAD DE ÁUDIO - yt-dlp COM GAMBIARRAS CONTRA BLOQUEIO DO YOUTUBE
      * ═══════════════════════════════════════════════════════════════════════
      */
-    async downloadYouTubeAudio(url: string, retryCount: number = 0, playerClient: string = 'web_embedded'): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+    async downloadYouTubeAudio(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎧 Download áudio: ${url}${retryCount > 0 ? ` (retry ${retryCount}/4)` : ''} (player_client=${playerClient})`);
+            this.logger?.info(`🎧 Download áudio: ${url}`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -226,12 +214,11 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            this.logger?.info(`[ÁUDIO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
+            this.logger?.info(`[ÁUDIO] Rodando yt-dlp genérico...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'audio',
                 output: outputPath,
-                retryCount: retryCount,
-                playerClient: playerClient
+                retryCount: retryCount
             });
 
             try {
@@ -240,15 +227,6 @@ class MediaProcessor {
             } catch (e: any) {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
-
-                // Retry com cascade de player_client
-                if ((/format.*not available/i.test(msg) || /requested format/i.test(msg) || /no.*format/i.test(msg)) && retryCount < 4) {
-                    const clients = ['web', 'ios', 'android', 'tv'];
-                    const nextClient = clients[retryCount] || clients[clients.length - 1];
-                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Corrigindo falha de formato com player_client=${nextClient}...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                    return await this.downloadYouTubeAudio(url, retryCount + 1, nextClient);
-                }
 
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
@@ -272,9 +250,9 @@ class MediaProcessor {
      * DOWNLOAD DE VÍDEO - yt-dlp
      * ═══════════════════════════════════════════════════════════════════════
      */
-    async downloadYouTubeVideo(url: string, retryCount: number = 0, playerClient: string = 'web_embedded'): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+    async downloadYouTubeVideo(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎬 Download vídeo: ${url}${retryCount > 0 ? ` (retry ${retryCount}/4)` : ''} (player_client=${playerClient})`);
+            this.logger?.info(`🎬 Download vídeo: ${url}`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -284,12 +262,11 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
+            this.logger?.info(`[VÍDEO] Rodando yt-dlp genérico...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'video',
                 output: outputPath,
-                retryCount: retryCount,
-                playerClient: playerClient
+                retryCount: retryCount
             });
 
             try {
@@ -298,14 +275,6 @@ class MediaProcessor {
             } catch (e: any) {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
-
-                if ((/format.*not available/i.test(msg) || /requested format/i.test(msg) || /no.*format/i.test(msg)) && retryCount < 4) {
-                    const clients = ['web', 'ios', 'android', 'tv'];
-                    const nextClient = clients[retryCount] || clients[clients.length - 1];
-                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Corrigindo falha de formato com player_client=${nextClient}...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                    return await this.downloadYouTubeVideo(url, retryCount + 1, nextClient);
-                }
 
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
