@@ -553,24 +553,25 @@ class BotCore {
                 return;
             }
 
-            // 3. Decisão de resposta da IA (passa nome e numero para verificar Morena exclusiva)
+            // 3. Decisão de resposta da IA
             const deveResponder = this.shouldRespondToAI(m, textoFinal, ehGrupo, replyInfo, nome, numeroReal);
 
-            if (!deveResponder) {
-                // ✅ XP para TODA mensagem em grupo (mesmo que o bot não responda)
-                if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
-                    this.groupManagement?.groupSettings[remoteJid]?.leveling) {
-                    const xpResult = this.levelSystem.awardXp(remoteJid, numeroReal, 10);
-                    if (xpResult?.leveled) {
-                        this.logger.info(`🎉 [LEVEL UP] ${nome} → Nível ${xpResult.rec?.level}!`);
-                        this.sock.sendMessage(remoteJid, {
-                            text: `🎉 *@${numeroReal}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
-                            mentions: [m.key.participant || remoteJid]
-                        }).catch(() => { });
-                    } else {
-                        this.logger.debug(`📈 [LEVEL] ${nome} +10 XP | total: ${xpResult?.rec?.xp}`);
-                    }
+            // ✅ XP para TODA mensagem em grupo ANTES do return ou processamento da IA
+            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
+                this.groupManagement?.groupSettings[remoteJid]?.leveling) {
+                const xpResult = this.levelSystem.awardXp(remoteJid, numeroReal, 10);
+                if (xpResult?.leveled) {
+                    this.logger.info(`🎉 [LEVEL UP] ${nome} → Nível ${xpResult.rec?.level}!`);
+                    this.sock.sendMessage(remoteJid, {
+                        text: `🎉 *@${numeroReal}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
+                        mentions: [m.key.participant || remoteJid]
+                    }).catch(() => { });
+                } else {
+                    this.logger.debug(`📈 [LEVEL] ${nome} +10 XP | total: ${xpResult?.rec?.xp}`);
                 }
+            }
+
+            if (!deveResponder) {
                 this.logger.debug(`⏭️ [IGNORADO] ${nome}: "${textoFinal.substring(0, 50)}" (genérico${ehGrupo ? ' em grupo' : ''})`);
                 return;
             }

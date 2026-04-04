@@ -176,9 +176,10 @@ class MediaProcessor {
         if (options.type === 'audio') {
             // Tenta 18 (360p mp4 pre-merged) ou 22 (720p mp4), então best.
             // Com tv_embedded estes itags existem na resposta mesmo sem PO_TOKEN.
-            actionFlags = `-f "18/22/best" -x --audio-format mp3 -o "${options.output}"`;
+            // A flag --compat-options no-youtube-unavailable-videos garante que se 18 não existir num trailer velho, não crashe.
+            actionFlags = `-f "140/m4a/18/22/b/best" --compat-options no-youtube-unavailable-videos -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            actionFlags = `-f "22/18/best" -o "${options.output}"`;
+            actionFlags = `-f "22/18/b/best" --compat-options no-youtube-unavailable-videos -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }

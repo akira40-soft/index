@@ -358,6 +358,7 @@ class LevelSystem {
         else if (nivelAtual >= 3) patt = 'Bronze III 🥉';
         else if (nivelAtual >= 2) patt = 'Bronze II 🥉';
         else if (nivelAtual >= 1) patt = 'Bronze I 🥉';
+        else if (nivelAtual >= 0) patt = 'Zé ninguém 🤡';
 
         return patt;
     }
