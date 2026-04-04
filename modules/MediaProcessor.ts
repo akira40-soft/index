@@ -206,15 +206,16 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // Cadeia de tentativas com e SEM cookies.
-            // CRÍTICO: se o cookies.txt estiver banido/flaggado pelo YouTube,
-            // ele retorna ZERO formatos disponíveis para QUALQUER cliente.
-            // A tentativa anónima (useCookies: false) bypassa esse bloqueio.
+            // Cadeia de tentativas: combater dois bloqueios em simultâneo:
+            // 1) "Sign in to confirm you're not a bot" = O IP da cloud está bloqueado. Exige cookies obrigatoriamente.
+            // 2) "Requested format is not available" = O cliente usado com cookies (ex: android) não fornece itags sem PO_Token.
+            // Solução: usar clientes clássicos (tv_embedded, ios, default) COM COOKIES para passar ambos os filtros.
             const fallbacks: { client: string; fmt: string; useCookies: boolean }[] = [
-                { client: 'android', fmt: 'bestaudio/best', useCookies: true }, // com cookies, cliente android
-                { client: 'default', fmt: 'bestaudio/best', useCookies: false }, // ANÓNIMO - bypassa cookie ban
-                { client: 'tv_embedded', fmt: '140/m4a/18/22/best', useCookies: false }, // tv client anónimo
-                { client: 'ios', fmt: 'bestaudio/best', useCookies: false }
+                { client: 'tv_embedded', fmt: '140/m4a/18/22/best', useCookies: true },  // TV client COM cookies (melhor bypass)
+                { client: 'ios', fmt: '140/m4a/18/22/best', useCookies: true },  // iOS client COM cookies
+                { client: 'android', fmt: '140/m4a/18/22/best', useCookies: true },  // Android COM fallback de formatos alargado
+                { client: 'default', fmt: '140/m4a/18/22/best', useCookies: true },  // Web client normal COM cookies
+                { client: 'tv_embedded', fmt: '140/m4a/18/22/best', useCookies: false }  // Último recurso: anónimo
             ];
 
             let lastError = '';
@@ -271,12 +272,13 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // Cadeia de tentativas com e SEM cookies (mesmo motivo que no áudio)
+            // Cadeia de tentativas para VÍDEO (combatendo IP ban e formato missing simultaneamente)
             const fallbacks: { client: string; fmt: string; useCookies: boolean }[] = [
-                { client: 'android', fmt: 'bv*+ba/b', useCookies: true },
-                { client: 'default', fmt: 'bv*+ba/b', useCookies: false }, // ANÓNIMO
-                { client: 'tv_embedded', fmt: '22/18/best', useCookies: false },
-                { client: 'ios', fmt: 'bv*+ba/b', useCookies: false }
+                { client: 'tv_embedded', fmt: '22/18/b/best', useCookies: true },
+                { client: 'ios', fmt: '22/18/b/best', useCookies: true },
+                { client: 'android', fmt: '22/18/b/best', useCookies: true },
+                { client: 'default', fmt: '22/18/b/best', useCookies: true },
+                { client: 'tv_embedded', fmt: '22/18/b/best', useCookies: false }
             ];
 
             let lastError = '';
