@@ -65,7 +65,7 @@ class CommandHandler {
     public botProfile: any;
     public imageEffects: any;
     public presenceSimulator: any;
-public rateLimiter: any;
+    public rateLimiter: any;
     public securityLogger: any;
     public logger: any;
     public gridTacticsGame: any;
@@ -208,8 +208,8 @@ public rateLimiter: any;
             const fullArgs = parsed.textoCompleto;
             const isOwner = this.config.isDono(senderId, nome);
             const isPremium = this.subscriptionManager?.isPremium?.(senderId) ?? false;
-            const CYBER_OSINT_COMMANDS = ['shodan','cve','nmap','sqlmap','hydra','nuclei','nikto','masscan','whois','dns','geo','commix','searchsploit','socialfish','blackeye','theharvester','sherlock','holehe','netexec','winrm','impacket','dork','email','phone','username'];
-            
+            const CYBER_OSINT_COMMANDS = ['shodan', 'cve', 'nmap', 'sqlmap', 'hydra', 'nuclei', 'nikto', 'masscan', 'whois', 'dns', 'geo', 'commix', 'searchsploit', 'socialfish', 'blackeye', 'theharvester', 'sherlock', 'holehe', 'netexec', 'winrm', 'impacket', 'dork', 'email', 'phone', 'username'];
+
             if (CYBER_OSINT_COMMANDS.includes(command) && !isOwner && !isPremium) {
                 await this.bot.reply(m, '🔒 *PREMIUM REQUIRED*\n\nCybersecurity/OSINT tools são exclusivos para usuários Premium.\n\n#premium para verificar status ou #buy vip_7d');
                 return true;
@@ -364,7 +364,7 @@ public rateLimiter: any;
                     };
                     const targets = extractTargets(m);
                     if (targets.length > 0) {
-targetText = ` para @${JidUtils.getNumber(targets[0])}`;
+                        targetText = ` para @${JidUtils.getNumber(targets[0])}`;
                     }
 
                     const uptimeSeconds = Math.floor(process.uptime());
@@ -663,7 +663,7 @@ targetText = ` para @${JidUtils.getNumber(targets[0])}`;
                 case 'vip':
                     return await this._handlePremiumInfo(m, senderId);
 
-case 'addpremium':
+                case 'addpremium':
                 case 'addvip':
                     if (!isOwner) {
                         await this.securityLogger?.logAdminAction({
@@ -782,7 +782,7 @@ case 'addpremium':
                     // ✅ Permitir: Dono OU Admin do grupo
                     // Verifica se é dono
                     let podeExecutar = isOwner;
-                    
+
                     // Se não for dono e estiva em grupo, verifica se é admin
                     if (!isOwner && ehGrupo && this.groupManagement) {
                         podeExecutar = await this.groupManagement.isGroupAdmin(m.key.remoteJid, numeroReal);
@@ -852,8 +852,7 @@ case 'addpremium':
 
                 case 'blacklist':
                     if (!isOwner) return false;
-                    const blReport = this.moderationSystem.getBlacklistReport();
-                    return await this._reply(m, blReport);
+                    return await this._handleBlacklist(m, args, fullArgs);
 
                 case 'mutelist':
                 case 'silenciados':
@@ -2174,6 +2173,58 @@ ${P}menu osint — Comandos OSINT avançados`,
         return true;
     }
 
+    public async _handleBlacklist(m: any, args: string[], fullArgs: string): Promise<boolean> {
+        const action = args[0]?.toLowerCase();
+
+        if (!action || action === 'list') {
+            const blReport = this.moderationSystem?.getBlacklistReport ? this.moderationSystem.getBlacklistReport() : '❌ Blacklist não disponível';
+            return await this._reply(m, blReport);
+        }
+
+        let targets: string[] = [];
+        try {
+            if (typeof (this as any).handle?.extractTargets === 'function') {
+                targets = (this as any).handle.extractTargets(m);
+            }
+        } catch (e) { }
+
+        let targetId = targets[0];
+        if (!targetId && args[1]) {
+            const num = args[1].replace(/\D/g, '');
+            if (num) targetId = `${num}@s.whatsapp.net`;
+        }
+
+        // Try getting mentioned from context
+        if (!targetId) {
+            const mentioned = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            if (mentioned.length > 0) targetId = mentioned[0];
+        }
+
+        // Try getting from replied message
+        if (!targetId) {
+            const replyCtx = m.message?.extendedTextMessage?.contextInfo;
+            if (replyCtx && replyCtx.participant) targetId = replyCtx.participant;
+        }
+
+        if (!targetId) {
+            await this._reply(m, '❌ Marque alguém, responda a uma mensagem ou digite o número.\nExemplo: #blacklist add @user');
+            return true;
+        }
+
+        if (action === 'add') {
+            const reason = args.slice(2).join(' ') || 'Adicionado manualmente pelo dono';
+            const res = this.moderationSystem?.addToBlacklist ? this.moderationSystem.addToBlacklist(targetId, targetId.split('@')[0], targetId.split('@')[0], reason) : { success: false, message: 'Função indisponível' };
+            await this._reply(m, res.success ? `✅ Usuário ${targetId.split('@')[0]} adicionado à blacklist.` : `❌ Erro: ${res.message}`);
+        } else if (action === 'remove' || action === 'del') {
+            const success = this.moderationSystem?.removeFromBlacklist ? this.moderationSystem.removeFromBlacklist(targetId) : false;
+            await this._reply(m, success ? `✅ Usuário ${targetId.split('@')[0]} removido da blacklist.` : `❌ Usuário não encontrado na blacklist.`);
+        } else {
+            await this._reply(m, '❌ Ação inválida. Use add, remove ou list.');
+        }
+
+        return true;
+    }
+
     // ═════════════════════════════════════════════════════════════════
     // SISTEMA DE REGISTRO
     // ═════════════════════════════════════════════════════════════════
@@ -2361,7 +2412,7 @@ ${P}menu osint — Comandos OSINT avançados`,
 
                 ranking.forEach((user: any, index: number) => {
                     const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}º`;
-const numero = JidUtils.getNumber(user.userId);
+                    const numero = JidUtils.getNumber(user.userId);
                     texto += `${medal} @${numero}\n`;
                     texto += `   💵 total: ${user.total} moedas\n\n`;
                     mentions.push(user.userId);

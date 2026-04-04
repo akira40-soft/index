@@ -178,7 +178,6 @@ class MediaProcessor {
             '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
-            '--allow-unplayable-formats',
             '--socket-timeout 90',
             '--retries 5',
             '--http-chunk-size 10M',
@@ -195,8 +194,8 @@ class MediaProcessor {
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Cascade de formatos para máxima compatibilidade
-            const formatCascade = 'ba[ext=m4a]/ba[ext=webm]/ba/best[ext=m4a]/best[ext=webm]/best';
+            // Usa default nativo do yt-dlp amigável com --extract-audio
+            const formatCascade = 'bestaudio/best';
             actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
             actionFlags = `-o "${options.output}"`;
@@ -241,11 +240,11 @@ class MediaProcessor {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
 
-                // Retry com cascade de player_client
-                if (msg.includes('format not available') && retryCount < 4) {
+                // Retry com cascade de player_client usando regex robusto para erros de formato
+                if ((/format.*not available/i.test(msg) || /requested format/i.test(msg) || /no.*format/i.test(msg)) && retryCount < 4) {
                     const clients = ['web', 'ios', 'android', 'tv'];
                     const nextClient = clients[retryCount] || clients[clients.length - 1];
-                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Tentando player_client=${nextClient}...`);
+                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Corrigindo falha de formato com player_client=${nextClient}...`);
                     await new Promise(r => setTimeout(r, 2000));
                     return await this.downloadYouTubeAudio(url, retryCount + 1, nextClient);
                 }
@@ -272,9 +271,9 @@ class MediaProcessor {
      * DOWNLOAD DE VÍDEO - yt-dlp COM GAMBIARRAS
      * ═══════════════════════════════════════════════════════════════════════
      */
-    async downloadYouTubeVideo(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+    async downloadYouTubeVideo(url: string, retryCount: number = 0, playerClient: string = 'web_embedded'): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎬 Download vídeo: ${url}`);
+            this.logger?.info(`🎬 Download vídeo: ${url}${retryCount > 0 ? ` (retry ${retryCount}/4)` : ''} (player_client=${playerClient})`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -284,10 +283,12 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra web_embedded...`);
+            this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'video',
-                output: outputPath
+                output: outputPath,
+                retryCount: retryCount,
+                playerClient: playerClient
             });
 
             try {
@@ -296,6 +297,16 @@ class MediaProcessor {
             } catch (e: any) {
                 const msg = (e.stderr || e.message || '').split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
+
+                // Retry com cascade de player_client usando regex robusto para erros de formato
+                if ((/format.*not available/i.test(msg) || /requested format/i.test(msg) || /no.*format/i.test(msg)) && retryCount < 4) {
+                    const clients = ['web', 'ios', 'android', 'tv'];
+                    const nextClient = clients[retryCount] || clients[clients.length - 1];
+                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Corrigindo falha de formato com player_client=${nextClient}...`);
+                    await new Promise(r => setTimeout(r, 2000));
+                    return await this.downloadYouTubeVideo(url, retryCount + 1, nextClient);
+                }
+
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
 

@@ -250,7 +250,9 @@ class PermissionManager {
             'hidetag': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'totag': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'welcome': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'setwelcome': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'goodbye': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'setgoodbye': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'revlink': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'revogar': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'setdesc': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
@@ -268,6 +270,7 @@ class PermissionManager {
             'setbotphoto': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'setbotname': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'setbotstatus': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'blacklist': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'nmap': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
             'sqlmap': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
 
