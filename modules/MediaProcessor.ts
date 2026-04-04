@@ -166,27 +166,15 @@ class MediaProcessor {
         const cookieArg = cookiePath ? `--cookies "${cookiePath}"` : '';
         const retryCount = options.retryCount || 0;
 
-        // SIMPLIFICAÇÃO EXTREMA: Deixa o yt-dlp lidar com o client nativamente na nova versão
-        const bypassFlags = retryCount === 0 ? [
-            '--ignore-config',
-            '--allow-unplayable-formats',
-            '--socket-timeout 90',
-            '--retries 5',
-            '--no-warnings',
-            '--geo-bypass',
-            '--no-playlist'
-        ].filter(Boolean).join(' ') : [
-            '--ignore-config',
-            '--no-warnings',
-            '--socket-timeout 60'
-        ].filter(Boolean).join(' ');
+        // SIMPLIFICAÇÃO EXTREMA: String minimalista
+        const bypassFlags = '--ignore-config --js-runtimes node --no-warnings --no-playlist --socket-timeout 60';
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Sem forçar formatos específicos (-f). Deixa o yt-dlp usar o melhor formato nativo e extrair
+            // A flag -x já sinaliza internamente para o yt-dlp buscar bestaudio preferencialmente
             actionFlags = `-x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // Sem forçar formatos. Ele baixa o melhor nativamente.
+            // Deixa a escolha do melhor mux (bv+ba) para uso geral nativo
             actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
