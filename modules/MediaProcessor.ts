@@ -246,8 +246,19 @@ class MediaProcessor {
                     lastError = msg;
                 }
             }
+            // SE O YT-DLP FALHAR POR FALTA DE PO_TOKEN OU IP BLOCK, USAMOS AS APIS DESCENTRALIZADAS (PIPED)
+            this.logger?.warn(`🚨 yt-dlp bloqueado. Tentando Piped API (Proxy layer)...`);
+            const videoId = metadata.videoId || this._extractVideoId(finalUrl);
+            if (videoId) {
+                const pipedRes = await this._downloadStreamFromPiped(videoId, outputPath);
+                if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) {
+                    const buffer = await fs.promises.readFile(outputPath);
+                    await this.cleanupFile(outputPath);
+                    return { sucesso: true, buffer, metadata };
+                }
+            }
 
-            return { sucesso: false, error: `yt-dlp bloqueado após 3 métodos: ${lastError}` };
+            return { sucesso: false, error: `yt-dlp bloqueado após 5 métodos: ${lastError}` };
 
         } catch (error: any) {
             this.logger?.error(`❌ Erro download audio: ${error.message}`);
@@ -321,8 +332,28 @@ class MediaProcessor {
                     lastError = msg;
                 }
             }
+            // SE O YT-DLP FALHAR POR FALTA DE PO_TOKEN OU IP BLOCK, USAMOS AS APIS DESCENTRALIZADAS (PIPED)
+            this.logger?.warn(`🚨 yt-dlp vídeo bloqueado. Tentando Piped API (Proxy layer)...`);
+            const videoId = metadata.videoId || this._extractVideoId(finalUrl);
+            if (videoId) {
+                const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '720');
+                if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 50000) {
+                    const stats = fs.statSync(outputPath);
+                    if (stats.size > this.config.YT_MAX_SIZE_MB * 1024 * 1024) {
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: false, error: 'O vídeo final excedeu o tamanho máximo permitido.' };
+                    }
+                    if (stats.size < 50 * 1024 * 1024) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    } else {
+                        return { sucesso: true, filePath: outputPath, metadata };
+                    }
+                }
+            }
 
-            return { sucesso: false, error: `yt-dlp bloqueado após 3 métodos: ${lastError}` };
+            return { sucesso: false, error: `yt-dlp bloqueado após 5 métodos: ${lastError}` };
 
         } catch (error: any) {
             this.logger?.error(`❌ Erro download vídeo: ${error.message}`);
