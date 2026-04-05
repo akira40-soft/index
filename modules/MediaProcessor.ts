@@ -161,31 +161,30 @@ class MediaProcessor {
      * - Skip DASH manifest para formatos simples
      * - Usa formatos progressivamente mais genéricos em retries
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, useCookies?: boolean }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, useCookies?: boolean, customFlags?: string }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = (cookiePath && options.useCookies !== false) ? `--cookies "${cookiePath}"` : '';
 
-        // Se o playerClient for passado, usamos nas extractor-args
+        // Se o playerClient for passado, usamos nas extractor-args, e juntamos o skip=js para evitar as contas PO_Token
         const clientArg = options.playerClient && options.playerClient !== 'default'
-            ? `--extractor-args 'youtube:player_client=${options.playerClient}'`
-            : '';
+            ? `--extractor-args 'youtube:player_client=${options.playerClient};player_skip=webpage,configs,js'`
+            : `--extractor-args 'youtube:player_skip=webpage,configs,js'`;
 
-        const bypassFlags = `--ignore-config ${clientArg} --js-runtimes node --no-warnings --no-playlist`;
+        const bypassFlags = `--ignore-config ${clientArg} --js-runtimes node --no-warnings --no-playlist --rm-cache-dir`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // YT-DLP Puro: sem forçar itags
             actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // YT-DLP Puro: escolhe a melhor qualidade possível automaticamente
             actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = `--dump-json --no-download`;
         }
 
+        const custom = options.customFlags || '';
         const target = options.isSearch ? `ytsearch1:${url}` : url;
         const executable = this.ytdlpCommand || 'yt-dlp';
-        return `${executable} ${cookieArg} ${bypassFlags} ${actionFlags} "${target}"`;
+        return `${executable} ${cookieArg} ${bypassFlags} ${actionFlags} ${custom} "${target}"`;
     }
 
     /**
@@ -205,13 +204,17 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // TENTATIVAS HACK: Bypasses PO_Token do YouTube via manipulação extrema do cliente base (2024/2025 methods)
-            const fallbacks: { client: string; useCookies: boolean }[] = [
-                { client: 'default,-android_sdkless', useCookies: true }, // Hack 1: Evita SDKs banidos via android exclusion
-                { client: 'web_embedded,web,tv', useCookies: true }, // Hack 2: Combo forcing de clientes web premium
-                { client: 'ios,tv', useCookies: true }, // Hack 3: Apple device spoof mix
-                { client: 'mweb', useCookies: true }, // Hack 4: Mobile Web (historicamente isento de PO_Token)
-                { client: 'default', useCookies: false } // Hack 5: Padrão final
+            // TENTATIVAS HACK SUPREMAS: Gambiarras Nativas
+            // Usamos IP Spoofing de IPv6 falso para enganar o rate limit / ban do YouTube 
+            // no Railway e forçamos clientes exóticos.
+            const generateFakeIpv6 = () => `2001:41d0:1004:${Math.floor(Math.random() * 9999)}::${Math.floor(Math.random() * 99)}`;
+
+            const fallbacks: { client: string; useCookies: boolean; spoofIp?: boolean }[] = [
+                { client: 'ios,tv', useCookies: true, spoofIp: false }, // iOS com cookie limpo
+                { client: 'mweb', useCookies: true, spoofIp: true },    // Mobile Web + IP Spoofing (Gambiarra extrema)
+                { client: 'default,-android_sdkless', useCookies: true, spoofIp: false },
+                { client: 'tv_embedded', useCookies: false, spoofIp: true }, // Sem cookies + IP Spoofing
+                { client: 'default', useCookies: false, spoofIp: false }
             ];
 
             let lastError = '';
@@ -219,11 +222,14 @@ class MediaProcessor {
                 const fb = fallbacks[i];
                 this.logger?.info(`[ÁUDIO] Tentativa ${i + 1}/${fallbacks.length} (client: ${fb.client}, cookies: ${fb.useCookies})...`);
 
+                const extraFlags = fb.spoofIp ? `--add-header "X-Forwarded-For: ${generateFakeIpv6()}" --add-header "X-Real-IP: ${generateFakeIpv6()}" --force-ipv4` : '';
+
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'audio',
                     output: outputPath,
                     playerClient: fb.client,
-                    useCookies: fb.useCookies
+                    useCookies: fb.useCookies,
+                    customFlags: extraFlags
                 });
 
                 try {
@@ -266,13 +272,15 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // Estratégia HACK para VÍDEO (mesmo arsenal de clientes adulterados)
-            const fallbacks: { client: string; useCookies: boolean }[] = [
-                { client: 'default,-android_sdkless', useCookies: true },
-                { client: 'web_embedded,web,tv', useCookies: true },
-                { client: 'ios,tv', useCookies: true },
-                { client: 'mweb', useCookies: true },
-                { client: 'default', useCookies: false }
+            // TENTATIVAS HACK SUPREMAS: Gambiarras Nativas para VIDEO
+            const generateFakeIpv6 = () => `2001:41d0:1004:${Math.floor(Math.random() * 9999)}::${Math.floor(Math.random() * 99)}`;
+
+            const fallbacks: { client: string; useCookies: boolean; spoofIp?: boolean }[] = [
+                { client: 'ios,tv', useCookies: true, spoofIp: false },
+                { client: 'mweb', useCookies: true, spoofIp: true },
+                { client: 'default,-android_sdkless', useCookies: true, spoofIp: false },
+                { client: 'tv_embedded', useCookies: false, spoofIp: true },
+                { client: 'default', useCookies: false, spoofIp: false }
             ];
 
             let lastError = '';
@@ -280,11 +288,14 @@ class MediaProcessor {
                 const fb = fallbacks[i];
                 this.logger?.info(`[VÍDEO] Tentativa ${i + 1}/${fallbacks.length} (client: ${fb.client}, cookies: ${fb.useCookies})...`);
 
+                const extraFlags = fb.spoofIp ? `--add-header "X-Forwarded-For: ${generateFakeIpv6()}" --add-header "X-Real-IP: ${generateFakeIpv6()}" --force-ipv4` : '';
+
                 const cmd = this._buildYtdlpCommand(finalUrl, {
                     type: 'video',
                     output: outputPath,
                     playerClient: fb.client,
-                    useCookies: fb.useCookies
+                    useCookies: fb.useCookies,
+                    customFlags: extraFlags
                 });
 
                 try {
