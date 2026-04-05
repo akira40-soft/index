@@ -161,7 +161,7 @@ class MediaProcessor {
      * - Skip DASH manifest para formatos simples
      * - Usa formatos progressivamente mais genéricos em retries
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, formats?: string, useCookies?: boolean }): string {
+    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, useCookies?: boolean }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = (cookiePath && options.useCookies !== false) ? `--cookies "${cookiePath}"` : '';
 
@@ -170,18 +170,17 @@ class MediaProcessor {
             ? `--extractor-args 'youtube:player_client=${options.playerClient}'`
             : '';
 
-        const bypassFlags = `--ignore-config ${clientArg} --js-runtimes node --no-warnings --no-playlist --socket-timeout 90`;
+        const bypassFlags = `--ignore-config ${clientArg} --js-runtimes node --no-warnings --no-playlist`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            const fmt = options.formats || "140/m4a/18/22/b/best";
-            actionFlags = `-f "${fmt}" --compat-options no-youtube-unavailable-videos -x --audio-format mp3 -o "${options.output}"`;
+            // YT-DLP Puro: sem forçar itags
+            actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            const fmt = options.formats || "22/18/b/best";
-            actionFlags = `-f "${fmt}" --compat-options no-youtube-unavailable-videos -o "${options.output}"`;
+            // YT-DLP Puro: escolhe a melhor qualidade possível automaticamente
+            actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
-            // Json metadata doesn't strictly need a format but we bypass DASH to be safe
-            actionFlags = `--extractor-args 'youtube:player_client=android' --dump-json --no-download`;
+            actionFlags = `--dump-json --no-download`;
         }
 
         const target = options.isSearch ? `ytsearch1:${url}` : url;
@@ -206,16 +205,13 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // Cadeia de tentativas: combater dois bloqueios em simultâneo:
-            // 1) "Sign in to confirm you're not a bot" = O IP da cloud está bloqueado. Exige cookies obrigatoriamente.
-            // 2) "Requested format is not available" = O cliente usado com cookies (ex: android) não fornece itags sem PO_Token.
-            // Solução: usar clientes clássicos (tv_embedded, ios, default) COM COOKIES para passar ambos os filtros.
-            const fallbacks: { client: string; fmt: string; useCookies: boolean }[] = [
-                { client: 'tv_embedded', fmt: '140/m4a/18/22/best', useCookies: true },  // TV client COM cookies (melhor bypass)
-                { client: 'ios', fmt: '140/m4a/18/22/best', useCookies: true },  // iOS client COM cookies
-                { client: 'android', fmt: '140/m4a/18/22/best', useCookies: true },  // Android COM fallback de formatos alargado
-                { client: 'default', fmt: '140/m4a/18/22/best', useCookies: true },  // Web client normal COM cookies
-                { client: 'tv_embedded', fmt: '140/m4a/18/22/best', useCookies: false }  // Último recurso: anónimo
+            // Tentativas muito simples, sem forçar formatações pesadas.
+            const fallbacks: { client: string; useCookies: boolean }[] = [
+                { client: 'default', useCookies: true },   // Tentativa 1: O método "Default" puro
+                { client: 'tv_embedded', useCookies: true },   // Tentativa 2: Simples TV
+                { client: 'ios', useCookies: true },   // Tentativa 3: Simples iOS
+                { client: 'android', useCookies: true },   // Tentativa 4: Simples Android
+                { client: 'default', useCookies: false }   // Tentativa 5: Anónimo (sem cookies)
             ];
 
             let lastError = '';
@@ -227,7 +223,6 @@ class MediaProcessor {
                     type: 'audio',
                     output: outputPath,
                     playerClient: fb.client,
-                    formats: fb.fmt,
                     useCookies: fb.useCookies
                 });
 
@@ -246,18 +241,6 @@ class MediaProcessor {
                     lastError = msg;
                 }
             }
-            // SE O YT-DLP FALHAR POR FALTA DE PO_TOKEN OU IP BLOCK, USAMOS AS APIS DESCENTRALIZADAS (PIPED)
-            this.logger?.warn(`🚨 yt-dlp bloqueado. Tentando Piped API (Proxy layer)...`);
-            const videoId = metadata.videoId || this._extractVideoId(finalUrl);
-            if (videoId) {
-                const pipedRes = await this._downloadStreamFromPiped(videoId, outputPath);
-                if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) {
-                    const buffer = await fs.promises.readFile(outputPath);
-                    await this.cleanupFile(outputPath);
-                    return { sucesso: true, buffer, metadata };
-                }
-            }
-
             return { sucesso: false, error: `yt-dlp bloqueado após 5 métodos: ${lastError}` };
 
         } catch (error: any) {
@@ -283,13 +266,13 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // Cadeia de tentativas para VÍDEO (combatendo IP ban e formato missing simultaneamente)
-            const fallbacks: { client: string; fmt: string; useCookies: boolean }[] = [
-                { client: 'tv_embedded', fmt: '22/18/b/best', useCookies: true },
-                { client: 'ios', fmt: '22/18/b/best', useCookies: true },
-                { client: 'android', fmt: '22/18/b/best', useCookies: true },
-                { client: 'default', fmt: '22/18/b/best', useCookies: true },
-                { client: 'tv_embedded', fmt: '22/18/b/best', useCookies: false }
+            // Mesma estratégia purista para VÍDEO
+            const fallbacks: { client: string; useCookies: boolean }[] = [
+                { client: 'default', useCookies: true },
+                { client: 'tv_embedded', useCookies: true },
+                { client: 'ios', useCookies: true },
+                { client: 'android', useCookies: true },
+                { client: 'default', useCookies: false }
             ];
 
             let lastError = '';
@@ -301,7 +284,6 @@ class MediaProcessor {
                     type: 'video',
                     output: outputPath,
                     playerClient: fb.client,
-                    formats: fb.fmt,
                     useCookies: fb.useCookies
                 });
 
@@ -332,27 +314,6 @@ class MediaProcessor {
                     lastError = msg;
                 }
             }
-            // SE O YT-DLP FALHAR POR FALTA DE PO_TOKEN OU IP BLOCK, USAMOS AS APIS DESCENTRALIZADAS (PIPED)
-            this.logger?.warn(`🚨 yt-dlp vídeo bloqueado. Tentando Piped API (Proxy layer)...`);
-            const videoId = metadata.videoId || this._extractVideoId(finalUrl);
-            if (videoId) {
-                const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '720');
-                if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 50000) {
-                    const stats = fs.statSync(outputPath);
-                    if (stats.size > this.config.YT_MAX_SIZE_MB * 1024 * 1024) {
-                        await this.cleanupFile(outputPath);
-                        return { sucesso: false, error: 'O vídeo final excedeu o tamanho máximo permitido.' };
-                    }
-                    if (stats.size < 50 * 1024 * 1024) {
-                        const buffer = await fs.promises.readFile(outputPath);
-                        await this.cleanupFile(outputPath);
-                        return { sucesso: true, buffer, metadata };
-                    } else {
-                        return { sucesso: true, filePath: outputPath, metadata };
-                    }
-                }
-            }
-
             return { sucesso: false, error: `yt-dlp bloqueado após 5 métodos: ${lastError}` };
 
         } catch (error: any) {
