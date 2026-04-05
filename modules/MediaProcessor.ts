@@ -205,13 +205,13 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // Tentativas muito simples, sem forçar formatações pesadas.
+            // TENTATIVAS HACK: Bypasses PO_Token do YouTube via manipulação extrema do cliente base (2024/2025 methods)
             const fallbacks: { client: string; useCookies: boolean }[] = [
-                { client: 'default', useCookies: true },   // Tentativa 1: O método "Default" puro
-                { client: 'tv_embedded', useCookies: true },   // Tentativa 2: Simples TV
-                { client: 'ios', useCookies: true },   // Tentativa 3: Simples iOS
-                { client: 'android', useCookies: true },   // Tentativa 4: Simples Android
-                { client: 'default', useCookies: false }   // Tentativa 5: Anónimo (sem cookies)
+                { client: 'default,-android_sdkless', useCookies: true }, // Hack 1: Evita SDKs banidos via android exclusion
+                { client: 'web_embedded,web,tv', useCookies: true }, // Hack 2: Combo forcing de clientes web premium
+                { client: 'ios,tv', useCookies: true }, // Hack 3: Apple device spoof mix
+                { client: 'mweb', useCookies: true }, // Hack 4: Mobile Web (historicamente isento de PO_Token)
+                { client: 'default', useCookies: false } // Hack 5: Padrão final
             ];
 
             let lastError = '';
@@ -266,12 +266,12 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // Mesma estratégia purista para VÍDEO
+            // Estratégia HACK para VÍDEO (mesmo arsenal de clientes adulterados)
             const fallbacks: { client: string; useCookies: boolean }[] = [
-                { client: 'default', useCookies: true },
-                { client: 'tv_embedded', useCookies: true },
-                { client: 'ios', useCookies: true },
-                { client: 'android', useCookies: true },
+                { client: 'default,-android_sdkless', useCookies: true },
+                { client: 'web_embedded,web,tv', useCookies: true },
+                { client: 'ios,tv', useCookies: true },
+                { client: 'mweb', useCookies: true },
                 { client: 'default', useCookies: false }
             ];
 
