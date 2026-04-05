@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════
  * PRESENCE SIMULATOR - AKIRA BOT V21 (REACTIVE EDITION)
  * ═══════════════════════════════════════════════════════════════════════
@@ -222,13 +222,16 @@ class PresenceSimulator {
      */
     calculateTypingDuration(text: string): number {
         if (!text) return 500;
-        // IA é mais lenta (humana), comandos são instantâneos
-        const isCommand = text.startsWith('#') || text.startsWith('/');
-        if (isCommand) return 400; // Delay mínimo apenas para feedback visual
 
-        const base = text.length * 25;
-        const jitter = Math.random() * 500;
-        return Math.min(Math.max(base + jitter, 1000), 7000);
+        const isCommand = text.startsWith('#') || text.startsWith('/');
+        if (isCommand) return 400;
+
+        // 60ms por caractere = ~16 chars/seg (Realismo Humano)
+        const base = text.length * 60;
+        const jitter = Math.random() * 1500;
+
+        // Mínimo de 1.5s, Máximo de 20s para respostas longas
+        return Math.min(Math.max(base + jitter, 1500), 20000);
     }
 }
 

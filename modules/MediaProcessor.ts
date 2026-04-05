@@ -170,13 +170,21 @@ class MediaProcessor {
             ? `--extractor-args 'youtube:player_client=${options.playerClient}'`
             : '';
 
-        const bypassFlags = `--ignore-config ${clientArg} --js-runtimes node --no-warnings --no-playlist`;
+        const uaArg = options.playerClient === 'android'
+            ? '--user-agent "com.google.android.youtube/19.29.37 (Linux; U; Android 14; pt_BR; Pixel 7 Pro Build/AP2A.240705.004)"'
+            : (options.playerClient === 'ios'
+                ? '--user-agent "com.google.ios.youtube/19.29.1 (iPhone16,2; iOS 17_5_1; pt_BR)"'
+                : '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"');
+
+        const bypassFlags = `--ignore-config ${clientArg} ${uaArg} --js-runtimes node --no-warnings --no-playlist --no-check-certificate --cache-dir "${path.join(this.tempFolder, 'ytdlp_cache')}"`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            actionFlags = `-x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // ✅ FORMATO RESILIENTE: Prioriza m4a simples (não-DASH) para evitar erros de format not available
+            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            actionFlags = `-o "${options.output}"`;
+            // ✅ FORMATO RESILIENTE VÍDEO: Limita a 720p para maior compatibilidade e menor chance de 403
+            actionFlags = `-f "bestvideo[height<=720]+bestaudio/best[height<=720]/best" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = `--dump-json --no-download`;
         }
@@ -235,12 +243,38 @@ class MediaProcessor {
                         return { sucesso: true, buffer, metadata };
                     }
                 } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg}`);
+                    const msg = (e.stderr || e.message || '').toLowerCase();
+                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg.split('\n')[0]}`);
                     lastError = msg;
+
+                    // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in" ou 403), pula logo para o Invidious/Piped
+                    // Não adianta tentar outros clientes se o IP já foi marcado ou o YouTube exige login
+                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('bot')) {
+                        this.logger?.warn('🚫 Bloqueio de bot detectado. Saltando retries locais e usando Invidious/Piped Proxy...');
+                        break;
+                    }
                 }
             }
-            return { sucesso: false, error: `yt-dlp bloqueado após 5 métodos: ${lastError}` };
+
+            // 🌊 FALLBACK FINAL: Tenta baixar via Outro Servidor (Invidious Proxy)
+            this.logger?.info('🚀 Iniciando download via INVIDIOUS PROXY (Bypass IP)...');
+            const invidiousRes = await this._downloadViaInvidiousProxy(metadata.videoId, outputPath, 'audio');
+
+            if (invidiousRes.sucesso && fs.existsSync(outputPath)) {
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+            }
+
+            // 🌊 ÚLTIMO RECURSO: Piped Global
+            const pipedRes = await this._downloadStreamFromPiped(metadata.videoId, outputPath);
+            if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                const buffer = await fs.promises.readFile(outputPath);
+                await this.cleanupFile(outputPath);
+                return { sucesso: true, buffer, metadata };
+            }
+
+            return { sucesso: false, error: `YouTube bloqueado (IP Railway). Fallbacks também falharam: ${lastError}` };
 
         } catch (error: any) {
             this.logger?.error(`❌ Erro download audio: ${error.message}`);
@@ -308,12 +342,44 @@ class MediaProcessor {
                         }
                     }
                 } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').split('\n')[0];
-                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg}`);
+                    const msg = (e.stderr || e.message || '').toLowerCase();
+                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg.split('\n')[0]}`);
                     lastError = msg;
+
+                    // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in" ou 403), pula logo para o Invidious/Piped
+                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('bot')) {
+                        this.logger?.warn('🚫 Bloqueio de bot detectado (Vídeo). Usando fallbacks de Proxy...');
+                        break;
+                    }
                 }
             }
-            return { sucesso: false, error: `yt-dlp bloqueado após 5 métodos: ${lastError}` };
+
+            // 🌊 FALLBACK FINAL VÍDEO: Invidious Proxy
+            this.logger?.info('🚀 Iniciando download VÍDEO via INVIDIOUS PROXY...');
+            const invidiousRes = await this._downloadViaInvidiousProxy(metadata.videoId, outputPath, 'video');
+            if (invidiousRes.sucesso && fs.existsSync(outputPath)) {
+                const stats = fs.statSync(outputPath);
+                if (stats.size < 50 * 1024 * 1024) {
+                    const buffer = await fs.promises.readFile(outputPath);
+                    await this.cleanupFile(outputPath);
+                    return { sucesso: true, buffer, metadata };
+                }
+                return { sucesso: true, filePath: outputPath, metadata };
+            }
+
+            // 🌊 ÚLTIMO RECURSO: Piped VÍDEO
+            const pipedRes = await this._downloadVideoStreamFromPiped(metadata.videoId, outputPath);
+            if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                const stats = fs.statSync(outputPath);
+                if (stats.size < 50 * 1024 * 1024) {
+                    const buffer = await fs.promises.readFile(outputPath);
+                    await this.cleanupFile(outputPath);
+                    return { sucesso: true, buffer, metadata };
+                }
+                return { sucesso: true, filePath: outputPath, metadata };
+            }
+
+            return { sucesso: false, error: `Vídeo bloqueado. Fallbacks falharam: ${lastError}` };
 
         } catch (error: any) {
             this.logger?.error(`❌ Erro download vídeo: ${error.message}`);

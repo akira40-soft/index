@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════
  * CLASSE: ModerationSystem (VERSÃO COM SEGURANÇA MILITAR)
  * ═══════════════════════════════════════════════════════════════════════
@@ -13,6 +13,7 @@
 import ConfigManager from './ConfigManager.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import JidUtils from './JidUtils.js';
 
 class ModerationSystem {
     private config: any;
@@ -706,10 +707,11 @@ class ModerationSystem {
     * Verifica se usuário está na blacklist
     */
     public isBlacklisted(userId: string): boolean {
+        const numericId = JidUtils.getNumber(userId);
         const list = this.loadBlacklistDataSync();
         if (!Array.isArray(list)) return false;
 
-        const found = list.find(entry => entry && entry.id === userId);
+        const found = list.find(entry => entry && (entry.id === numericId || entry.id === userId));
 
         if (found) {
             if (found.expiresAt && found.expiresAt !== 'PERMANENT') {
@@ -725,10 +727,12 @@ class ModerationSystem {
     }
 
     public addToBlacklist(userId: string, userName: string, userNumber: string, reason: string = 'spam', expiryMs: number | null = null): any {
+        const numericId = JidUtils.getNumber(userId);
         const list = this.loadBlacklistDataSync();
         const arr = Array.isArray(list) ? list : [];
 
-        if (arr.find(x => x && x.id === userId)) {
+        // Verifica duplicata por ID numérico ou ID original
+        if (arr.find(x => x && (x.id === numericId || x.id === userId))) {
             return { success: false, message: 'Já estava na blacklist' };
         }
 
@@ -738,7 +742,7 @@ class ModerationSystem {
         }
 
         const entry = {
-            id: userId,
+            id: numericId, // Armazena sempre o numérico para consistência total
             name: userName,
             number: userNumber,
             reason,
@@ -779,9 +783,10 @@ class ModerationSystem {
     * Remove da blacklist
     */
     public removeFromBlacklist(userId: string): boolean {
+        const numericId = JidUtils.getNumber(userId);
         const list = this.loadBlacklistDataSync();
         const arr = Array.isArray(list) ? list : [];
-        const index = arr.findIndex(x => x && x.id === userId);
+        const index = arr.findIndex(x => x && (x.id === numericId || x.id === userId));
 
         if (index !== -1) {
             const removed = arr[index];
@@ -817,7 +822,42 @@ class ModerationSystem {
                 return [];
             }
 
-            return JSON.parse(data);
+            const list = JSON.parse(data);
+            if (!Array.isArray(list)) return [];
+
+            // 🛠️ AUTO-CLEANUP: Remove duplicatas e normaliza IDs antigos on-the-fly
+            const uniqueMap = new Map();
+            let hasDuplicates = false;
+
+            for (const entry of list) {
+                if (!entry || !entry.id) continue;
+                const numericId = JidUtils.getNumber(entry.id);
+
+                // Se já existe e o ID atual não é o numérico perfeito, ou se é duplicata real
+                if (uniqueMap.has(numericId)) {
+                    hasDuplicates = true;
+                    // Mantém a entrada mais completa ou recente (no caso a que já está ou a nova)
+                    continue;
+                }
+
+                // Normaliza o ID da entry se necessário
+                if (entry.id !== numericId) {
+                    entry.id = numericId;
+                    hasDuplicates = true;
+                }
+
+                uniqueMap.set(numericId, entry);
+            }
+
+            const cleanList = Array.from(uniqueMap.values());
+
+            // Se limpamos algo, salva de volta para o disco para não repetir
+            if (hasDuplicates) {
+                this.logger.info(`🧹 [BLACKLIST] Limpeza automática: ${list.length} -> ${cleanList.length} entradas.`);
+                this._saveBlacklist(cleanList);
+            }
+
+            return cleanList;
         } catch (e: any) {
             this.logger.error('Erro ao carregar blacklist:', e.message);
             return [];

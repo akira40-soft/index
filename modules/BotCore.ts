@@ -668,8 +668,8 @@ class BotCore {
                 }
             }
 
-            await this.presenceSimulator.simulateTicks(m, true, ehGrupo);
-            await this.presenceSimulator.simulateTyping(m.key.remoteJid, 1500);
+            // Digitação e Ticks agora ocorrem após a resposta no novo fluxo para realismo
+            // (Simulação de silêncio enquanto processa)
 
             this.logger.debug('⬇️ Baixando imagem...');
             // ⚡ OTIMIZAÇÃO: Deixa o MediaProcessor extrair a imagem de qualquer container (viewOnce, ephemeral, etc)
@@ -726,9 +726,19 @@ class BotCore {
 
             const resposta = resultado.resposta || 'Sem resposta.';
 
-            // ⚡ OTIMIZAÇÃO: Simulação não-bloqueante
+            // ✅ NOVO FLUXO: Digitação Realista iniciada agora que temos a resposta
             if (this.presenceSimulator) {
-                this.presenceSimulator.simulateTyping(m.key.remoteJid, this.presenceSimulator.calculateTypingDuration(resposta)).catch(() => { });
+                const typingDuration = this.presenceSimulator.calculateTypingDuration(resposta);
+                this.logger.info(`✍️ [TYPING] Simulando digitação por ${Math.round(typingDuration / 1000)}s...`);
+
+                // Inicia o "Digitando..." no WhatsApp
+                await this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid);
+
+                // Aguarda o tempo real de digitação (bloqueia o envio, mas não o bot inteiro)
+                await delay(typingDuration);
+
+                // Pára e envia
+                await this.presenceSimulator.stop(m.key.remoteJid);
             }
 
             // ✅ LÓGICA DE REPLY CONDICIONAL - CORRIGIDA:
@@ -881,13 +891,9 @@ class BotCore {
                 sender_is_bot: false
             });
 
-            // ✅ Inicia composing ANTES da API com delay mínimo de 800ms
-            // Garante que o usuário sempre vê o status 'digitando' antes da resposta
-            if (this.presenceSimulator) {
-                this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid).catch(() => { });
-            }
-            // Delay mínimo: garante que o composing aparece na UI antes da mensagem
-            const composingStart = Date.now();
+            // 🤫 [SILÊNCIO] O bot agora "pensa" em silêncio antes de digitar (Realismo Humano)
+            // (REMOVIDO: early composing)
+            const processingStart = Date.now();
 
             const resultado = await this.apiClient.processMessage(payload);
             if (!resultado.success) {
@@ -905,10 +911,6 @@ class BotCore {
                 await this.sock.sendMessage(m.key.remoteJid, { text: 'Tive um problema. Tenta de novo?' }, opcoes);
                 return;
             }
-
-            // Garante delay mínimo de 800ms de composing para qualquer resposta
-            const elapsed = Date.now() - composingStart;
-            if (elapsed < 800) await delay(800 - elapsed);
 
             const resposta = resultado.resposta || 'Sem resposta';
 
@@ -938,10 +940,20 @@ class BotCore {
                 }
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
             } else {
-                // ✅ BUG FIX #3: Para o 'composing' iniciado antes da API e envia imediatamente
-                // O 'composing' já foi disparado ANTES da chamada à API.
-                // Aqui apenas paramos e enviamos — sem nenhum delay extra.
-                if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
+                // ✅ NOVO FLUXO: Digitação Realista pós-processamento (APENAS PARA TEXTO)
+                if (this.presenceSimulator) {
+                    const typingDuration = this.presenceSimulator.calculateTypingDuration(resposta);
+                    this.logger.info(`✍️ [TYPING] Resposta pronta. Simulando digitação (${Math.round(typingDuration / 1000)}s)...`);
+
+                    // Inicia status visual no WhatsApp
+                    await this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid);
+
+                    // Espera o tempo humano
+                    await delay(typingDuration);
+
+                    // Finaliza status
+                    await this.presenceSimulator.stop(m.key.remoteJid);
+                }
 
                 // ✅ LÓGICA DE REPLY CONDICIONAL (MESMO DO IMAGEMESSAGE):
                 // - PV: responde em reply APENAS se usuario mandou em reply
