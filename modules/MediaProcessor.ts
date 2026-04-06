@@ -173,46 +173,52 @@ class MediaProcessor {
     }
 
     /**
-     * Constrói o comando yt-dlp com GAMBIARRAS REAIS contra bloqueios do YouTube
-     * - Usa PO Token se disponivel (variavel YT_PO_TOKEN)
-     * - Cookies para autenticacao
-     * - Skip webpage para evitar JS anti-bot
-     * - Node.js como runtime JS obrigatoria
-     * - Formatos genericos para evitar "not available"
+     * Constrói o comando yt-dlp — abordagem minimalista e testada contra bloqueios.
+     *
+     * POR QUE SEM `--no-check-certificates`? Causa falhas em servidores Railway.
+     * POR QUE SEM `--js-runtimes nodejs`? O yt-dlp já roda JS internamente; esta flag
+     *   força uso do sistema host que em Alpine/Debian slim pode não ter Node.js correto.
+     * POR QUE SEM `player_skip=webpage`? YouTube exige resposta do player para validar
+     *   a sessão com cookies. Sem isso os links de stream vêm sem signature Cipher.
+     *
+     * Estratégia (baseada em yt-dlp/issues e projetos como librebot/yt-dlp-wrapper):
+     *   1º  tv_embedded  + cookies → mais resistente a blocks em Railway sem PO_TOKEN
+     *   2º  mweb         + cookies  → fallback mobile web
+     *   3º  ios          + cookies  → fallback iOS
+     *   4º  android      + cookies  → fallback Android
+     *   5º  web_creator  + PO_TOKEN → quando token disponível
      */
-    private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, useCookies?: boolean, customFlags?: string }): string {
+    private _buildYtdlpCommand(url: string, options: {
+        type: 'audio' | 'video' | 'json';
+        output?: string;
+        isSearch?: boolean;
+        playerClient?: string;
+        useCookies?: boolean;
+        customFlags?: string;
+    }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = (cookiePath && options.useCookies !== false) ? `--cookies "${cookiePath}"` : '';
 
-        // PO Token: arma de fogo contra deteccao de bot em IPs de datacenter
+        // PO Token
         const poTokenArgs = this._getPoTokenArgs();
         const poTokenStr = poTokenArgs.length > 0 ? `${poTokenArgs[0]} "${poTokenArgs[1]}"` : '';
 
-        // Multi-client spoofing
+        // Client do player — padrão simples, sem multi-client
         const playerClient = options.playerClient && options.playerClient !== 'default'
             ? options.playerClient
-            : 'mweb,ios,android';
+            : 'tv_embedded';
 
-        // player_skip=webpage: nao carrega a pagina HTML, evita JS anti-bot do YouTube
-        const clientArg = `--extractor-args "youtube:player_client=${playerClient};player_skip=webpage;lang=pt"`;
+        // Extractor args — limpo, sem player_skip
+        const clientArg = `--extractor-args "youtube:player_client=${playerClient}"`;
 
-        // User-Agents atualizados para 2026 (Android 15 e iOS 18)
-        const uaArg = playerClient.includes('android')
-            ? '--user-agent "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AP3A.241105.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"'
-            : (playerClient.includes('ios')
-                ? '--user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"'
-                : '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"');
-
-        const bypassFlags = `--ignore-config ${clientArg} ${uaArg} --js-runtimes nodejs --no-playlist --no-check-certificates --extractor-retries 3 --retry-sleep fragment:linear:1 --no-cache-dir`;
+        // Retry leve nativo do yt-dlp
+        const retryFlags = `--ignore-errors --no-abort-on-error --no-playlist --extractor-retries 2`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Formato generico: ba (best audio) ou b (best) como fallback
-            // Sem filtro de extensao para evitar "not available"
-            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 --prefer-ffmpeg -o "${options.output}"`;
+            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // best video+audio ou combinado ate 720p
-            actionFlags = `-f "bv*[height<=720]+ba/b[height<=720]/best" -o "${options.output}"`;
+            actionFlags = `-f "bestvideo[height<=720]+bestaudio[ext=m4a]/best[height<=720]/best" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = `--dump-json --no-download`;
         }
@@ -220,7 +226,7 @@ class MediaProcessor {
         const custom = options.customFlags || '';
         const target = options.isSearch ? `ytsearch1:${url}` : url;
         const executable = this.ytdlpCommand || 'yt-dlp';
-        const parts = [executable, cookieArg, bypassFlags, poTokenStr, actionFlags, custom, `"${target}"`];
+        const parts = [executable, cookieArg, poTokenStr, clientArg, retryFlags, actionFlags, custom, `"${target}"`];
         return parts.filter(Boolean).join(' ');
     }
 
@@ -242,22 +248,21 @@ class MediaProcessor {
             const outputPath = this.generateRandomFilename('mp3');
 
             // TENTATIVAS OTIMIZADAS + PO TOKEN
+            // tv_embedded é o mais resistente para Railway sem PO_TOKEN
             const hasPoToken = !!this.config?.YT_PO_TOKEN;
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
-                    { client: 'web+safari', useCookies: true },             // Web + PO Token (mais forte)
+                    { client: 'web_creator', useCookies: true },            // creator + PO Token
+                    { client: 'tv_embedded', useCookies: true },            // TV Embedded
                     { client: 'mweb', useCookies: true },                    // Mobile Web
-                    { client: 'ios', useCookies: true },                     // Apple iOS
-                    { client: 'android', useCookies: true },                  // Android
-                    { client: 'tv_embedded', useCookies: true },             // TV Embedded
-                    { client: 'default', useCookies: false }                 // Último recurso
+                    { client: 'ios', useCookies: true },                     // iOS
+                    { client: 'android', useCookies: true },                 // Android
                 ]
                 : [
+                    { client: 'tv_embedded', useCookies: true },            // Mais resistente a 403
                     { client: 'mweb', useCookies: true },                    // Mobile Web
-                    { client: 'ios', useCookies: true },                     // Apple iOS
-                    { client: 'android', useCookies: true },                  // Android
-                    { client: 'tv_embedded', useCookies: true },             // TV Embedded
-                    { client: 'default', useCookies: false }                 // Último recurso
+                    { client: 'ios', useCookies: true },                     // iOS
+                    { client: 'android', useCookies: true },                 // Android
                 ];
 
             let lastError = '';
@@ -282,13 +287,17 @@ class MediaProcessor {
                         return { sucesso: true, buffer, metadata };
                     }
                 } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').toLowerCase();
-                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg.split('\n')[0]}`);
-                    lastError = msg;
+                    const raw = (e.stderr || e.message || '').toString().trim();
+                    const lines = raw.split('\n').filter(l => l.trim());
+                    const errSummary = lines.slice(-5).join(' | ');
+                    const fullError = raw.substring(0, 500);
+                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${errSummary}`);
+                    this.logger?.debug(`   Full error: ${fullError}`);
+                    lastError = raw.toLowerCase();
 
                     // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in", 403, 429), pula logo para o Invidious/Piped
                     // Não adianta tentar outros clientes se o IP já foi marcado ou o YouTube exige login
-                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('429') || msg.includes('bot')) {
+                    if (lastError.includes('sign in') || lastError.includes('403') || lastError.includes('429') || lastError.includes('bot')) {
                         this.logger?.warn('🚫 Bloqueio de bot detectado (403/429/Sign-in). Saltando retries locais e usando Invidious/Piped Proxy...');
                         break;
                     }
@@ -342,15 +351,14 @@ class MediaProcessor {
             const hasPoToken = !!this.config?.YT_PO_TOKEN;
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
-                    { client: 'web+safari', useCookies: true },
-                    { client: 'mweb', useCookies: true },
+                    { client: 'web_creator', useCookies: true },
                     { client: 'tv_embedded', useCookies: true },
+                    { client: 'mweb', useCookies: true },
                     { client: 'android', useCookies: true },
-                    { client: 'default', useCookies: false }
                 ]
                 : [
-                    { client: 'mweb', useCookies: true },
                     { client: 'tv_embedded', useCookies: true },
+                    { client: 'mweb', useCookies: true },
                     { client: 'android', useCookies: true },
                     { client: 'ios', useCookies: true },
                     { client: 'default', useCookies: false }
@@ -390,12 +398,16 @@ class MediaProcessor {
                         }
                     }
                 } catch (e: any) {
-                    const msg = (e.stderr || e.message || '').toLowerCase();
-                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg.split('\n')[0]}`);
-                    lastError = msg;
+                    const raw = (e.stderr || e.message || '').toString().trim();
+                    const lines = raw.split('\n').filter(l => l.trim());
+                    const errSummary = lines.slice(-5).join(' | ');
+                    const fullError = raw.substring(0, 500);
+                    this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${errSummary}`);
+                    this.logger?.debug(`   Full error: ${fullError}`);
+                    lastError = raw.toLowerCase();
 
                     // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in", 403, 429), pula logo para o Invidious/Piped
-                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('429') || msg.includes('bot')) {
+                    if (lastError.includes('sign in') || lastError.includes('403') || lastError.includes('429') || lastError.includes('bot')) {
                         this.logger?.warn('🚫 Bloqueio de bot detectado (Vídeo - 403/429). Usando fallbacks de Proxy...');
                         break;
                     }
@@ -604,15 +616,18 @@ class MediaProcessor {
      * Obtém metadados via Invidious API
      */
     private async _getMetadataFromInvidious(videoId: string): Promise<any> {
-        // Instâncias Invidious VERIFICADAS e ATIVAS (Março 2026)
+        // Instâncias Invidious VERIFICADAS e ATIVAS (Abril 2026)
         const invidiousInstances = [
-            'https://inv.zzls.xyz',           // Estável 2026
-            'https://invidious.ducks.party',
-            'https://invidious.io.lol',
-            'https://invidious.incogniweb.net',
+            'https://inv.tux.pizza',
+            'https://iv.ggtyler.dev',
+            'https://iv.datura.network',
+            'https://inv.bpbonline.co',
+            'https://invidious.fdn.frml.xyz',
+            'https://invidious.lunar.icu',
+            'https://vid.puffyan.us',
+            'https://inv.zzls.xyz',           // Existente
             'https://yewtu.be',
-            'https://inv.nadeko.net',
-            'https://invidious.privacydev.net'
+            'https://invidious.ducks.party'
         ];
 
         for (const instance of invidiousInstances) {
@@ -650,12 +665,12 @@ class MediaProcessor {
      */
     private async _getMetadataFromPiped(videoId: string): Promise<any> {
         const pipedInstances = [
-            'https://pipedapi.drgns.space',    // Estável 2026
-            'https://pipedapi.official.chat',
-            'https://pipedapi.rivm.tech',
-            'https://pipedapi.kavin.rocks',
-            'https://pipedapi.tokhmi.xyz',
-            'https://api.piped.projectsegfau.lt'
+            'https://api.piped.yt',                 // Oficial
+            'https://pipedapi.in.projectsegfau.lt',
+            'https://piped-api.privacy.com.de',
+            'https://pi.ppedata.live',
+            'https://pipedapi.adminforge.de',
+            'https://piped.kavin.rocks'
         ];
 
         for (const instance of pipedInstances) {
@@ -698,14 +713,14 @@ class MediaProcessor {
             return { sucesso: false, error: 'videoId não pode ser vazio' };
         }
 
-        // Instâncias Piped VERIFICADAS (Março 2026)
+        // Instâncias Piped VERIFICADAS (Abril 2026)
         const pipedInstances = [
-            'https://pipedapi.drgns.space',
-            'https://pipedapi.official.chat',
-            'https://pipedapi.rivm.tech',
-            'https://pipedapi.kavin.rocks',
-            'https://pipedapi.tokhmi.xyz',
-            'https://api.piped.projectsegfau.lt'
+            'https://api.piped.yt',
+            'https://pipedapi.in.projectsegfau.lt',
+            'https://piped-api.privacy.com.de',
+            'https://pi.ppedata.live',
+            'https://pipedapi.adminforge.de',
+            'https://piped.kavin.rocks'
         ];
 
         for (const instance of pipedInstances) {
@@ -787,14 +802,14 @@ class MediaProcessor {
             return { sucesso: false, error: 'videoId não pode ser vazio' };
         }
 
-        // Instâncias Piped VERIFICADAS (Março 2026)
+        // Instâncias Piped VERIFICADAS (Abril 2026)
         const pipedInstances = [
-            'https://pipedapi.drgns.space',
-            'https://pipedapi.official.chat',
-            'https://pipedapi.rivm.tech',
-            'https://pipedapi.kavin.rocks',
-            'https://pipedapi.tokhmi.xyz',
-            'https://api.piped.projectsegfau.lt'
+            'https://api.piped.yt',
+            'https://pipedapi.in.projectsegfau.lt',
+            'https://piped-api.privacy.com.de',
+            'https://pi.ppedata.live',
+            'https://pipedapi.adminforge.de',
+            'https://piped.kavin.rocks'
         ];
 
         for (const instance of pipedInstances) {
@@ -908,15 +923,18 @@ class MediaProcessor {
     ): Promise<{ sucesso: boolean; error?: string }> {
         if (!videoId) return { sucesso: false, error: 'videoId vazio' };
 
-        // Instâncias Invidious com suporte a streaming (Março 2026)
+        // Instâncias Invidious com suporte a streaming (Abril 2026)
         const instances = [
+            'https://inv.tux.pizza',
+            'https://iv.ggtyler.dev',
+            'https://iv.datura.network',
+            'https://inv.bpbonline.co',
+            'https://invidious.fdn.frml.xyz',
+            'https://invidious.lunar.icu',
+            'https://vid.puffyan.us',
             'https://inv.zzls.xyz',
-            'https://invidious.ducks.party',
-            'https://invidious.io.lol',
-            'https://invidious.incogniweb.net',
             'https://yewtu.be',
-            'https://inv.nadeko.net',
-            'https://invidious.privacydev.net'
+            'https://invidious.ducks.party'
         ];
 
         for (const instance of instances) {

@@ -1695,13 +1695,65 @@ ${P}menu osint — Comandos OSINT avançados`,
         }
 
         const reportId = Math.random().toString(36).substring(7).toUpperCase();
-        const origem = ehGrupo ? `Grupo (${m.key.remoteJid.split('@')[0]})` : 'Privado (PV)';
         const timestamp = new Date().toLocaleString('pt-BR');
+
+        // ✅ CORREÇÃO: Extrair número REAL do sender
+        // Baileys cloud pode enviar LID (ex: 123xxx@lid) no participant,
+        // mas phone_number no metadata da mensagem (novo campo)
+        let numeroReal = 'desconhecido';
+        try {
+            if (m.phoneNumber) {
+                // Novo campo Baileys cloud — contém número real
+                numeroReal = JidUtils.cleanPhoneNumber(String(m.phoneNumber).split('@')[0]);
+            } else if (m.key.participant) {
+                const pNum = JidUtils.getNumber(m.key.participant);
+                if (pNum) numeroReal = JidUtils.cleanPhoneNumber(pNum);
+            } else if (m.key.remoteJid && !String(m.key.remoteJid).endsWith('@g.us')) {
+                const rNum = JidUtils.getNumber(m.key.remoteJid);
+                if (rNum) numeroReal = JidUtils.cleanPhoneNumber(rNum);
+            } else {
+                numeroReal = JidUtils.cleanPhoneNumber(senderId.split('@')[0]) || 'desconhecido';
+            }
+        } catch (e) {
+            numeroReal = 'desconhecido';
+        }
+
+        // ✅ Fallback: se o senderId foi passado como número limpo, tenta isso também
+        if (numeroReal === 'desconhecido') {
+            const fallback = JidUtils.cleanPhoneNumber(senderId);
+            if (fallback) numeroReal = fallback;
+        }
+
+        // ✅ CORREÇÃO: Buscar nome real do grupo e link de convite
+        let origem: string;
+        let grupoLink = '';
+        if (ehGrupo) {
+            try {
+                const groupMeta = await this.sock.groupMetadata(m.key.remoteJid);
+                const groupName = groupMeta.subject || 'Grupo Desconhecido';
+                origem = `Grupo: *${groupName}*`;
+
+                // Tenta obter o link de convite
+                try {
+                    const inviteCode = await this.sock.groupInviteCode(m.key.remoteJid);
+                    if (inviteCode) {
+                        grupoLink = `🔗 https://chat.whatsapp.com/${inviteCode}`;
+                    }
+                } catch {
+                    // Sem permissão para obter link de convite
+                }
+            } catch {
+                origem = `Grupo (${m.key.remoteJid.split('@')[0]})`;
+            }
+        } else {
+            origem = 'Privado (PV)';
+        }
 
         const reportMsg = `🚨 *NOVO REPORT [${reportId}]* 🚨\n\n` +
             `👤 *De:* ${nome}\n` +
-            `📱 *Número:* ${senderId.split('@')[0]}\n` +
+            `📱 *Número:* ${numeroReal}\n` +
             `📍 *Origem:* ${origem}\n` +
+            `${grupoLink ? grupoLink + '\n' : ''}` +
             `🕒 *Data:* ${timestamp}\n\n` +
             `📝 *Conteúdo:*\n${fullArgs}`;
 
@@ -2172,24 +2224,65 @@ ${P}menu osint — Comandos OSINT avançados`,
 
     public async _handleBroadcast(m: any, text: string): Promise<boolean> {
         if (!text) {
-            await this._reply(m, `📢 Uso: ${this.config.PREFIXO}broadcast <mensagem>`);
+            await this._reply(m, `📢 Uso: ${this.config.PREFIXO}broadcast <mensagem>\n📢 Com exceções: ${this.config.PREFIXO}broadcast --exc "Grupo A", "Grupo B" <mensagem>`);
             return true;
         }
 
-        await this._reply(m, '🚀 Enviando transmissão global...');
+        let messageText = text;
+        const excludedNames: string[] = [];
+
+        // Parse --exc flag: remove exceptions from beginning of text
+        const excMatch = text.match(/^--exc\s+((?:"[^"]*"|[^,])+)/i);
+        if (excMatch) {
+            const excBlock = excMatch[1];
+            // Extract quoted strings and unquoted names
+            const quoted = [...excBlock.matchAll(/"([^"]+)"/g)].map(x => x[1]);
+            const unquoted = excBlock.replace(/"([^"]+)"/g, '').split(',').map(s => s.trim()).filter(Boolean);
+            excludedNames.push(...quoted, ...unquoted);
+            messageText = text.substring(excMatch[0].length).trim();
+        }
+
+        if (!messageText) {
+            await this._reply(m, `📢 Mensagem vazia. Uso: ${this.config.PREFIXO}broadcast --exc "Grupo A" <mensagem>`);
+            return true;
+        }
+
+        await this._reply(m, `🚀 Enviando transmissão global...${excludedNames.length > 0 ? `\n🚫 Excluindo: ${excludedNames.join(', ')}` : ''}`);
         try {
             const groups: any = await this.sock.groupFetchAllParticipating();
             const jids = Object.keys(groups);
 
             let success = 0;
+            let skipped = 0;
+            const skippedNames: string[] = [];
+
             for (const jid of jids) {
+                const groupName = groups[jid]?.subject || '';
+
+                // Check if group name matches any exclusion
+                if (excludedNames.length > 0) {
+                    const matched = excludedNames.some(exName =>
+                        groupName.toLowerCase().includes(exName.toLowerCase())
+                    );
+                    if (matched) {
+                        skipped++;
+                        skippedNames.push(groupName);
+                        continue;
+                    }
+                }
+
                 try {
-                    await this.sock.sendMessage(jid, { text: `📢 *AVISO GLOBAL:* \n\n${text}` });
+                    await this.sock.sendMessage(jid, { text: `📢 *AVISO GLOBAL:* \n\n${messageText}` });
                     success++;
                     await new Promise(r => setTimeout(r, 1000)); // Delay p/ evitar ban
                 } catch (err: any) { }
             }
-            await this._reply(m, `✅ Transmissão concluída! Enviado para ${success} grupos.`);
+
+            let resultMsg = `✅ Transmissão concluída!\n📤 Enviado para ${success} grupo(s).`;
+            if (skipped > 0) {
+                resultMsg += `\n🚫 ${skipped} grupo(s) excluído(s): ${skippedNames.join(', ')}`;
+            }
+            await this._reply(m, resultMsg);
         } catch (e: any) {
             await this._reply(m, '❌ Erro na transmissão.');
         }
@@ -2784,8 +2877,23 @@ ${P}menu osint — Comandos OSINT avançados`,
                 await this._reply(m, `✅ Anti-Link ${actionStr} para este grupo.`);
                 break;
             case 'antifake':
-                this.moderationSystem.toggleAntiFake(jid, enable);
-                await this._reply(m, `✅ Anti-Fake (+244) ${actionStr} para este grupo.`);
+                if (args[0] === 'add' && args[1]) {
+                    const ddd = args[1].replace('+', '');
+                    this.moderationSystem.addAntiFakeException(jid, ddd);
+                    const exceptions = this.moderationSystem.getAntiFakeExceptions(jid);
+                    await this._reply(m, `✅ DDD +${ddd} adicionado à lista de exceções.\n📋 DDDs permitidos: 244, ${exceptions.join(', ')}`);
+                } else if (args[0] === 'remove' && args[1]) {
+                    const ddd = args[1].replace('+', '');
+                    this.moderationSystem.removeAntiFakeException(jid, ddd);
+                    const exceptions = this.moderationSystem.getAntiFakeExceptions(jid);
+                    await this._reply(m, `❌ DDD +${ddd} removido. Restantes: 244${exceptions.length > 0 ? ', ' + exceptions.join(', ') : ''}`);
+                } else if (args[0] === 'list') {
+                    const exceptions = this.moderationSystem.getAntiFakeExceptions(jid);
+                    await this._reply(m, `📋 DDDs permitidos neste grupo:\n- 244 (Angola - padrão)${exceptions.length > 0 ? '\n- ' + exceptions.join('\n- ') : ''}`);
+                } else {
+                    this.moderationSystem.toggleAntiFake(jid, enable);
+                    await this._reply(m, `✅ Anti-Fake (+244) ${actionStr} para este grupo.\n📌 Use: ${this.config.PREFIXO}antifake add 55 (adicionar exceção)\n📌 Use: ${this.config.PREFIXO}antifake list (ver exceções)`);
+                }
                 break;
             case 'antiimage':
                 this.moderationSystem.toggleAntiImage(jid, enable);

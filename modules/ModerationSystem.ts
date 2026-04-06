@@ -32,10 +32,12 @@ class ModerationSystem {
     private maxAttemptsBeforeBlacklist: number;
     private warnings: Map<string, any>;
     private antiFakeGroups: Set<string>;
+    private antiFakeExceptions: Map<string, string[]>; // groupId -> [allowlisted DDDs]
     private antiImageGroups: Set<string>;
     private antiStickerGroups: Set<string>;
     private warningsPath: string;
     private antiFakePath: string;
+    private antiFakeExceptionsPath: string;
     private antiImagePath: string;
     private antiStickerPath: string;
     private HOURLY_LIMIT: number;
@@ -73,12 +75,14 @@ class ModerationSystem {
         // ═══ SISTEMA DE AVISOS E FILTROS ADICIONAIS ═══
         this.warnings = new Map();
         this.antiFakeGroups = new Set();
+        this.antiFakeExceptions = new Map();
         this.antiImageGroups = new Set();
         this.antiStickerGroups = new Set();
 
         // Persistência
         this.warningsPath = path.join(basePath, 'data', 'warnings.json');
         this.antiFakePath = path.join(basePath, 'data', 'antifake.json');
+        this.antiFakeExceptionsPath = path.join(basePath, 'data', 'antifake_exceptions.json');
         this.antiImagePath = path.join(basePath, 'data', 'antiimage.json');
         this.antiStickerPath = path.join(basePath, 'data', 'antisticker.json');
 
@@ -511,7 +515,7 @@ class ModerationSystem {
         this._saveAllSettings();
     }
 
-    // ═══ ANTI-FAKE (+244) ═══
+    // ═══ ANTI-FAKE (DDDs permitidos, padrão +244 Angola) ═══
     public toggleAntiFake(groupId: string, enable: boolean = true): boolean {
         if (enable) this.antiFakeGroups.add(groupId);
         else this.antiFakeGroups.delete(groupId);
@@ -523,9 +527,80 @@ class ModerationSystem {
         return this.antiFakeGroups.has(groupId);
     }
 
-    public isFakeNumber(userId: string): boolean {
-        // Formato esperado: 244XXXXXXXXX@s.whatsapp.net
-        return !userId.startsWith('244');
+    /**
+     * Verifica se um número é "fake" (DDD não permitido).
+     * Em ambiente cloud MD, o userId pode vir como LID (ex: 123xxx@lid),
+     * então extraímos apenas os dígitos e verificamos o DDD.
+     */
+    public isFakeNumber(userId: string, groupId?: string): boolean {
+        // Limpa @ e mantém só dígitos
+        const rawNumber = userId.replace(/[@a-z._:-]/gi, '');
+        const ddd = rawNumber.substring(0, 3); // ex: "244"
+
+        // Sempre permitir: extrai o DDD completo (pode ter 3-4 dígitos)
+        const fullDdd = this._extractDdd(rawNumber);
+        if (!fullDdd) return false; // Se não tem número, não é fake
+
+        // DDDs padrão: Angola (244)
+        const allowedDdds = ['244'];
+
+        // Adiciona exceções do grupo se ativo
+        if (groupId) {
+            const groupExceptions = this.antiFakeExceptions.get(groupId) || [];
+            for (const ddd of groupExceptions) {
+                if (!allowedDdds.includes(ddd)) allowedDdds.push(ddd);
+            }
+        }
+
+        // Verifica se o DDD é permitido
+        return !allowedDdds.includes(fullDdd);
+    }
+
+    /**
+     * Adiciona DDD à lista de exceções de um grupo
+     */
+    public addAntiFakeException(groupId: string, ddd: string): void {
+        const current = this.antiFakeExceptions.get(groupId) || [];
+        if (!current.includes(ddd)) {
+            current.push(ddd);
+            this.antiFakeExceptions.set(groupId, current);
+            this._saveAllSettings();
+        }
+    }
+
+    /**
+     * Remove DDD da lista de exceções de um grupo
+     */
+    public removeAntiFakeException(groupId: string, ddd: string): void {
+        const current = this.antiFakeExceptions.get(groupId) || [];
+        const idx = current.indexOf(ddd);
+        if (idx >= 0) {
+            current.splice(idx, 1);
+            if (current.length === 0) this.antiFakeExceptions.delete(groupId);
+            else this.antiFakeExceptions.set(groupId, current);
+            this._saveAllSettings();
+        }
+    }
+
+    /**
+     * Retorna DDDs permitidos extras para um grupo
+     */
+    public getAntiFakeExceptions(groupId: string): string[] {
+        return this.antiFakeExceptions.get(groupId) || [];
+    }
+
+    /**
+     * Extrai o DDD (código de país) de um número de telefone
+     */
+    private _extractDdd(phoneNumber: string): string {
+        // Tentativa de detecção de DDD com base em padrões conhecidos
+        // 244 (Angola), 55 (Brasil - 2 dígitos), demais...
+        const threeDigitCodes = ['244', '245', '246', '247', '248', '249'];
+        if (threeDigitCodes.some(code => phoneNumber.startsWith(code))) {
+            return phoneNumber.substring(0, 3);
+        }
+        // Assume 2 dígitos para os restantes (ex: 55 BR)
+        return phoneNumber.substring(0, 2);
     }
 
     public toggleAntiImage(groupId: string, enable: boolean = true): boolean {
@@ -553,6 +628,7 @@ class ModerationSystem {
     private _loadAllSettings(): void {
         this._loadSettingsSet(this.antiLinkPath, this.antiLinkGroups);
         this._loadSettingsSet(this.antiFakePath, this.antiFakeGroups);
+        this._loadSettingsMap(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._loadSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._loadSettingsSet(this.antiStickerPath, this.antiStickerGroups);
         this._loadSettingsMap(this.warningsPath, this.warnings);
@@ -561,6 +637,7 @@ class ModerationSystem {
     private _saveAllSettings(): void {
         this._saveSettingsSet(this.antiLinkPath, this.antiLinkGroups);
         this._saveSettingsSet(this.antiFakePath, this.antiFakeGroups);
+        this._saveSettingsMap(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._saveSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._saveSettingsSet(this.antiStickerPath, this.antiStickerGroups);
         this._saveSettingsMap(this.warningsPath, this.warnings);

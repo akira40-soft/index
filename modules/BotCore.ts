@@ -397,8 +397,8 @@ class BotCore {
                     // 1. Anti-Fake
                     if (this.moderationSystem?.isAntiFakeActive(id)) {
                         for (const participant of participants) {
-                            if (this.moderationSystem.isFakeNumber(participant)) {
-                                this.logger.warn(`🚫 [ANTI-FAKE] ${participant}`);
+                            if (this.moderationSystem.isFakeNumber(participant, id)) {
+                                this.logger.warn(`🚫 [ANTI-FAKE] ${participant} - DDD não permitido no grupo ${id}`);
                                 await this.sock.sendMessage(id, { text: '⚠️ Número fake removido.' });
                                 await this.sock.groupParticipantsUpdate(id, [participant], 'remove');
                                 // Remove from the list so welcome isn't sent
