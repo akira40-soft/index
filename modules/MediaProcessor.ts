@@ -252,13 +252,13 @@ class MediaProcessor {
             const hasPoToken = !!this.config?.YT_PO_TOKEN;
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
-                    { client: 'web_creator', useCookies: true },            // creator + PO Token
-                    { client: 'android', useCookies: true },                 // Android API
-                    { client: 'ios', useCookies: true },                     // iOS API
+                    { client: 'android', useCookies: false },                // Android API (sem signature, cookies não suportados)
+                    { client: 'ios', useCookies: false },                    // iOS API (sem signature, cookies não suportados)
+                    { client: 'web_creator', useCookies: true },             // creator + PO Token
                 ]
                 : [
-                    { client: 'android', useCookies: true },                 // Android API (sem signature)
-                    { client: 'ios', useCookies: true },                     // iOS API (sem signature)
+                    { client: 'android', useCookies: false },                // Android API (sem signature)
+                    { client: 'ios', useCookies: false },                    // iOS API (sem signature)
                 ];
 
             let lastError = '';
@@ -347,13 +347,13 @@ class MediaProcessor {
             const hasPoToken = !!this.config?.YT_PO_TOKEN;
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
+                    { client: 'android', useCookies: false },
+                    { client: 'ios', useCookies: false },
                     { client: 'web_creator', useCookies: true },
-                    { client: 'android', useCookies: true },
-                    { client: 'ios', useCookies: true },
                 ]
                 : [
-                    { client: 'android', useCookies: true },
-                    { client: 'ios', useCookies: true },
+                    { client: 'android', useCookies: false },
+                    { client: 'ios', useCookies: false },
                 ];
 
             let lastError = '';
