@@ -210,7 +210,7 @@ class MediaProcessor {
 
         // Adiciona JS runtime para clientes web que precisam resolver cipher signature
         const webClients = ['web_creator', 'web', 'mweb', 'safari', 'tv_embedded'];
-        const jsRuntimeFlag = webClients.includes(playerClient) ? '--js-runtimes nodejs' : '';
+        const jsRuntimeFlag = webClients.includes(playerClient) ? '--js-runtimes node' : '';
 
         // Extractor args — limpo
         const clientArg = `--extractor-args "youtube:player_client=${playerClient}"`;
