@@ -208,6 +208,10 @@ class MediaProcessor {
             ? options.playerClient
             : 'android';
 
+        // Adiciona JS runtime para clientes web que precisam resolver cipher signature
+        const webClients = ['web_creator', 'web', 'mweb', 'safari', 'tv_embedded'];
+        const jsRuntimeFlag = webClients.includes(playerClient) ? '--js-runtimes nodejs' : '';
+
         // Extractor args — limpo
         const clientArg = `--extractor-args "youtube:player_client=${playerClient}"`;
 
@@ -226,7 +230,7 @@ class MediaProcessor {
         const custom = options.customFlags || '';
         const target = options.isSearch ? `ytsearch1:${url}` : url;
         const executable = this.ytdlpCommand || 'yt-dlp';
-        const parts = [executable, cookieArg, poTokenStr, clientArg, retryFlags, actionFlags, custom, `"${target}"`];
+        const parts = [executable, cookieArg, poTokenStr, clientArg, retryFlags, jsRuntimeFlag, actionFlags, custom, `"${target}"`];
         return parts.filter(Boolean).join(' ');
     }
 
@@ -250,16 +254,23 @@ class MediaProcessor {
             // TENTATIVAS: android/ios primeiro (não precisam PO Token nem JS signature)
             // web_creator/w_creator só se tiver PO Token configurado
             const hasPoToken = !!this.config?.YT_PO_TOKEN;
+            const hasCookies = !!this._findCookiePath();
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
-                    { client: 'android', useCookies: false },                // Android API (sem signature, cookies não suportados)
-                    { client: 'ios', useCookies: false },                    // iOS API (sem signature, cookies não suportados)
-                    { client: 'web_creator', useCookies: true },             // creator + PO Token
-                ]
-                : [
+                    { client: 'web_creator', useCookies: hasCookies },       // creator + cookies + PO Token + JS runtime
                     { client: 'android', useCookies: false },                // Android API (sem signature)
                     { client: 'ios', useCookies: false },                    // iOS API (sem signature)
-                ];
+                ]
+                : hasCookies
+                    ? [
+                        { client: 'web_creator', useCookies: true },         // web + cookies + JS runtime (autenticado bypass bot check)
+                        { client: 'android', useCookies: false },            // Android API (cookies não suportados)
+                        { client: 'ios', useCookies: false },                // iOS API (cookies não suportados)
+                    ]
+                    : [
+                        { client: 'android', useCookies: false },            // Android API (sem signature)
+                        { client: 'ios', useCookies: false },                // iOS API (sem signature)
+                    ];
 
             let lastError = '';
             for (let i = 0; i < fallbacks.length; i++) {
