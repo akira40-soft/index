@@ -173,20 +173,20 @@ class MediaProcessor {
     }
 
     /**
-     * Constrói o comando yt-dlp — abordagem minimalista e testada contra bloqueios.
+     * Constrói o comando yt-dlp para download YouTube.
      *
-     * POR QUE SEM `--no-check-certificates`? Causa falhas em servidores Railway.
-     * POR QUE SEM `--js-runtimes nodejs`? O yt-dlp já roda JS internamente; esta flag
-     *   força uso do sistema host que em Alpine/Debian slim pode não ter Node.js correto.
-     * POR QUE SEM `player_skip=webpage`? YouTube exige resposta do player para validar
-     *   a sessão com cookies. Sem isso os links de stream vêm sem signature Cipher.
+     * Clientes android e ios NÃO precisam de:
+     *   - JS runtime (EJS/Node.js) para signature solving
+     *   - PO Token (GVS) — bypassam a verificação
+     *   - player_skip — não usam webpage para gerar URLs
      *
-     * Estratégia (baseada em yt-dlp/issues e projetos como librebot/yt-dlp-wrapper):
-     *   1º  tv_embedded  + cookies → mais resistente a blocks em Railway sem PO_TOKEN
-     *   2º  mweb         + cookies  → fallback mobile web
-     *   3º  ios          + cookies  → fallback iOS
-     *   4º  android      + cookies  → fallback Android
-     *   5º  web_creator  + PO_TOKEN → quando token disponível
+     * POR QUE SEM tv_embedded, mweb, web_creator sem PO_TOKEN?
+     *   - tv_embedded: removido/ignorado nas versões recentes do yt-dlp
+     *   - mweb: desde 2025 exige GVS PO Token (erro 403 sem ele)
+     *   - web_creator/safari: exigem signature solve via JS runtime
+     *
+     * android e ios usam endpoints nativos da API do YouTube que
+     * entregam URLs stream direto (sem cipher), ideal para Railway/cloud.
      */
     private _buildYtdlpCommand(url: string, options: {
         type: 'audio' | 'video' | 'json';
@@ -199,26 +199,26 @@ class MediaProcessor {
         const cookiePath = this._findCookiePath();
         const cookieArg = (cookiePath && options.useCookies !== false) ? `--cookies "${cookiePath}"` : '';
 
-        // PO Token
+        // PO Token (só faz sentido com clients web)
         const poTokenArgs = this._getPoTokenArgs();
         const poTokenStr = poTokenArgs.length > 0 ? `${poTokenArgs[0]} "${poTokenArgs[1]}"` : '';
 
-        // Client do player — padrão simples, sem multi-client
+        // Client padrão: android (melhor sem PO Token em cloud)
         const playerClient = options.playerClient && options.playerClient !== 'default'
             ? options.playerClient
-            : 'tv_embedded';
+            : 'android';
 
-        // Extractor args — limpo, sem player_skip
+        // Extractor args — limpo
         const clientArg = `--extractor-args "youtube:player_client=${playerClient}"`;
 
-        // Retry leve nativo do yt-dlp
-        const retryFlags = `--ignore-errors --no-abort-on-error --no-playlist --extractor-retries 2`;
+        // Retry nativo do yt-dlp
+        const retryFlags = `--no-playlist --extractor-retries 2`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            actionFlags = `-f "bestvideo[height<=720]+bestaudio[ext=m4a]/best[height<=720]/best" -o "${options.output}"`;
+            actionFlags = `-f "bestvideo[height<=720]+bestaudio/best[height<=720]/best" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = `--dump-json --no-download`;
         }
@@ -247,22 +247,18 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // TENTATIVAS OTIMIZADAS + PO TOKEN
-            // tv_embedded é o mais resistente para Railway sem PO_TOKEN
+            // TENTATIVAS: android/ios primeiro (não precisam PO Token nem JS signature)
+            // web_creator/w_creator só se tiver PO Token configurado
             const hasPoToken = !!this.config?.YT_PO_TOKEN;
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
                     { client: 'web_creator', useCookies: true },            // creator + PO Token
-                    { client: 'tv_embedded', useCookies: true },            // TV Embedded
-                    { client: 'mweb', useCookies: true },                    // Mobile Web
-                    { client: 'ios', useCookies: true },                     // iOS
-                    { client: 'android', useCookies: true },                 // Android
+                    { client: 'android', useCookies: true },                 // Android API
+                    { client: 'ios', useCookies: true },                     // iOS API
                 ]
                 : [
-                    { client: 'tv_embedded', useCookies: true },            // Mais resistente a 403
-                    { client: 'mweb', useCookies: true },                    // Mobile Web
-                    { client: 'ios', useCookies: true },                     // iOS
-                    { client: 'android', useCookies: true },                 // Android
+                    { client: 'android', useCookies: true },                 // Android API (sem signature)
+                    { client: 'ios', useCookies: true },                     // iOS API (sem signature)
                 ];
 
             let lastError = '';
@@ -352,16 +348,12 @@ class MediaProcessor {
             const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
                 ? [
                     { client: 'web_creator', useCookies: true },
-                    { client: 'tv_embedded', useCookies: true },
-                    { client: 'mweb', useCookies: true },
-                    { client: 'android', useCookies: true },
-                ]
-                : [
-                    { client: 'tv_embedded', useCookies: true },
-                    { client: 'mweb', useCookies: true },
                     { client: 'android', useCookies: true },
                     { client: 'ios', useCookies: true },
-                    { client: 'default', useCookies: false }
+                ]
+                : [
+                    { client: 'android', useCookies: true },
+                    { client: 'ios', useCookies: true },
                 ];
 
             let lastError = '';

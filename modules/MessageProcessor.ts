@@ -36,35 +36,48 @@ class MessageProcessor {
     }
 
     /**
-    * Extrai número real do usuário
-    */
-    extractUserNumber(message: any) {
+     * Extrai número real do usuário, evitando LIDs em ambiente cloud
+     *
+     * Em Baileys Cloud, m.key.participant pode vir como:
+     *   - "12345:0@lid"  — Local ID (NÃO é número de telefone)
+     *   - "244956464620@s.whatsapp.net" — Número real
+     *   - "244956464620:0@s.whatsapp.net" — Número real com device ID
+     *
+     * Heurística: @lid = LID, @s.whatsapp.net = número real ou grupo.
+     */
+    extractUserNumber(message: any, sock?: any) {
         try {
             const key = message.key || {};
             const participant = key.participant || null;
             const remoteJid = key.remoteJid || '';
 
-            // ✅ PRIORIDADE 1: Usar phone_number se disponível na estrutura metadata
+            // ✅ PRIORIDADE 1: Usar phone_number se disponível
             if (message.phoneNumber) {
                 const phoneNum = JidUtils.extractPhoneNumber(String(message.phoneNumber));
-                if (phoneNum) return phoneNum;
+                if (this._isValidPhoneNumber(phoneNum)) return phoneNum;
             }
 
-            // ✅ PRIORIDADE 2: Usar participant se disponível
+            // ✅ PRIORIDADE 2: Usar participant — rejeitar @lid explicitamente
             if (participant) {
-                const normalized = JidUtils.normalize(String(participant));
-                const number = JidUtils.getNumber(normalized);
-                if (number) {
-                    // ✅ CORREÇÃO: Garantir que é apenas dígitos, não JID com @lid
-                    return JidUtils.cleanPhoneNumber(number);
+                const participantStr = String(participant);
+                // LID: rejeita imediatamente
+                if (!participantStr.includes('@lid')) {
+                    const normalized = JidUtils.normalize(participantStr);
+                    const number = JidUtils.getNumber(normalized);
+                    const rawNum = JidUtils.cleanPhoneNumber(number);
+                    if (this._isValidPhoneNumber(rawNum)) {
+                        return rawNum;
+                    }
                 }
             }
 
-            // ✅ PRIORIDADE 3: Use remoteJid para PV
-            if (remoteJid && !String(remoteJid).endsWith('@g.us')) {
+            // ✅ PRIORIDADE 3: Usar remoteJid para PV
+            if (remoteJid && !String(remoteJid).endsWith('@g.us') && !remoteJid.includes('@lid')) {
                 const number = JidUtils.getNumber(String(remoteJid));
-                // ✅ CORREÇÃO: Garantir que é apenas dígitos, não JID com @lid  
-                return JidUtils.cleanPhoneNumber(number);
+                const rawNum = JidUtils.cleanPhoneNumber(number);
+                if (this._isValidPhoneNumber(rawNum)) {
+                    return rawNum;
+                }
             }
 
             return 'desconhecido';
@@ -73,6 +86,15 @@ class MessageProcessor {
             this.logger?.error('Erro ao extrair número:', e.message);
             return 'desconhecido';
         }
+    }
+
+    /**
+     * Valida se uma string é um número de telefone plausível (6-15 dígitos).
+     */
+    private _isValidPhoneNumber(num: string): boolean {
+        if (!num) return false;
+        const digits = num.replace(/\D/g, '');
+        return digits.length >= 6 && digits.length <= 15;
     }
 
     /**
