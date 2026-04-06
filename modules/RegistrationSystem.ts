@@ -101,8 +101,8 @@ class RegistrationSystem {
 
         const newUser: any = {
             id: uid,
-            name: name,
-            age: age,
+            nome: name,
+            idade: age,
             serial: userSerial,
             link: userLink,
             registeredAt: now,

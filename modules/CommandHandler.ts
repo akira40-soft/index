@@ -1008,6 +1008,24 @@ class CommandHandler {
                     process.exit(0);
                     return true;
 
+                case 'reset':
+                case 'resetar':
+                case 'limparmemoria': {
+                    try {
+                        await this.bot.reply(m, '🧹 Limpando memória da conversa...');
+                        const resultado = await this.bot.apiClient.reset(senderId);
+                        if (resultado?.success) {
+                            await this.bot.reply(m, `✅ Memória limpa com sucesso!${resultado.message ? `\n${resultado.message}` : ''}`);
+                        } else {
+                            await this.bot.reply(m, `⚠️ Não foi possível limpar a memória. Tente novamente mais tarde.`);
+                        }
+                    } catch (err) {
+                        console.error('❌ Erro ao resetar memória:', err);
+                        await this.bot.reply(m, '❌ Falha ao limpar memória da conversa.');
+                    }
+                    return true;
+                }
+
                 default: {
                     return false;
                 }
@@ -1936,7 +1954,7 @@ ${P}menu osint — Comandos OSINT avançados`,
 
             let res;
             if (ehGrupo) {
-                res = await this.groupManagement.setGroupPhoto(chatJid, buf);
+                res = await this.groupManagement.setGroupPhotoDirect(chatJid, buf);
             } else {
                 res = await this.botProfile.setBotPhoto(buf);
             }
@@ -1992,7 +2010,12 @@ ${P}menu osint — Comandos OSINT avançados`,
 
         let res;
         if (ehGrupo) {
-            res = await this.groupManagement.setGroupDescription(chatJid, status);
+            try {
+                await this.sock.groupUpdateDescription(chatJid, status);
+                res = { success: true };
+            } catch (err: any) {
+                res = { success: false, error: err.message || 'Erro ao atualizar descrição' };
+            }
         } else {
             res = await this.botProfile.setBotStatus(status);
         }
@@ -2401,7 +2424,8 @@ ${P}menu osint — Comandos OSINT avançados`,
                 return true;
             }
 
-            const args = m.body.split(' ').slice(1);
+            const fullText = m.message?.conversation || m.message?.extendedTextMessage?.text || '';
+            const args = fullText.split(' ').slice(1);
             const sub = (args[0] || '').toLowerCase();
 
             // 💰 RANKING DE ECONOMIA
@@ -3149,7 +3173,7 @@ ${P}menu osint — Comandos OSINT avançados`,
             const result = await audioProcessor.generateTTS(texto, lang);
             await this.sock.sendPresenceUpdate('paused', m.key.remoteJid);
 
-            if (!result?.sucesso && !result?.buffer) {
+            if (!result?.sucesso) {
                 await this._reply(m, `❌ Erro ao gerar áudio: ${result?.error || 'falha no TTS'}`);
                 return true;
             }

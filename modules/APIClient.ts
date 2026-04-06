@@ -321,7 +321,7 @@ class APIClient {
     */
     async reset(usuario: string | null = null): Promise<any> {
         try {
-            const payload = usuario ? { usuario } : {};
+            const payload = usuario ? { usuario, numero: usuario } : {};
             const result = await this.request('POST', '/reset', payload);
 
             return {

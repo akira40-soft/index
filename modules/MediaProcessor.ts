@@ -154,37 +154,65 @@ class MediaProcessor {
     }
 
     /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * PO TOKEN - Gera argumentos --po-token para yt-dlp se variavel existir
+     * Formato esperado: <client>:<visitor_data>.<po_token>
+     * Se vier como token puro, prefixa com "WEB+"
+     * ═══════════════════════════════════════════════════════════════════════
+     */
+    private _getPoTokenArgs(): string[] {
+        const poToken = this.config?.YT_PO_TOKEN;
+        if (!poToken || !poToken.trim()) return [];
+
+        // Pode vir já formatado como "WEB:data.token" ou apenas o token
+        if (poToken.includes(':')) {
+            return [`--po-token`, poToken.trim()];
+        }
+        this.logger?.info('🔑 Usando po_token com cliente WEB');
+        return [`--po-token`, `WEB+${poToken.trim()}`];
+    }
+
+    /**
      * Constrói o comando yt-dlp com GAMBIARRAS REAIS contra bloqueios do YouTube
-     * - Usa Web Embedded Client (menos bloqueado)
-     * - Node.js como runtime JS obrigatório
-     * - Desabilita verificações de bot
-     * - Skip DASH manifest para formatos simples
-     * - Usa formatos progressivamente mais genéricos em retries
+     * - Usa PO Token se disponivel (variavel YT_PO_TOKEN)
+     * - Cookies para autenticacao
+     * - Skip webpage para evitar JS anti-bot
+     * - Node.js como runtime JS obrigatoria
+     * - Formatos genericos para evitar "not available"
      */
     private _buildYtdlpCommand(url: string, options: { type: 'audio' | 'video' | 'json', output?: string, isSearch?: boolean, playerClient?: string, useCookies?: boolean, customFlags?: string }): string {
         const cookiePath = this._findCookiePath();
         const cookieArg = (cookiePath && options.useCookies !== false) ? `--cookies "${cookiePath}"` : '';
 
-        // Revertemos o player_skip destrutivo que causou "This content isn't available"
-        const clientArg = options.playerClient && options.playerClient !== 'default'
-            ? `--extractor-args 'youtube:player_client=${options.playerClient}'`
-            : '';
+        // PO Token: arma de fogo contra deteccao de bot em IPs de datacenter
+        const poTokenArgs = this._getPoTokenArgs();
+        const poTokenStr = poTokenArgs.length > 0 ? `${poTokenArgs[0]} "${poTokenArgs[1]}"` : '';
 
-        const uaArg = options.playerClient === 'android'
-            ? '--user-agent "com.google.android.youtube/19.29.37 (Linux; U; Android 14; pt_BR; Pixel 7 Pro Build/AP2A.240705.004)"'
-            : (options.playerClient === 'ios'
-                ? '--user-agent "com.google.ios.youtube/19.29.1 (iPhone16,2; iOS 17_5_1; pt_BR)"'
-                : '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"');
+        // Multi-client spoofing
+        const playerClient = options.playerClient && options.playerClient !== 'default'
+            ? options.playerClient
+            : 'mweb,ios,android';
 
-        const bypassFlags = `--ignore-config ${clientArg} ${uaArg} --js-runtimes node --no-warnings --no-playlist --no-check-certificate --cache-dir "${path.join(this.tempFolder, 'ytdlp_cache')}"`;
+        // player_skip=webpage: nao carrega a pagina HTML, evita JS anti-bot do YouTube
+        const clientArg = `--extractor-args "youtube:player_client=${playerClient};player_skip=webpage;lang=pt"`;
+
+        // User-Agents atualizados para 2026 (Android 15 e iOS 18)
+        const uaArg = playerClient.includes('android')
+            ? '--user-agent "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AP3A.241105.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"'
+            : (playerClient.includes('ios')
+                ? '--user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"'
+                : '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"');
+
+        const bypassFlags = `--ignore-config ${clientArg} ${uaArg} --js-runtimes nodejs --no-playlist --no-check-certificates --extractor-retries 3 --retry-sleep fragment:linear:1 --no-cache-dir`;
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // ✅ FORMATO RESILIENTE: Prioriza m4a simples (não-DASH) para evitar erros de format not available
-            actionFlags = `-f "bestaudio[ext=m4a]/bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
+            // Formato generico: ba (best audio) ou b (best) como fallback
+            // Sem filtro de extensao para evitar "not available"
+            actionFlags = `-f "ba/b" -x --audio-format mp3 --audio-quality 0 --prefer-ffmpeg -o "${options.output}"`;
         } else if (options.type === 'video') {
-            // ✅ FORMATO RESILIENTE VÍDEO: Limita a 720p para maior compatibilidade e menor chance de 403
-            actionFlags = `-f "bestvideo[height<=720]+bestaudio/best[height<=720]/best" -o "${options.output}"`;
+            // best video+audio ou combinado ate 720p
+            actionFlags = `-f "bv*[height<=720]+ba/b[height<=720]/best" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = `--dump-json --no-download`;
         }
@@ -192,7 +220,8 @@ class MediaProcessor {
         const custom = options.customFlags || '';
         const target = options.isSearch ? `ytsearch1:${url}` : url;
         const executable = this.ytdlpCommand || 'yt-dlp';
-        return `${executable} ${cookieArg} ${bypassFlags} ${actionFlags} ${custom} "${target}"`;
+        const parts = [executable, cookieArg, bypassFlags, poTokenStr, actionFlags, custom, `"${target}"`];
+        return parts.filter(Boolean).join(' ');
     }
 
     /**
@@ -212,14 +241,24 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp3');
 
-            // TENTATIVAS MODERADAS: Sem IP spoofing (que causa "Content Unavailable")
-            const fallbacks: { client: string; useCookies: boolean }[] = [
-                { client: 'mweb', useCookies: true },                      // Mobile Web (Boa sorte contra PO_Token)
-                { client: 'tv_embedded', useCookies: true },               // TV Embedded com cookies
-                { client: 'android', useCookies: true },                   // Android puro
-                { client: 'ios', useCookies: true },                       // Apple iOS
-                { client: 'default', useCookies: false }                   // Sem cookies
-            ];
+            // TENTATIVAS OTIMIZADAS + PO TOKEN
+            const hasPoToken = !!this.config?.YT_PO_TOKEN;
+            const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
+                ? [
+                    { client: 'web+safari', useCookies: true },             // Web + PO Token (mais forte)
+                    { client: 'mweb', useCookies: true },                    // Mobile Web
+                    { client: 'ios', useCookies: true },                     // Apple iOS
+                    { client: 'android', useCookies: true },                  // Android
+                    { client: 'tv_embedded', useCookies: true },             // TV Embedded
+                    { client: 'default', useCookies: false }                 // Último recurso
+                ]
+                : [
+                    { client: 'mweb', useCookies: true },                    // Mobile Web
+                    { client: 'ios', useCookies: true },                     // Apple iOS
+                    { client: 'android', useCookies: true },                  // Android
+                    { client: 'tv_embedded', useCookies: true },             // TV Embedded
+                    { client: 'default', useCookies: false }                 // Último recurso
+                ];
 
             let lastError = '';
             for (let i = 0; i < fallbacks.length; i++) {
@@ -247,10 +286,10 @@ class MediaProcessor {
                     this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg.split('\n')[0]}`);
                     lastError = msg;
 
-                    // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in" ou 403), pula logo para o Invidious/Piped
+                    // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in", 403, 429), pula logo para o Invidious/Piped
                     // Não adianta tentar outros clientes se o IP já foi marcado ou o YouTube exige login
-                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('bot')) {
-                        this.logger?.warn('🚫 Bloqueio de bot detectado. Saltando retries locais e usando Invidious/Piped Proxy...');
+                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('429') || msg.includes('bot')) {
+                        this.logger?.warn('🚫 Bloqueio de bot detectado (403/429/Sign-in). Saltando retries locais e usando Invidious/Piped Proxy...');
                         break;
                     }
                 }
@@ -299,14 +338,23 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            // TENTATIVAS MODERADAS VÍDEO
-            const fallbacks: { client: string; useCookies: boolean }[] = [
-                { client: 'mweb', useCookies: true },
-                { client: 'tv_embedded', useCookies: true },
-                { client: 'android', useCookies: true },
-                { client: 'ios', useCookies: true },
-                { client: 'default', useCookies: false }
-            ];
+            // TENTATIVAS OTIMIZADAS VÍDEO + PO TOKEN
+            const hasPoToken = !!this.config?.YT_PO_TOKEN;
+            const fallbacks: { client: string; useCookies: boolean }[] = hasPoToken
+                ? [
+                    { client: 'web+safari', useCookies: true },
+                    { client: 'mweb', useCookies: true },
+                    { client: 'tv_embedded', useCookies: true },
+                    { client: 'android', useCookies: true },
+                    { client: 'default', useCookies: false }
+                ]
+                : [
+                    { client: 'mweb', useCookies: true },
+                    { client: 'tv_embedded', useCookies: true },
+                    { client: 'android', useCookies: true },
+                    { client: 'ios', useCookies: true },
+                    { client: 'default', useCookies: false }
+                ];
 
             let lastError = '';
             for (let i = 0; i < fallbacks.length; i++) {
@@ -346,9 +394,9 @@ class MediaProcessor {
                     this.logger?.warn(`⚠️ yt-dlp erro na tentativa ${i + 1}: ${msg.split('\n')[0]}`);
                     lastError = msg;
 
-                    // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in" ou 403), pula logo para o Invidious/Piped
-                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('bot')) {
-                        this.logger?.warn('🚫 Bloqueio de bot detectado (Vídeo). Usando fallbacks de Proxy...');
+                    // 🚨 GAMBIARRA CRÍTICA: Se o erro for de bot ("Sign in", 403, 429), pula logo para o Invidious/Piped
+                    if (msg.includes('sign in') || msg.includes('403') || msg.includes('429') || msg.includes('bot')) {
+                        this.logger?.warn('🚫 Bloqueio de bot detectado (Vídeo - 403/429). Usando fallbacks de Proxy...');
                         break;
                     }
                 }
@@ -558,13 +606,13 @@ class MediaProcessor {
     private async _getMetadataFromInvidious(videoId: string): Promise<any> {
         // Instâncias Invidious VERIFICADAS e ATIVAS (Março 2026)
         const invidiousInstances = [
+            'https://inv.zzls.xyz',           // Estável 2026
+            'https://invidious.ducks.party',
+            'https://invidious.io.lol',
+            'https://invidious.incogniweb.net',
             'https://yewtu.be',
             'https://inv.nadeko.net',
-            'https://invidious.flokinet.to',
-            'https://yt.artemislena.eu',
-            'https://invidious.privacydev.net',
-            'https://invidious.nerdvpn.de',
-            'https://invidious.v0l.io'
+            'https://invidious.privacydev.net'
         ];
 
         for (const instance of invidiousInstances) {
@@ -602,11 +650,12 @@ class MediaProcessor {
      */
     private async _getMetadataFromPiped(videoId: string): Promise<any> {
         const pipedInstances = [
+            'https://pipedapi.drgns.space',    // Estável 2026
+            'https://pipedapi.official.chat',
+            'https://pipedapi.rivm.tech',
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.tokhmi.xyz',
-            'https://pipedapi.syncpundit.io',
-            'https://api.piped.projectsegfau.lt',
-            'https://watchapi.whatever.social'
+            'https://api.piped.projectsegfau.lt'
         ];
 
         for (const instance of pipedInstances) {
@@ -651,11 +700,12 @@ class MediaProcessor {
 
         // Instâncias Piped VERIFICADAS (Março 2026)
         const pipedInstances = [
+            'https://pipedapi.drgns.space',
+            'https://pipedapi.official.chat',
+            'https://pipedapi.rivm.tech',
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.tokhmi.xyz',
-            'https://pipedapi.syncpundit.io',
-            'https://api.piped.projectsegfau.lt',
-            'https://watchapi.whatever.social'
+            'https://api.piped.projectsegfau.lt'
         ];
 
         for (const instance of pipedInstances) {
@@ -739,11 +789,12 @@ class MediaProcessor {
 
         // Instâncias Piped VERIFICADAS (Março 2026)
         const pipedInstances = [
+            'https://pipedapi.drgns.space',
+            'https://pipedapi.official.chat',
+            'https://pipedapi.rivm.tech',
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.tokhmi.xyz',
-            'https://pipedapi.syncpundit.io',
-            'https://api.piped.projectsegfau.lt',
-            'https://watchapi.whatever.social'
+            'https://api.piped.projectsegfau.lt'
         ];
 
         for (const instance of pipedInstances) {
@@ -859,12 +910,13 @@ class MediaProcessor {
 
         // Instâncias Invidious com suporte a streaming (Março 2026)
         const instances = [
+            'https://inv.zzls.xyz',
+            'https://invidious.ducks.party',
+            'https://invidious.io.lol',
+            'https://invidious.incogniweb.net',
             'https://yewtu.be',
             'https://inv.nadeko.net',
-            'https://invidious.flokinet.to',
-            'https://yt.artemislena.eu',
-            'https://invidious.nerdvpn.de',
-            'https://invidious.v0l.io'
+            'https://invidious.privacydev.net'
         ];
 
         for (const instance of instances) {

@@ -73,7 +73,11 @@ class PermissionManager {
             'top': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
 
             // Comandos PÚBLICOS (requerem registro se grupo configurado)
-            'donate': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            // Account aliases missing
+            'reg': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'deposit': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'withdraw': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'transactions': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'perfil': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'profile': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
             'level': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 1 },
@@ -258,6 +262,8 @@ class PermissionManager {
             'setdesc': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'setfoto': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 2, grupo: true },
             'antispam': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'mutelist': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'silenciados': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
             'sortear': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 2, grupo: true },
             'sorteio': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 2, grupo: true },
             'groupinfo': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
@@ -270,9 +276,86 @@ class PermissionManager {
             'setbotphoto': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'setbotname': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'setbotstatus': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'setbotpic': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'setphoto': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'setbio': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'setname': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'blacklist': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'getprofile': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'getuser': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 1 },
             'nmap': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
             'sqlmap': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+            'hydra': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 5 },
+
+            // INFO & REPORT — qualquer registrado pode reportar
+            'report': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            'reportar': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            'bug': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            'premium': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            'vip': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 0.5 },
+            'donate': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 }, // already above but keep alias coverage
+
+            // Pagamento
+            'buy': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+
+            // Stickers (fig and caracoroa were missing)
+            'fig': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 2 },
+            'caracoroa': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+
+            // Efeitos de imagem (jail, remini, enhance were missing)
+            'jail': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 2 },
+            'remini': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'enhance': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'bg': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'rmbg': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 3 },
+
+            // Group commands missing from PM
+            'fixar': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'link': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'membros': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'listadmins': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'raffle': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 2, grupo: true },
+            'motivar': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'warn': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'unwarn': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+            'resetwarns': { nivel: 'admin', requiresRegistration: true, rateLimitMultiplier: 1, grupo: true },
+
+            // Cyber commands that have handler but are disabled (setoolkit/metasploit still informational)
+            'setoolkit': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+            'metasploit': { nivel: 'owner', requiresRegistration: true, rateLimitMultiplier: 3 },
+
+            // Reset memory command
+            'reset': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'resetar': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+            'limparmemoria': { nivel: 'public', requiresRegistration: true, rateLimitMultiplier: 1 },
+
+            // Menu / submenu category commands (no-op, just show menus)
+            'menucyber': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menumedia': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menuconta': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menudiversao': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menujogos': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menugrupo': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menuadm': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menuinfo': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menupremium': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menuosint': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menuaudio': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'menuimagem': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'cyber': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'grupos': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'grupo': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'admin': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'moderacao': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'diversao': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'fun': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'jogos': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'game': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'osint': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'inteligencia': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'informacoes': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'about': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
+            'extras': { nivel: 'public', requiresRegistration: false, rateLimitMultiplier: 0.5 },
 
             // Comandos CYBERSEGURANÇA (requerem pagamento - já implementado)
             // Menu OSINT (somente exibição de menu)
