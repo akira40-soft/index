@@ -251,7 +251,7 @@ class ConfigManager {
             // Se não for por número, tenta pelo nome especial (Morema/Morena)
             if (!porNumero && typeof nomeBot === 'string') {
                 const n = nomeBot.toLowerCase();
-                if (n.includes('morena') || n.includes('kiki')) return true;
+                if (n.includes('beu') || n.includes('bel')) return true;
             }
 
             return porNumero;
