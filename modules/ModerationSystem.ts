@@ -785,10 +785,12 @@ class ModerationSystem {
     */
     public isBlacklisted(userId: string): boolean {
         const numericId = JidUtils.getNumber(userId);
+        // Para LIDs como lid_123456 ou user@lid, extrai apenas dígitos
+        const digitsOnly = userId.replace(/\D/g, '');
         const list = this.loadBlacklistDataSync();
         if (!Array.isArray(list)) return false;
 
-        const found = list.find(entry => entry && (entry.id === numericId || entry.id === userId));
+        const found = list.find(entry => entry && (entry.id === numericId || entry.id === userId || entry.id === digitsOnly));
 
         if (found) {
             if (found.expiresAt && found.expiresAt !== 'PERMANENT') {
@@ -804,12 +806,18 @@ class ModerationSystem {
     }
 
     public addToBlacklist(userId: string, userName: string, userNumber: string, reason: string = 'spam', expiryMs: number | null = null): any {
-        const numericId = JidUtils.getNumber(userId);
+        // Para LIDs como lid_12345, extrai dígitos crus
+        let numericId = JidUtils.getNumber(userId);
+        if (!numericId || numericId.length < 6) {
+            numericId = JidUtils.cleanPhoneNumber(userId);
+        }
+
         const list = this.loadBlacklistDataSync();
         const arr = Array.isArray(list) ? list : [];
 
-        // Verifica duplicata por ID numérico ou ID original
-        if (arr.find(x => x && (x.id === numericId || x.id === userId))) {
+        // Verifica duplicata por ID numérico, ID original e dígitos
+        const digitsOnly = userId.replace(/\D/g, '');
+        if (arr.find(x => x && (x.id === numericId || x.id === userId || x.id === digitsOnly))) {
             return { success: false, message: 'Já estava na blacklist' };
         }
 
@@ -818,8 +826,11 @@ class ModerationSystem {
             expiresAt = Date.now() + expiryMs;
         }
 
+        // Se o numericId vier vazio (caso de LID sem @), extrai dígitos crus
+        const storeId = numericId || JidUtils.cleanPhoneNumber(userId);
+
         const entry = {
-            id: numericId, // Armazena sempre o numérico para consistência total
+            id: storeId,
             name: userName,
             number: userNumber,
             reason,
@@ -860,10 +871,11 @@ class ModerationSystem {
     * Remove da blacklist
     */
     public removeFromBlacklist(userId: string): boolean {
-        const numericId = JidUtils.getNumber(userId);
+        const numericId = JidUtils.getNumber(userId) || JidUtils.cleanPhoneNumber(userId);
+        const digitsOnly = userId.replace(/\D/g, '');
         const list = this.loadBlacklistDataSync();
         const arr = Array.isArray(list) ? list : [];
-        const index = arr.findIndex(x => x && (x.id === numericId || x.id === userId));
+        const index = arr.findIndex(x => x && (x.id === numericId || x.id === userId || x.id === digitsOnly));
 
         if (index !== -1) {
             const removed = arr[index];
@@ -908,16 +920,24 @@ class ModerationSystem {
 
             for (const entry of list) {
                 if (!entry || !entry.id) continue;
-                const numericId = JidUtils.getNumber(entry.id);
+                // If the ID contains '@', it's a JID — normalize it
+                // If it's pure digits (or digits with prefix), extract only digits
+                const rawId = String(entry.id);
+                let numericId = rawId.includes('@') ? JidUtils.getNumber(rawId) : rawId.replace(/\D/g, '');
 
-                // Se já existe e o ID atual não é o numérico perfeito, ou se é duplicata real
-                if (uniqueMap.has(numericId)) {
+                // Skip entries with no meaningful numeric ID
+                if (!numericId || numericId.length < 6) {
                     hasDuplicates = true;
-                    // Mantém a entrada mais completa ou recente (no caso a que já está ou a nova)
                     continue;
                 }
 
-                // Normaliza o ID da entry se necessário
+                // Check for duplicates
+                if (uniqueMap.has(numericId)) {
+                    hasDuplicates = true;
+                    continue;
+                }
+
+                // Normalize if needed
                 if (entry.id !== numericId) {
                     entry.id = numericId;
                     hasDuplicates = true;

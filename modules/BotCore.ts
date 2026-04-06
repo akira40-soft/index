@@ -517,7 +517,7 @@ class BotCore {
                 this.presenceSimulator.simulateTicks(m, false, ehGrupo).catch(() => { });
             }
 
-            const nome = m.pushName || 'Usuário';
+            const nome = await this._resolveUserName(m, numero, remoteJid);
             const numeroReal = numero;
             const conversaType = conversationType;
 
@@ -1001,6 +1001,53 @@ class BotCore {
             this.logger.error('❌ Erro reply:', error.message);
             return false;
         }
+    }
+
+    /**
+     * Resolve nome real do usuário.
+     * Em grupo com Cloud MD, m.pushName pode vir vazio ou genérico.
+     * Tentamos groupMetadata participants lookup como fallback.
+     */
+    private async _resolveUserName(m: any, numero: string, remoteJid: string): Promise<string> {
+        // Prioridade 1: pushName (mais rápido)
+        const pushName = m.pushName;
+        if (pushName && pushName !== 'Usuário' && pushName.trim().length > 0) {
+            return pushName;
+        }
+
+        // Prioridade 2: Buscar no grupo participantes lookup
+        const isGroup = remoteJid.endsWith('@g.us');
+        if (isGroup && this.sock) {
+            try {
+                const participant = m.key.participant || m.key.remoteJid;
+                if (participant) {
+                    const metadata = await this.sock.groupMetadata(remoteJid);
+                    const member = metadata.participants.find((p: any) => p.id === participant);
+                    if (member && member.notify && member.notify !== 'undefined' && member.notify !== '~') {
+                        return member.notify;
+                    }
+                    if (member && member.name) {
+                        return member.name;
+                    }
+                }
+            } catch (e: any) {
+                this.logger?.debug(`⚠️ [NAME] groupMetadata lookup falhou: ${e.message}`);
+            }
+        }
+
+        // Prioridade 3: onWhatsApp lookup
+        if (this.sock && !numero.includes('lid_') && numero !== 'desconhecido') {
+            try {
+                const onWp = await this.sock.onWhatsApp(numero);
+                if (onWp && Array.isArray(onWp) && onWp.length > 0 && onWp[0].notify) {
+                    return onWp[0].notify;
+                }
+            } catch (e: any) {
+                this.logger?.debug(`⚠️ [NAME] onWhatsApp lookup falhou: ${e.message}`);
+            }
+        }
+
+        return 'Usuário';
     }
 
     async handleViolation(m: any, tipo: string, limitStatus?: any): Promise<void> {
