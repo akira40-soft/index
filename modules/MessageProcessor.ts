@@ -44,8 +44,9 @@ class MessageProcessor {
      *   - "244956464620:0@s.whatsapp.net" — Número real com device ID
      *
      * Heurística: @lid = LID, @s.whatsapp.net = número real ou grupo.
+     * Se não consegue extrair o número real, retorna o LID como identificador.
      */
-    extractUserNumber(message: any, sock?: any) {
+    async extractUserNumber(message: any, sock?: any) {
         try {
             const key = message.key || {};
             const participant = key.participant || null;
@@ -57,21 +58,36 @@ class MessageProcessor {
                 if (this._isValidPhoneNumber(phoneNum)) return phoneNum;
             }
 
-            // ✅ PRIORIDADE 2: Usar participant — rejeitar @lid explicitamente
+            // ✅ PRIORIDADE 2: Usar participant
             if (participant) {
                 const participantStr = String(participant);
-                // LID: rejeita imediatamente
-                if (!participantStr.includes('@lid')) {
-                    const normalized = JidUtils.normalize(participantStr);
-                    const number = JidUtils.getNumber(normalized);
-                    const rawNum = JidUtils.cleanPhoneNumber(number);
-                    if (this._isValidPhoneNumber(rawNum)) {
-                        return rawNum;
+
+                // LID detectado — tenta resolver via onWhatsApp
+                if (participantStr.includes('@lid')) {
+                    this.logger?.debug(`🔍 [LID] Participant é LID, tentando resolver número real...`);
+                    const resolvedReal = await this._resolveLidToReal(participantStr, sock);
+                    if (resolvedReal && this._isValidPhoneNumber(resolvedReal)) {
+                        this.logger?.info(`✅ [LID] Resolvido → número real: ${resolvedReal}`);
+                        return resolvedReal;
                     }
+                    // Se não conseguiu resolver, retorna LID numérico como identificador fallback
+                    const lidNumeric = JidUtils.cleanPhoneNumber(participantStr);
+                    if (lidNumeric && lidNumeric.length >= 6) {
+                        this.logger?.debug(`⚠️ [LID] Não resolvido, usando LID como identificador: ${lidNumeric}`);
+                        return `lid_${lidNumeric}`;
+                    }
+                }
+
+                // Não é LID — extrai número normalmente
+                const normalized = JidUtils.normalize(participantStr);
+                const number = JidUtils.getNumber(normalized);
+                const rawNum = JidUtils.cleanPhoneNumber(number);
+                if (this._isValidPhoneNumber(rawNum)) {
+                    return rawNum;
                 }
             }
 
-            // ✅ PRIORIDADE 3: Usar remoteJid para PV
+            // ✅ PRIORIDADE 3: Usar remoteJid para PV (não grupo)
             if (remoteJid && !String(remoteJid).endsWith('@g.us') && !remoteJid.includes('@lid')) {
                 const number = JidUtils.getNumber(String(remoteJid));
                 const rawNum = JidUtils.cleanPhoneNumber(number);
@@ -86,6 +102,28 @@ class MessageProcessor {
             this.logger?.error('Erro ao extrair número:', e.message);
             return 'desconhecido';
         }
+    }
+
+    /**
+     * Tenta resolver LID para número real via onWhatsApp lookup
+     * e groupMetadata participants lookup.
+     */
+    private async _resolveLidToReal(lid: string, sock?: any): Promise<string | null> {
+        if (!sock) return null;
+        try {
+            // Método 1: sock.onWhatsApp — tenta encontrar o número real associado
+            const onWp = await sock.onWhatsApp(lid);
+            if (onWp && Array.isArray(onWp) && onWp.length > 0) {
+                const first = onWp[0];
+                if (first.jid && !String(first.jid).includes('@lid')) {
+                    const num = JidUtils.getNumber(String(first.jid));
+                    if (this._isValidPhoneNumber(num)) return num;
+                }
+            }
+        } catch (e: any) {
+            this.logger?.debug(`🔍 [LID] onWhatsApp falhou: ${e.message}`);
+        }
+        return null;
     }
 
     /**
@@ -232,7 +270,7 @@ class MessageProcessor {
     * Extrai informações de reply
     * Enhanced version adapted from akira's reply_context_handler.py
     */
-    extractReplyInfo(message: any): any {
+    async extractReplyInfo(message: any): Promise<any> {
         try {
             const context = message.message?.extendedTextMessage?.contextInfo;
             if (!context || !context.quotedMessage) return null;
@@ -295,7 +333,7 @@ class MessageProcessor {
             // Extract author number and name if available (name limited at API layer)
             let quotedAuthorNumero = 'desconhecido';
             if (participantJidCitado) {
-                quotedAuthorNumero = this.extractUserNumber({ key: { participant: participantJidCitado } });
+                quotedAuthorNumero = await this.extractUserNumber({ key: { participant: participantJidCitado } }, this.sock);
             }
 
             // Check if reply is to bot

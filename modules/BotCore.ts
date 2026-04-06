@@ -501,7 +501,7 @@ class BotCore {
             if (!this.messageProcessor) throw new Error('messageProcessor não inicializado');
 
             // Extrair informações ANTES de qualquer processamento
-            const numero = this.messageProcessor.extractUserNumber(m);
+            const numero = await this.messageProcessor.extractUserNumber(m, this.sock);
             const conversationType = this.messageProcessor.getConversationType(m);
 
             // ✅ VALIDAÇÃO DUPLA: Também verificar se o numero é do bot
@@ -535,7 +535,7 @@ class BotCore {
             const temAudio = this.messageProcessor.hasAudio(m);
             const caption = this.messageProcessor.extractText(m) || '';
             const participant = m.key.participant || m.key.remoteJid;
-            const replyInfo = this.messageProcessor.extractReplyInfo(m);
+            const replyInfo = await this.messageProcessor.extractReplyInfo(m);
             const temSticker = !!m.message?.stickerMessage;
             const textoFinal = texto || caption;
             const isCommand = this.messageProcessor.isCommand(textoFinal);
