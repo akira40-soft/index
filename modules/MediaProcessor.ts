@@ -64,6 +64,9 @@ try {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// User-Agent padrão
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
 // Webpmux para metadados de stickers - carregado dinamicamente
 let Webpmux: any = null;
 
@@ -84,6 +87,7 @@ class MediaProcessor {
     private tempFolder: string;
     private downloadCache: Map<string, any>;
     public sock: any;
+    private ytInstance: any = null;
 
     constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
@@ -108,7 +112,20 @@ class MediaProcessor {
 
     /**
      * ═══════════════════════════════════════════════════════════════════════
-     * DOWNLOAD DE ÁUDIO YOUTUBE — @distube/ytdl-core
+     * INICIALIZA INSTÂNCIA YOUTUBEI.JS (InnerTube API) — SINGLETON
+     * A API InnerTube é nativa do YouTube e bypass detection anti-bot.
+     * ═══════════════════════════════════════════════════════════════════════
+     */
+    private async getYT(): Promise<any> {
+        if (this.ytInstance) return this.ytInstance;
+        const { Innertube } = await import('youtubei.js');
+        this.ytInstance = await Innertube.create();
+        return this.ytInstance;
+    }
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * DOWNLOAD DE ÁUDIO YOUTUBE — youtubei.js (API InnerTube)
      * ═══════════════════════════════════════════════════════════════════════
      */
     async downloadYouTubeAudio(url: string): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
@@ -121,21 +138,19 @@ class MediaProcessor {
             }
 
             const finalUrl = metadata.url || url;
+            const videoId = metadata.videoId || this._extractVideoId(finalUrl);
 
-            const result = await this._downloadViaYtdlCore(finalUrl, 'audio');
+            const result = await this._downloadViaInnertube(videoId, 'audio');
             if (!result.sucesso) {
                 return { sucesso: false, error: result.error || 'Falha no download de áudio.' };
             }
 
-            // Se não tem metadata completa, usa do ytdl
             const finalMeta = metadata.sucesso ? metadata : result.metadata;
 
             // Converte para MP3 se necessário
             if (result.format?.mimeType && !result.format.mimeType.includes('mp3')) {
-                const inputPath = this.generateRandomFilename(this._extFromMime(result.format.mimeType));
+                const inputPath = result.filePath!;
                 const outputPath = this.generateRandomFilename('mp3');
-
-                await fs.promises.writeFile(inputPath, result.buffer!);
 
                 await new Promise<void>((resolve, reject) => {
                     ffmpeg(inputPath)
@@ -154,6 +169,12 @@ class MediaProcessor {
                 return { sucesso: true, buffer: mp3Buffer, metadata: finalMeta };
             }
 
+            if (result.filePath) {
+                const buffer = await fs.promises.readFile(result.filePath);
+                await this.cleanupFile(result.filePath);
+                return { sucesso: true, buffer, metadata: finalMeta };
+            }
+
             return { sucesso: true, buffer: result.buffer, metadata: finalMeta };
 
         } catch (error: any) {
@@ -164,7 +185,7 @@ class MediaProcessor {
 
     /**
      * ═══════════════════════════════════════════════════════════════════════
-     * DOWNLOAD DE VÍDEO YOUTUBE — @distube/ytdl-core
+     * DOWNLOAD DE VÍDEO YOUTUBE — youtubei.js (API InnerTube)
      * ═══════════════════════════════════════════════════════════════════════
      */
     async downloadYouTubeVideo(url: string): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
@@ -177,8 +198,9 @@ class MediaProcessor {
             }
 
             const finalUrl = metadata.url || url;
+            const videoId = metadata.videoId || this._extractVideoId(finalUrl);
 
-            const result = await this._downloadViaYtdlCore(finalUrl, 'video');
+            const result = await this._downloadViaInnertube(videoId, 'video');
             if (!result.sucesso) {
                 return { sucesso: false, error: result.error || 'Falha no download de vídeo.' };
             }
@@ -188,13 +210,13 @@ class MediaProcessor {
             // Verifica tamanho máximo
             const stats = fs.statSync(result.filePath || '');
             if (stats.size > this.config.YT_MAX_SIZE_MB * 1024 * 1024) {
-                await this.cleanupFile(result.filePath!);
+                await this.cleanupFile(result.filePath);
                 return { sucesso: false, error: 'O vídeo final excedeu o tamanho máximo permitido.' };
             }
 
             if (stats.size < 50 * 1024 * 1024) {
-                const buffer = await fs.promises.readFile(result.filePath!);
-                await this.cleanupFile(result.filePath!);
+                const buffer = await fs.promises.readFile(result.filePath);
+                await this.cleanupFile(result.filePath);
                 return { sucesso: true, buffer, metadata: finalMeta };
             }
 
@@ -207,73 +229,114 @@ class MediaProcessor {
     }
 
     /**
-     * Download core usando @distube/ytdl-core
-     * Para áudio: baixa audio-only e salva em arquivo para conversão posterior
-     * Para vídeo: baixa via stream para arquivo (evita consumo de memória)
+     * Download usando InnerTube API (youtubei.js).
+     * A API InnerTube é nativa do YouTube e não é detectada como bot.
+     *
+     * Para áudio: baixa o melhor formato audio-only
+     * Para vídeo: baixa muxed (áudio+vídeo juntos) <= 720p
      */
-    private async _downloadViaYtdlCore(url: string, type: 'audio' | 'video'): Promise<{
+    private async _downloadViaInnertube(videoId: string, type: 'audio' | 'video'): Promise<{
         sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any; format?: any;
     }> {
         try {
-            const ytdl = await import('@distube/ytdl-core').then(m => m.default || m);
+            const yt = await this.getYT();
+            const info = await yt.getInfo(videoId as never);
 
-            const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+            if (!info || !info.streaming_data) {
+                return { sucesso: false, error: 'Vídeo não encontrado ou indisponível.' };
+            }
 
-            this.logger?.info(`📥 ytdl-core: obtendo info para ${type}...`);
-            const info = await ytdl.getInfo(url, {
-                requestOptions: { headers: { 'User-Agent': ua } }
-            });
+            const basic = info.basic_info || {};
+            const title = basic.title || 'Título desconhecido';
+            const author = typeof basic.author === 'string' ? basic.author : (basic.author?.name || 'Canal desconhecido');
+            const duration = basic.duration || 0;
 
-            const videoDetails = info.videoDetails;
+            const thumbnails = basic.thumbnail;
+            const thumbnail = Array.isArray(thumbnails)
+                ? (thumbnails[thumbnails.length - 1]?.url || `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`)
+                : (typeof thumbnails === 'object' && thumbnails !== null
+                    ? (thumbnails as any).url
+                    : `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`);
+
             const metadata = {
-                titulo: videoDetails.title || 'Título desconhecido',
-                canal: videoDetails.author?.name || 'Canal desconhecido',
-                duracao: parseInt(videoDetails.lengthSeconds) || 0,
-                duracaoFormatada: this._formatDuration(parseInt(videoDetails.lengthSeconds) || 0),
-                thumbnail: videoDetails.thumbnails?.[videoDetails.thumbnails.length - 1]?.url || '',
-                url: videoDetails.video_url || url
+                titulo: title,
+                canal: author,
+                duracao: duration ? Math.floor(duration) : 0,
+                duracaoFormatada: duration ? this._formatDuration(Math.floor(duration)) : '0:00',
+                thumbnail,
+                url: `https://www.youtube.com/watch?v=${videoId}`,
+                videoId
             };
 
+            const adaptive = info.streaming_data.adaptive_formats || [];
+
             if (type === 'audio') {
-                const format = ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' });
-                if (!format || !format.url) {
+                // Filtra formatos audio-only
+                const audioFormats = adaptive.filter((f: any) => f.has_audio && !f.has_video);
+                if (audioFormats.length === 0) {
                     return { sucesso: false, error: 'Nenhum formato de áudio disponível.' };
                 }
 
-                this.logger?.info(`📥 Baixando áudio: ${format.mimeType} (${format.audioBitrate}kbps)`);
+                this.logger?.info(`📥 innertube: selecionando melhor áudio...`);
 
-                // Download como stream para arquivo (evita memory issues)
-                const outputPath = this.generateRandomFilename(this._extFromMime(format.mimeType));
-                await this._downloadToStream(format.url, ua, outputPath);
+                // Prefere opus, depois m4a, depois qualquer um
+                let format = audioFormats.find((f: any) => f.mime_type?.includes('opus'))
+                    || audioFormats.find((f: any) => f.mime_type?.includes('mp4'))
+                    || audioFormats[0];
 
-                return { sucesso: true, filePath: outputPath, metadata, format, buffer: undefined };
+                const downloadUrl = format.decipher(yt.session.player as never) as string;
+                this.logger?.info(`📥 Baixando áudio: ${format.mime_type || 'desconhecido'}`);
+
+                const outputPath = this.generateRandomFilename(this._extFromMime(format.mime_type || 'webm'));
+                await this._downloadToStream(downloadUrl, UA, outputPath);
+
+                return { sucesso: true, filePath: outputPath, metadata, format: { mimeType: format.mime_type || 'webm' }, buffer: undefined };
+
             } else {
-                // Tenta encontrar vídeo muxed (áudio+vídeo juntos) <= 720p
-                const muxed = info.formats.filter(f => f.hasVideo && f.hasAudio && f.height && f.height <= 720);
-                let format: any = null;
+                // Vídeo — tenta muxed (áudio+vídeo juntos) <= 720p
+                const muxed = adaptive.filter(
+                    (f: any) => f.has_video && f.has_audio && f.quality_label && (f.width || 0) <= 1280
+                );
+
+                let format: any;
                 if (muxed.length > 0) {
-                    format = muxed.sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+                    format = muxed.sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+                } else {
+                    // Senão precisa mux separadamente ou pega qualquer
+                    const videoOnly = adaptive.filter((f: any) => f.has_video && !f.has_audio);
+                    if (videoOnly.length > 0) {
+                        // Tenta encontrar um muxed em formats (não adaptive)
+                        const muxedFormats = info.streaming_data.formats || [];
+                        const muxedAlt = muxedFormats.filter((f: any) => f.has_video && f.has_audio);
+                        if (muxedAlt.length > 0) {
+                            format = muxedAlt.sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
+                        } else {
+                            // Melhor vídeo (sem áudio) — youtubei.js pode mux automaticamente
+                            format = videoOnly.sort((a: any, b: any) => (b.width || 0) - (a.width || 0)).find(
+                                (f: any) => (f.width || 0) <= 1280
+                            ) || videoOnly[0];
+                            this.logger?.info('⚠️ Usando vídeo sem áudio (muxed indisponível)');
+                        }
+                    } else {
+                        const anyFmt = info.streaming_data.formats?.find((f: any) => f.has_video);
+                        if (!anyFmt) {
+                            return { sucesso: false, error: 'Nenhum formato de vídeo disponível.' };
+                        }
+                        format = anyFmt;
+                    }
                 }
 
-                // Fallback: download highest
-                if (!format) {
-                    format = ytdl.chooseFormat(info.formats, { quality: 'highest' });
-                }
+                const downloadUrl = format.decipher(yt.session.player as never) as string;
+                this.logger?.info(`📥 Baixando vídeo: ${format.mime_type || 'desconhecido'} ${format.width || '?'}x${format.height || '?'}`);
 
-                if (!format || !format.url) {
-                    return { sucesso: false, error: 'Nenhum formato de vídeo disponível.' };
-                }
+                const outputPath = this.generateRandomFilename(this._extFromMime(format.mime_type || 'mp4'));
+                await this._downloadToStream(downloadUrl, UA, outputPath);
 
-                this.logger?.info(`📥 Baixando vídeo: ${format.mimeType} ${format.width}x${format.height}`);
-
-                const outputPath = this.generateRandomFilename(this._extFromMime(format.mimeType));
-                await this._downloadToStream(format.url, ua, outputPath);
-
-                return { sucesso: true, filePath: outputPath, metadata, format, buffer: undefined };
+                return { sucesso: true, filePath: outputPath, metadata, format: { mimeType: format.mime_type || 'mp4' }, buffer: undefined };
             }
 
         } catch (error: any) {
-            this.logger?.error(`❌ Erro ytdl-core: ${error.message}`);
+            this.logger?.error(`❌ Erro innertube: ${error.message}`);
             return { sucesso: false, error: error.message };
         }
     }
@@ -306,17 +369,19 @@ class MediaProcessor {
      * Determina extensão de arquivo pelo MIME type
      */
     private _extFromMime(mime: string): string {
+        if (!mime) return 'webm';
         if (mime.includes('mp4')) return 'mp4';
         if (mime.includes('webm')) return 'webm';
         if (mime.includes('ogg')) return 'ogg';
         if (mime.includes('mp3')) return 'mp3';
-        if (mime.startsWith('audio')) return 'webm'; // default para áudio
-        return 'mp4'; // default para vídeo
+        if (mime.includes('opus')) return 'opus';
+        if (mime.startsWith('audio')) return 'webm';
+        return 'mp4';
     }
 
     /**
      * Obtém metadados usando método simples - VERSÃO ROBUSTA
-     * Tenta múltiplas fontes: APIs Invidious, Piped, yt-search
+     * Tenta múltiplas fontes: APIs Invidious, Piped, youtubei.js, yt-search
      */
     private async _getYouTubeMetadataSimple(url: string): Promise<any> {
         // Extrai video ID da URL (apenas funciona se for uma URL válida do YouTube)
@@ -344,12 +409,12 @@ class MediaProcessor {
                     dataPublicacao: searchResult.dataPublicacao || 'N/A'
                 };
             }
-            this.logger?.warn(`⚠️ Busca inicial falhou para "${url}", tentando ytdl-core...`);
+            this.logger?.warn(`⚠️ Busca inicial falhou para "${url}", tentando youtubei.js...`);
         } else {
             this.logger?.info(`🔍 Extraindo metadados para video ID: ${videoId || '(URL sem ID)'}`);
         }
 
-        // PRIORIDADE 1: Invidious API (direto pelo ID, se temos o ID)
+        // PRIORIDADE 1: Invidious API
         if (videoId) {
             const invidiousResult = await this._getMetadataFromInvidious(videoId);
             if (invidiousResult.sucesso) {
@@ -365,30 +430,33 @@ class MediaProcessor {
             }
         }
 
-        // PRIORIDADE 3: @distube/ytdl-core
+        // PRIORIDADE 3: youtubei.js via getInfo
         try {
-            const ytdl = await import('@distube/ytdl-core').then(m => m.default || m);
-            const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-            const info = await ytdl.getInfo(url, {
-                requestOptions: { headers: { 'User-Agent': ua } }
-            });
-            const vd = info.videoDetails;
-            const resolvedId = vd.videoId || videoId;
-            return {
-                sucesso: true,
-                titulo: vd.title || 'Título desconhecido',
-                canal: vd.author?.name || 'Canal desconhecido',
-                duracao: parseInt(vd.lengthSeconds) || 0,
-                duracaoFormatada: this._formatDuration(parseInt(vd.lengthSeconds) || 0),
-                thumbnail: vd.thumbnails?.[vd.thumbnails.length - 1]?.url || '',
-                url: vd.video_url || url,
-                videoId: resolvedId,
-                visualizacoes: this._formatStats(vd.viewCount),
-                curtidas: 'N/A',
-                dataPublicacao: vd.publishDate || 'N/A'
-            };
+            const yt = await this.getYT();
+            const basic = await yt.getBasicInfo(videoId as never || url as never);
+            if (basic.basic_info) {
+                const vd = basic.basic_info;
+                const resolvedId = vd.video_id || videoId;
+                const author = typeof vd.author === 'string' ? vd.author : (vd.author?.name || 'Canal desconhecido');
+                const thumb = Array.isArray(vd.thumbnail)
+                    ? (vd.thumbnail[vd.thumbnail.length - 1]?.url || `https://img.youtube.com/vi/${resolvedId}/maxresdefault.jpg`)
+                    : (typeof vd.thumbnail === 'object' && vd.thumbnail !== null ? (vd.thumbnail as any).url : `https://img.youtube.com/vi/${resolvedId}/maxresdefault.jpg`);
+                return {
+                    sucesso: true,
+                    titulo: vd.title || 'Título desconhecido',
+                    canal: author,
+                    duracao: vd.duration ? Math.floor(vd.duration) : 0,
+                    duracaoFormatada: vd.duration ? this._formatDuration(Math.floor(vd.duration)) : '0:00',
+                    thumbnail: thumb,
+                    url: `https://www.youtube.com/watch?v=${resolvedId}`,
+                    videoId: resolvedId,
+                    visualizacoes: this._formatStats(vd.view_count),
+                    curtidas: 'N/A',
+                    dataPublicacao: vd.publish_date || 'N/A'
+                };
+            }
         } catch (err: any) {
-            this.logger?.debug(`⚠️ ytdl-core metadata falhou: ${err.message.substring(0, 50)}`);
+            this.logger?.debug(`⚠️ youtubei.js metadata falhou: ${err.message.substring(0, 50)}`);
         }
 
         // Último recurso: URL direta sem metadata completo
@@ -493,7 +561,7 @@ class MediaProcessor {
             try {
                 const response = await axios.get(`${instance}/api/v1/videos/${videoId}`, {
                     timeout: 10000,
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                    headers: { 'User-Agent': UA }
                 });
 
                 if (response.data) {
@@ -536,7 +604,7 @@ class MediaProcessor {
             try {
                 const response = await axios.get(`${instance}/streams/${videoId}`, {
                     timeout: 10000,
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                    headers: { 'User-Agent': UA }
                 });
 
                 if (response.data) {
