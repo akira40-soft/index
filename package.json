@@ -17,7 +17,7 @@
     "hf-dev": "NODE_ENV=development node index.js"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.14.4",
+    "youtubei.js": "^16.0.0",
     "@imgly/background-removal": "^1.4.5",
     "@whiskeysockets/baileys": "^6.7.8",
     "async": "^3.2.5",
