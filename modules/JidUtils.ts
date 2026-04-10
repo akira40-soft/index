@@ -56,26 +56,50 @@ export class JidUtils {
      */
     public static extractPhoneNumber(phoneNumberOrJid: string | null | undefined): string {
         if (!phoneNumberOrJid) return "";
-        
+
         // Se contém @, é um JID/phone_number do WhatsApp
         if (phoneNumberOrJid.includes('@')) {
             return phoneNumberOrJid.split('@')[0];
         }
-        
+
         // Se é apenas número puro
         return phoneNumberOrJid.replace(/\D/g, '');
     }
 
     /**
-     * Garante que um número de telefone seja apenas dígitos, remover qualquer JID/LID/sufixo.
+     * Garante que um número de telefone seja apenas dígitos, removendo qualquer JID/LID/sufixo/prefixo.
      * Útil para garantir que o payload enviado à API contenha apenas números limpos.
      * Exemplo: "244956464620@lid" -> "244956464620"
      * Exemplo: "244956464620@s.whatsapp.net" -> "244956464620"
+     * Exemplo: "lid_244956464620" -> "244956464620"
+     * Exemplo: "lid_244956464620:1@s.whatsapp.net" -> "244956464620"
      */
     public static cleanPhoneNumber(input: string | null | undefined): string {
         if (!input) return "";
+
         // Remove tudo exceto dígitos
-        return String(input).replace(/\D/g, '');
+        let cleaned = String(input).replace(/\D/g, '');
+        return cleaned;
+    }
+
+    /**
+     * Alias adicional: Normaliza um ID de usuário/participante para número puro.
+     * Remove prefixo 'lid_', sufixo '@lid', '@s.whatsapp.net', ':device'
+     * Exemplo: "lid_202391978787009" -> "202391978787009"
+     * Exemplo: "202391978787009:1@s.whatsapp.net" -> "202391978787009"
+     * This is the SAFEST way to normalize ANY user ID format
+     */
+    public static normalizeUserNumber(input: string | null | undefined): string {
+        if (!input) return "";
+
+        // First, remove prefixes like 'lid_'
+        let normalized = String(input);
+        if (normalized.startsWith('lid_')) {
+            normalized = normalized.substring(4);
+        }
+
+        // Then extract only digits (removes any @, :, etc suffixes)
+        return normalized.replace(/\D/g, '');
     }
 }
 

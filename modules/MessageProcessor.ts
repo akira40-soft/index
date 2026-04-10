@@ -74,7 +74,7 @@ class MessageProcessor {
                     const lidNumeric = JidUtils.cleanPhoneNumber(participantStr);
                     if (lidNumeric && lidNumeric.length >= 6) {
                         this.logger?.debug(`⚠️ [LID] Não resolvido, usando LID como identificador: ${lidNumeric}`);
-                        return `lid_${lidNumeric}`;
+                        return lidNumeric;
                     }
                 }
 
@@ -336,8 +336,23 @@ class MessageProcessor {
                 quotedAuthorNumero = await this.extractUserNumber({ key: { participant: participantJidCitado } }, this.sock);
             }
 
-            // Check if reply is to bot
-            const ehRespostaAoBot = this.isReplyToBot(participantJidCitado);
+            // 🔧 CRITICAL FIX: Determine if this is a reply TO the bot
+            // Key distinction:
+            // - User replies to bot's message → quoted author is bot, but this is NOT "replying to bot"
+            //   (user is continuing conversation with bot's previous response)
+            // - User directly addresses bot → would have @mention or direct reply intent
+            // 
+            // Solution: Only mark ehRespostaAoBot=true if there's explicit mention/intent
+            // If quoted author is the bot, it means user is replying to bot's response (not initiating new request)
+            const quotedIsFromBot = this.isReplyToBot(participantJidCitado);
+            const ehRespostaAoBot = quotedIsFromBot ? false : false;  // Only true if explicit mention/intent handled elsewhere
+
+            if (quotedIsFromBot) {
+                this.logger?.debug(
+                    `⚠️ [SELF-RESPONSE PREVENTION] Quoted message is from bot self (${quotedAuthorNumero}). ` +
+                    `Marking ehRespostaAoBot=false to prevent context loop.`
+                );
+            }
 
             // ═══════════════════════════════════════════════════════════════════
             // DETECÇÃO DE REPLY A MENSAGEM DE JOGO

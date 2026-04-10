@@ -518,7 +518,9 @@ class BotCore {
             }
 
             const nome = await this._resolveUserName(m, numero, remoteJid);
-            const numeroReal = numero;
+            // 🔧 CRITICAL FIX: Normalize number to pure digits, removing 'lid_' prefix or any other suffix
+            // Garante que numeroReal é sempre apenas dígitos puros, sem prefixos ou sufixos
+            const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
             const conversaType = conversationType;
 
             if (shouldLog) {
@@ -559,11 +561,13 @@ class BotCore {
             // ✅ XP para TODA mensagem em grupo ANTES do return ou processamento da IA
             if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
                 this.groupManagement?.groupSettings[remoteJid]?.leveling) {
-                const xpResult = this.levelSystem.awardXp(remoteJid, numeroReal, 10);
+                // 🔧 Garantir que numeroReal é limpo sem 'lid_' prefix
+                const numeroLimpoXP = JidUtils.cleanPhoneNumber(numeroReal) || numeroReal;
+                const xpResult = this.levelSystem.awardXp(remoteJid, numeroLimpoXP, 10);
                 if (xpResult?.leveled) {
                     this.logger.info(`🎉 [LEVEL UP] ${nome} → Nível ${xpResult.rec?.level}!`);
                     this.sock.sendMessage(remoteJid, {
-                        text: `🎉 *@${numeroReal}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
+                        text: `🎉 *@${numeroLimpoXP}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
                         mentions: [m.key.participant || remoteJid]
                     }).catch(() => { });
                 } else {
@@ -635,7 +639,8 @@ class BotCore {
     async handleImageMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         this.logger.info(`🖼️ [IMAGEM] ${nome}`);
         if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem && this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
-            const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 15);
+            const numeroLimpoXP = JidUtils.cleanPhoneNumber(numeroReal) || numeroReal;
+            const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroLimpoXP, 15);
             if (xp) this.logger.info(`📈 [LEVEL] ${nome} +15 XP`);
         }
 
@@ -822,7 +827,8 @@ class BotCore {
                         // XP para comandos em grupos com leveling
                         if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
                             this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
-                            const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 5);
+                            const numeroLimpoXP = JidUtils.cleanPhoneNumber(numeroReal) || numeroReal;
+                            const xp = this.levelSystem.awardXp(m.key.remoteJid, numeroLimpoXP, 5);
                             if (xp) this.logger.info(`📈 [LEVEL] ${nome} +5 XP (comando)`);
                         }
                         return; // COMANDO PROCESSADO ✓
@@ -837,7 +843,8 @@ class BotCore {
             // (deve ser ANTES do deveResponder para contar msgs comuns do grupo)
             if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
                 this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
-                const xpResult = this.levelSystem.awardXp(m.key.remoteJid, numeroReal, 10);
+                const numeroLimpoXP = JidUtils.cleanPhoneNumber(numeroReal) || numeroReal;
+                const xpResult = this.levelSystem.awardXp(m.key.remoteJid, numeroLimpoXP, 10);
                 if (xpResult?.leveled) {
                     this.logger.info(`🎉 [LEVEL UP] ${nome} você foi elevado ao nível ${xpResult.rec?.level}!`);
                     // Notifica o grupo sobre o level up

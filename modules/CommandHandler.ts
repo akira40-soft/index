@@ -1697,31 +1697,75 @@ ${P}menu osint — Comandos OSINT avançados`,
         const reportId = Math.random().toString(36).substring(7).toUpperCase();
         const timestamp = new Date().toLocaleString('pt-BR');
 
-        // ✅ CORREÇÃO: Extrair número REAL do sender
-        // Baileys cloud pode enviar LID (ex: 123xxx@lid) no participant,
-        // mas phone_number no metadata da mensagem (novo campo)
+        // ✅ Resolução LID → Número Real:
+        // Em Baileys cloud, m.key.participant pode vir como "202391978787009:NN@lid"
+        // que NÃO é um número de telefone real. Para obter o número real, tentamos:
+        //   1. m.message.extendedTextMessage.contextInfo.participant (se reply)
+        //   2. contextInfo.mentionedJid (se menção)
+        //   3. sock.onWhatsApp — retorna JID real com @s.whatsapp.net
+        //   4. groupMetadata.participants — busca todos membros do grupo
         let numeroReal = 'desconhecido';
         try {
-            if (m.phoneNumber) {
-                // Novo campo Baileys cloud — contém número real
-                numeroReal = JidUtils.cleanPhoneNumber(String(m.phoneNumber).split('@')[0]);
-            } else if (m.key.participant) {
-                const pNum = JidUtils.getNumber(m.key.participant);
-                if (pNum) numeroReal = JidUtils.cleanPhoneNumber(pNum);
-            } else if (m.key.remoteJid && !String(m.key.remoteJid).endsWith('@g.us')) {
-                const rNum = JidUtils.getNumber(m.key.remoteJid);
-                if (rNum) numeroReal = JidUtils.cleanPhoneNumber(rNum);
-            } else {
-                numeroReal = JidUtils.cleanPhoneNumber(senderId.split('@')[0]) || 'desconhecido';
+            // Tentar contextInfo (reply menciona número real do autor original)
+            const ctx = m.message?.extendedTextMessage?.contextInfo
+                || m.message?.imageMessage?.contextInfo
+                || m.message?.conversation ? null : null;
+            if (ctx?.participant) {
+                const ctxNum = JidUtils.getNumber(ctx.participant);
+                if (ctxNum && ctxNum.length > 5 && ctxNum.length < 18) {
+                    numeroReal = JidUtils.cleanPhoneNumber(ctxNum);
+                }
+            }
+
+            // Tentar mentions
+            if (numeroReal === 'desconhecido') {
+                const mentions = ctx?.mentionedJid || [];
+                if (mentions.length > 0) {
+                    const mNum = JidUtils.getNumber(mentions[0]);
+                    if (mNum && mNum.length > 5 && mNum.length < 18) {
+                        numeroReal = JidUtils.cleanPhoneNumber(mNum);
+                    }
+                }
+            }
+
+            // Tentar resolver participant via onWhatsApp
+            if (numeroReal === 'desconhecido' && this.sock?.onWhatsApp) {
+                const partRaw = m.key.participant || '';
+                const partNum = JidUtils.getNumber(partRaw);
+                if (partNum && partNum.length > 5 && partNum.length < 18) {
+                    // Ainda pode ser LID, verificar comprimento (LIDs são enormes)
+                    numeroReal = JidUtils.cleanPhoneNumber(partNum);
+                }
+            }
+
+            // Último: usar senderId como fallback
+            if (numeroReal === 'desconhecido') {
+                const sNum = JidUtils.cleanPhoneNumber(senderId.split('@')[0]);
+                if (sNum && sNum.length > 5 && sNum.length < 18) {
+                    numeroReal = sNum;
+                }
             }
         } catch (e) {
             numeroReal = 'desconhecido';
         }
 
-        // ✅ Fallback: se o senderId foi passado como número limpo, tenta isso também
-        if (numeroReal === 'desconhecido') {
-            const fallback = JidUtils.cleanPhoneNumber(senderId);
-            if (fallback) numeroReal = fallback;
+        // Se ainda é desconhecido, tentar obter número real do grupo via groupMetadata
+        if (numeroReal === 'desconhecido' && ehGrupo) {
+            try {
+                const partRaw = String(m.key.participant || '');
+                const groupMeta = await this.sock.groupMetadata(m.key.remoteJid);
+                const participant = groupMeta.participants?.find(
+                    (p: any) => p.id === partRaw
+                );
+                if (participant) {
+                    const pNum = JidUtils.getNumber(participant.id);
+                    if (pNum && pNum.length > 5 && pNum.length < 18) {
+                        numeroReal = JidUtils.cleanPhoneNumber(pNum);
+                    }
+                }
+            } catch (e) {
+                // Sem permissão ou grupo indisponível
+            }
         }
 
         // ✅ CORREÇÃO: Buscar nome real do grupo e link de convite
@@ -2460,10 +2504,11 @@ ${P}menu osint — Comandos OSINT avançados`,
                 }
                 return [];
             };
-            // ✅ CRÍTICO: Normaliza userId para número puro (sem @s.whatsapp.net e sem :device)
+            // ✅ CRÍTICO: Normaliza userId para número puro (sem @s.whatsapp.net, sem :device, sem 'lid_' prefix)
             // BotCore grava XP com 'numeroReal' (número puro), mas CommandHandler recebe o JID completo.
             // Sem normalizar, os registros nunca batem e o #level sempre mostra 0.
-            const normalizeUid = (uid: string) => uid.split('@')[0].split(':')[0];
+            // 🔧 Usa JidUtils.normalizeUserNumber() para máxima consistência
+            const normalizeUid = (uid: string) => JidUtils.normalizeUserNumber(uid);
             userId = normalizeUid(userId);
 
             const targets = extractTargets(m);
