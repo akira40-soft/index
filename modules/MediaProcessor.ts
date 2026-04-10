@@ -172,7 +172,7 @@ class MediaProcessor {
         // 3. Força IPv4 para evitar problemas
         // 4. Em retries, troca player_client
         const playerClient = options.playerClient || 'web_embedded';
-        let extractorArgs = `youtube:player_client=${playerClient},skip_dash_manifest=true`;
+        let extractorArgs = `youtube:player_client=${playerClient}`;
 
         const bypassFlags = retryCount === 0 ? [
             '--ignore-config',
