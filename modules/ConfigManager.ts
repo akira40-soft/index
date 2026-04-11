@@ -83,6 +83,7 @@ class ConfigManager {
     public FEATURE_VISION: boolean = false;
     public YT_COOKIES_PATH: string = "";
     public YT_PO_TOKEN: string = "";
+    public DONO_APELIDOS: string[] = [];
     [key: string]: any;
 
     constructor() {
@@ -217,6 +218,9 @@ class ConfigManager {
             { numero: '24478787009', nomeExato: 'Isaac Quarenta' }
         ];
 
+        const aliasesEnv = process.env?.DONO_APELIDOS || 'morema,morena';
+        this.DONO_APELIDOS = aliasesEnv.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
         // ═══ FEATURES ═══
         this.FEATURE_STT_ENABLED = process.env?.FEATURE_STT !== 'false';
         this.FEATURE_TTS_ENABLED = process.env?.FEATURE_TTS !== 'false';
@@ -248,10 +252,10 @@ class ConfigManager {
                 dono => String(dono.numero).replace(/\D/g, '') === numeroLimpo
             );
 
-            // Se não for por número, tenta pelo nome especial (Morema/Morena)
+            // Se não for por número, tenta pelo nome especial configurado via .env
             if (!porNumero && typeof nomeBot === 'string') {
                 const n = nomeBot.toLowerCase();
-                if (n.includes('bel') || n.includes('beu')) return true;
+                if (this.DONO_APELIDOS.some(alias => n.includes(alias))) return true;
             }
 
             return porNumero;
