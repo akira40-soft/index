@@ -178,12 +178,8 @@ class MediaProcessor {
             '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
-            '--allow-unplayable-formats',
             '--socket-timeout 90',
             '--retries 5',
-            '--http-chunk-size 10M',
-            '--buffer-size 16K',
-            '--no-warnings',
             '--geo-bypass',
             '--no-playlist'
         ].filter(Boolean).join(' ') : [
@@ -196,7 +192,7 @@ class MediaProcessor {
         let actionFlags = '';
         if (options.type === 'audio') {
             // Cascade de formatos para máxima compatibilidade
-            const formatCascade = 'ba[ext=m4a]/ba[ext=webm]/ba/best[ext=m4a]/best[ext=webm]/best';
+            const formatCascade = 'bestaudio/best';
             actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
         } else if (options.type === 'video') {
             actionFlags = `-o "${options.output}"`;
@@ -238,11 +234,12 @@ class MediaProcessor {
                 this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
                 await execAsync(cmd, { timeout: 180000, maxBuffer: 150 * 1024 * 1024 });
             } catch (e: any) {
-                const msg = (e.stderr || e.message || '').split('\n')[0];
+                const fullErrorStr = (e.stderr || e.message || '').toLowerCase();
+                const msg = fullErrorStr.split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
 
                 // Retry com cascade de player_client
-                if (msg.includes('format not available') && retryCount < 4) {
+                if ((fullErrorStr.includes('format not available') || fullErrorStr.includes('format is not available')) && retryCount < 4) {
                     const clients = ['web', 'ios', 'android', 'tv'];
                     const nextClient = clients[retryCount] || clients[clients.length - 1];
                     this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Tentando player_client=${nextClient}...`);
