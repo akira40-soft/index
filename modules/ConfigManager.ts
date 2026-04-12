@@ -83,7 +83,7 @@ class ConfigManager {
     public FEATURE_VISION: boolean = false;
     public YT_COOKIES_PATH: string = "";
     public YT_PO_TOKEN: string = "";
-    public DONO_APELIDOS: string = "";
+    public DONO_APELIDOS: string[] = [""]
     [key: string]: any;
 
     constructor() {
