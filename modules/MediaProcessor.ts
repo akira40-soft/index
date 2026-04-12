@@ -200,7 +200,8 @@ class MediaProcessor {
             const formatCascade = 'ba[ext=m4a]/ba/b[ext=mp4]/b';
             actionFlags = `-f "${formatCascade}" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
-            actionFlags = `-o "${options.output}"`;
+            const videoFormat = 'bv[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/best';
+            actionFlags = `-f "${videoFormat}" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
         }
@@ -330,7 +331,7 @@ class MediaProcessor {
                 if (videoId) {
                     // Tenta Piped
                     this.logger?.info(`🌊 Tentando FALLBACK 1: Piped VÍDEO API...`);
-                    const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '360');
+                    const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '720');
                     if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
                         const buffer = await fs.promises.readFile(outputPath);
                         await this.cleanupFile(outputPath);
@@ -338,7 +339,7 @@ class MediaProcessor {
                     }
                     // Tenta Invidious
                     this.logger?.info(`🔌 Tentando FALLBACK 2: Invidious Proxy...`);
-                    const invRes = await this._downloadViaInvidiousProxy(videoId, outputPath, 'video', '360');
+                    const invRes = await this._downloadViaInvidiousProxy(videoId, outputPath, 'video', '720');
                     if (invRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
                         const buffer = await fs.promises.readFile(outputPath);
                         await this.cleanupFile(outputPath);
@@ -369,7 +370,7 @@ class MediaProcessor {
                 if (videoId) {
                     // 1. Tenta Piped
                     this.logger?.info(`🌊 Tentando FALLBACK 1: Piped VÍDEO API...`);
-                    const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '360');
+                    const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '720');
                     if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
                         const buffer = await fs.promises.readFile(outputPath);
                         await this.cleanupFile(outputPath);
@@ -378,7 +379,7 @@ class MediaProcessor {
 
                     // 2. Tenta Invidious
                     this.logger?.info(`🔌 Tentando FALLBACK 2: Invidious Proxy...`);
-                    const invRes = await this._downloadViaInvidiousProxy(videoId, outputPath, 'video', '360');
+                    const invRes = await this._downloadViaInvidiousProxy(videoId, outputPath, 'video', '720');
                     if (invRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
                         const buffer = await fs.promises.readFile(outputPath);
                         await this.cleanupFile(outputPath);
