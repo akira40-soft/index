@@ -286,9 +286,9 @@ class MediaProcessor {
      * DOWNLOAD DE VÍDEO - yt-dlp COM GAMBIARRAS CONTRA BLOQUEIO DO YOUTUBE
      * ═══════════════════════════════════════════════════════════════════════
      */
-    async downloadYouTubeVideo(url: string, retryCount: number = 0): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
+    async downloadYouTubeVideo(url: string, retryCount: number = 0, playerClient: string = 'web_embedded'): Promise<{ sucesso: boolean; buffer?: Buffer; filePath?: string; error?: string; metadata?: any }> {
         try {
-            this.logger?.info(`🎬 Download vídeo: ${url}${retryCount > 0 ? ` (retry ${retryCount}/3)` : ''}`);
+            this.logger?.info(`🎬 Download vídeo: ${url}${retryCount > 0 ? ` (retry ${retryCount}/3)` : ''} (player_client=${playerClient})`);
 
             const metadata = await this._getYouTubeMetadataSimple(url);
             if (!metadata.sucesso) {
@@ -298,23 +298,62 @@ class MediaProcessor {
             const finalUrl = metadata.url || url;
             const outputPath = this.generateRandomFilename('mp4');
 
-            this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra web_embedded...`);
+            this.logger?.info(`[VÍDEO] Rodando yt-dlp com gambiarra player_client=${playerClient}...`);
             const cmd = this._buildYtdlpCommand(finalUrl, {
                 type: 'video',
-                output: outputPath
+                output: outputPath,
+                retryCount: retryCount,
+                playerClient: playerClient
             });
 
             try {
                 this.logger?.debug(`Comando: ${cmd.substring(0, 200)}...`);
                 await execAsync(cmd, { timeout: 360000, maxBuffer: 500 * 1024 * 1024 });
             } catch (e: any) {
-                const msg = (e.stderr || e.message || '').split('\n')[0];
+                const fullErrorStr = (e.stderr || e.message || '').toLowerCase();
+                const msg = fullErrorStr.split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
+
+                // Retry com cascade estratégico de player_client
+                if ((fullErrorStr.includes('format not available') || fullErrorStr.includes('format is not available') || fullErrorStr.includes('jsc')) && retryCount < 3) {
+                    const clients = ['ios', 'android', 'web', 'tv'];
+                    const nextClient = clients[retryCount] || clients[clients.length - 1];
+                    this.logger?.info(`🔄 [FORMAT RETRY] Tentando client alternativo: ${nextClient}...`);
+                    await new Promise(r => setTimeout(r, 2000));
+                    return await this.downloadYouTubeVideo(url, retryCount + 1, nextClient);
+                }
+
+                // FALLBACK EXTREMO PIpED VÍDEO:
+                this.logger?.warn(`⚠️ yt-dlp falhou, tentando FALLBACK EXTREMO Piped VÍDEO API...`);
+                const videoId = metadata.videoId || this._extractVideoId(finalUrl);
+                if (videoId) {
+                    const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '360');
+                    if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    }
+                }
+
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
 
             if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 100000) {
-                return { sucesso: false, error: 'YouTube bloqueou. Tente um vídeo diferente ou aguarde.' };
+                // Se o arquivo existe mas é pequeno, tenta Piped antes de desistir
+                this.logger?.warn(`⚠️ Arquivo inexistente ou muito pequeno, tentando FALLBACK Piped...`);
+                const videoId = metadata.videoId || this._extractVideoId(finalUrl);
+                if (videoId) {
+                    const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '360');
+                    if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    }
+                }
+
+                if (!fs.existsSync(outputPath)) {
+                    return { sucesso: false, error: 'YouTube bloqueou o download. Tente novamente mais tarde.' };
+                }
             }
 
             const buffer = await fs.promises.readFile(outputPath);
@@ -322,6 +361,7 @@ class MediaProcessor {
             return { sucesso: true, buffer, metadata };
 
         } catch (error: any) {
+            this.logger?.error(`❌ Erro download video: ${error.message}`);
             return { sucesso: false, error: error.message };
         }
     }
