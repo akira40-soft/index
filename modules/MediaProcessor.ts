@@ -319,16 +319,27 @@ class MediaProcessor {
                     const clients = ['ios', 'android', 'web', 'tv'];
                     const nextClient = clients[retryCount] || clients[clients.length - 1];
                     this.logger?.info(`🔄 [FORMAT RETRY] Tentando client alternativo: ${nextClient}...`);
+                    if (fs.existsSync(outputPath)) await this.cleanupFile(outputPath);
                     await new Promise(r => setTimeout(r, 2000));
                     return await this.downloadYouTubeVideo(url, retryCount + 1, nextClient);
                 }
 
-                // FALLBACK EXTREMO PIpED VÍDEO:
-                this.logger?.warn(`⚠️ yt-dlp falhou, tentando FALLBACK EXTREMO Piped VÍDEO API...`);
+                // FALLBACK EXTREMO EM CASO DE ERRO FATAL:
+                this.logger?.warn(`⚠️ yt-dlp falhou com erro fatal, tentando FALLBACK EXTREMO...`);
                 const videoId = metadata.videoId || this._extractVideoId(finalUrl);
                 if (videoId) {
+                    // Tenta Piped
+                    this.logger?.info(`🌊 Tentando FALLBACK 1: Piped VÍDEO API...`);
                     const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '360');
-                    if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                    if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    }
+                    // Tenta Invidious
+                    this.logger?.info(`🔌 Tentando FALLBACK 2: Invidious Proxy...`);
+                    const invRes = await this._downloadViaInvidiousProxy(videoId, outputPath, 'video', '360');
+                    if (invRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
                         const buffer = await fs.promises.readFile(outputPath);
                         await this.cleanupFile(outputPath);
                         return { sucesso: true, buffer, metadata };
@@ -338,21 +349,45 @@ class MediaProcessor {
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };
             }
 
+            // Validação de arquivo (Silent Fail check)
             if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 100000) {
-                // Se o arquivo existe mas é pequeno, tenta Piped antes de desistir
-                this.logger?.warn(`⚠️ Arquivo inexistente ou muito pequeno, tentando FALLBACK Piped...`);
+                // Se o arquivo existe mas é pequeno, tenta o PRÓXIMO client antes de ir pro fallback
+                if (retryCount < 3) {
+                    const clients = ['ios', 'android', 'web', 'tv'];
+                    const nextClient = clients[retryCount] || clients[clients.length - 1];
+                    const size = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+                    this.logger?.info(`🔄 [SIZE RETRY] Arquivo inexistente ou muito pequeno (${size} bytes). Tentando client: ${nextClient}...`);
+                    if (fs.existsSync(outputPath)) await this.cleanupFile(outputPath);
+                    await new Promise(r => setTimeout(r, 2000));
+                    return await this.downloadYouTubeVideo(url, retryCount + 1, nextClient);
+                }
+
+                // FALLBACKS APÓS TODOS OS CLIENTS FALHAREM
+                this.logger?.warn(`⚠️ Todos os clients do yt-dlp produziram arquivos inválidos. Tentando Fallbacks...`);
                 const videoId = metadata.videoId || this._extractVideoId(finalUrl);
+
                 if (videoId) {
+                    // 1. Tenta Piped
+                    this.logger?.info(`🌊 Tentando FALLBACK 1: Piped VÍDEO API...`);
                     const pipedRes = await this._downloadVideoStreamFromPiped(videoId, outputPath, '360');
-                    if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                    if (pipedRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    }
+
+                    // 2. Tenta Invidious
+                    this.logger?.info(`🔌 Tentando FALLBACK 2: Invidious Proxy...`);
+                    const invRes = await this._downloadViaInvidiousProxy(videoId, outputPath, 'video', '360');
+                    if (invRes.sucesso && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100000) {
                         const buffer = await fs.promises.readFile(outputPath);
                         await this.cleanupFile(outputPath);
                         return { sucesso: true, buffer, metadata };
                     }
                 }
 
-                if (!fs.existsSync(outputPath)) {
-                    return { sucesso: false, error: 'YouTube bloqueou o download. Tente novamente mais tarde.' };
+                if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 5000) {
+                    return { sucesso: false, error: 'YouTube bloqueou o download em todas as camadas. Tente novamente mais tarde.' };
                 }
             }
 
