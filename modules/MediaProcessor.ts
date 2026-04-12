@@ -178,22 +178,27 @@ class MediaProcessor {
             '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
             '--js-runtimes node',
-            '--socket-timeout 90',
-            '--retries 5',
+            '--remote-components ejs:github',
+            '--socket-timeout 100',
+            '--retries 10',
             '--geo-bypass',
+            '--no-check-certificates',
             '--no-playlist'
         ].filter(Boolean).join(' ') : [
             '--ignore-config',
             `--extractor-args "${extractorArgs}"`,
+            '--js-runtimes node',
+            '--remote-components ejs:github',
             '--no-warnings',
+            '--no-check-certificates',
             '--socket-timeout 60'
         ].filter(Boolean).join(' ');
 
         let actionFlags = '';
         if (options.type === 'audio') {
-            // Cascade de formatos para máxima compatibilidade
-            const formatCascade = 'bestaudio/best';
-            actionFlags = `-f "${formatCascade}" -x --audio-format mp3 -o "${options.output}"`;
+            // Cascade robusto de formatos: m4a > audio genérico > extrair de mp4 > melhor
+            const formatCascade = 'ba[ext=m4a]/ba/b[ext=mp4]/b';
+            actionFlags = `-f "${formatCascade}" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
             actionFlags = `-o "${options.output}"`;
         } else if (options.type === 'json') {
@@ -238,13 +243,25 @@ class MediaProcessor {
                 const msg = fullErrorStr.split('\n')[0];
                 this.logger?.error(`❌ yt-dlp erro: ${msg}`);
 
-                // Retry com cascade de player_client
-                if ((fullErrorStr.includes('format not available') || fullErrorStr.includes('format is not available')) && retryCount < 4) {
-                    const clients = ['web', 'ios', 'android', 'tv'];
+                // Retry com cascade estratégico de player_client
+                if ((fullErrorStr.includes('format not available') || fullErrorStr.includes('format is not available') || fullErrorStr.includes('jsc')) && retryCount < 4) {
+                    const clients = ['ios', 'android', 'web', 'tv'];
                     const nextClient = clients[retryCount] || clients[clients.length - 1];
-                    this.logger?.info(`🔄 Retry ${retryCount + 1}/4: Tentando player_client=${nextClient}...`);
+                    this.logger?.info(`🔄 [FORMAT RETRY] Tentando client alternativo: ${nextClient}...`);
                     await new Promise(r => setTimeout(r, 2000));
                     return await this.downloadYouTubeAudio(url, retryCount + 1, nextClient);
+                }
+
+                // FALLBACK EXTREMO PIpED:
+                this.logger?.warn(`⚠️ yt-dlp falhou, tentando FALLBACK EXTREMO Piped API...`);
+                const videoId = metadata.videoId || this._extractVideoId(finalUrl);
+                if (videoId) {
+                    const pipedRes = await this._downloadStreamFromPiped(videoId, outputPath);
+                    if (pipedRes.sucesso && fs.existsSync(outputPath)) {
+                        const buffer = await fs.promises.readFile(outputPath);
+                        await this.cleanupFile(outputPath);
+                        return { sucesso: true, buffer, metadata };
+                    }
                 }
 
                 return { sucesso: false, error: `yt-dlp bloqueado: ${msg}` };

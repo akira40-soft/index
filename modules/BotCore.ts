@@ -716,7 +716,8 @@ class BotCore {
                 reply_metadata: replyInfo ? {
                     is_reply: replyInfo.isReply || true,
                     reply_to_bot: replyInfo.ehRespostaAoBot,
-                    quoted_author_name: replyInfo.quemEscreveuCitacao || 'desconhecido'
+                    quoted_author_name: await this.resolveAuthorName(replyInfo.participantJidCitado, m.key.remoteJid),
+                    quoted_author_numero: replyInfo.quotedAuthorNumero || 'desconhecido'
                 } : null
             });
 
@@ -871,7 +872,7 @@ class BotCore {
             const replyMetadata = replyInfo ? {
                 is_reply: replyInfo.isReply || true,
                 reply_to_bot: replyInfo.ehRespostaAoBot,
-                quoted_author_name: replyInfo.quemEscreveuCitacao || 'desconhecido',
+                quoted_author_name: await this.resolveAuthorName(replyInfo.participantJidCitado, m.key.remoteJid),
                 quoted_author_numero: replyInfo.quotedAuthorNumero || 'desconhecido',
                 quoted_type: replyInfo.quotedType || 'texto',
                 quoted_text_original: replyInfo.quotedTextOriginal || '',
@@ -1015,46 +1016,60 @@ class BotCore {
      * Em grupo com Cloud MD, m.pushName pode vir vazio ou genérico.
      * Tentamos groupMetadata participants lookup como fallback.
      */
+    /**
+     * Resolve nome real do usuário a partir de um JID.
+     * Útil para mensagens diretas e para identificar autores em replies.
+     */
+    private async resolveAuthorName(jid: string, remoteJid: string): Promise<string> {
+        if (!jid || jid === 'desconhecido') return 'Usuário';
+
+        // 1. Verificar se é o próprio bot
+        const botJid = JidUtils.normalize(this.sock?.user?.id);
+        if (JidUtils.normalize(jid) === botJid) {
+            return this.config.BOT_NAME || 'Akira';
+        }
+
+        // 2. Se for grupo, tentar buscar nos metadados (participantes)
+        const isGroup = remoteJid.endsWith('@g.us');
+        if (isGroup && this.sock) {
+            try {
+                const metadata = await this.sock.groupMetadata(remoteJid);
+                const member = metadata.participants.find((p: any) => JidUtils.normalize(p.id) === JidUtils.normalize(jid));
+                if (member && member.notify && member.notify !== 'undefined' && member.notify !== '~') {
+                    return member.notify;
+                }
+                if (member && member.name) {
+                    return member.name;
+                }
+            } catch (e: any) {
+                this.logger?.debug(`⚠️ [NAME] Falha ao resolver nome no grupo: ${e.message}`);
+            }
+        }
+
+        // 3. Fallback: onWhatsApp (apenas para números reais, não LIDs)
+        if (this.sock && !jid.includes('@lid') && jid.includes('@s.whatsapp.net')) {
+            try {
+                const onWp = await this.sock.onWhatsApp(jid);
+                if (onWp && Array.isArray(onWp) && onWp.length > 0 && onWp[0].notify) {
+                    return onWp[0].notify;
+                }
+            } catch (e: any) {
+                this.logger?.debug(`⚠️ [NAME] Falha no onWhatsApp: ${e.message}`);
+            }
+        }
+
+        return 'Usuário';
+    }
+
     private async _resolveUserName(m: any, numero: string, remoteJid: string): Promise<string> {
-        // Prioridade 1: pushName (mais rápido)
+        // Prioridade 1: pushName da mensagem direta (mais rápido)
         const pushName = m.pushName;
         if (pushName && pushName !== 'Usuário' && pushName.trim().length > 0) {
             return pushName;
         }
 
-        // Prioridade 2: Buscar no grupo participantes lookup
-        const isGroup = remoteJid.endsWith('@g.us');
-        if (isGroup && this.sock) {
-            try {
-                const participant = m.key.participant || m.key.remoteJid;
-                if (participant) {
-                    const metadata = await this.sock.groupMetadata(remoteJid);
-                    const member = metadata.participants.find((p: any) => p.id === participant);
-                    if (member && member.notify && member.notify !== 'undefined' && member.notify !== '~') {
-                        return member.notify;
-                    }
-                    if (member && member.name) {
-                        return member.name;
-                    }
-                }
-            } catch (e: any) {
-                this.logger?.debug(`⚠️ [NAME] groupMetadata lookup falhou: ${e.message}`);
-            }
-        }
-
-        // Prioridade 3: onWhatsApp lookup
-        if (this.sock && !numero.includes('lid_') && numero !== 'desconhecido') {
-            try {
-                const onWp = await this.sock.onWhatsApp(numero);
-                if (onWp && Array.isArray(onWp) && onWp.length > 0 && onWp[0].notify) {
-                    return onWp[0].notify;
-                }
-            } catch (e: any) {
-                this.logger?.debug(`⚠️ [NAME] onWhatsApp lookup falhou: ${e.message}`);
-            }
-        }
-
-        return 'Usuário';
+        // Prioridade 2: Usar o resolver genérico
+        return await this.resolveAuthorName(m.key.participant || m.key.remoteJid, remoteJid);
     }
 
     async handleViolation(m: any, tipo: string, limitStatus?: any): Promise<void> {
