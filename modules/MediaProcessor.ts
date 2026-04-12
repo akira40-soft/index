@@ -201,7 +201,7 @@ class MediaProcessor {
             actionFlags = `-f "${formatCascade}" -x --audio-format mp3 --audio-quality 0 -o "${options.output}"`;
         } else if (options.type === 'video') {
             // Compatibilidade Universal: MP4/H.264 em 480p (Roda em qualquer celular e PC)
-            const videoFormat = 'bv[vcodec^=avc1][height<=480]+ba[ext=m4a]/b[height<=480]/best';
+            const videoFormat = 'bv[vcodec^=avc1][height<=720]+ba[ext=m4a]/b[height<=720]/best';
             actionFlags = `-f "${videoFormat}" -o "${options.output}"`;
         } else if (options.type === 'json') {
             actionFlags = '--dump-json --no-download';
