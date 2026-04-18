@@ -1158,12 +1158,19 @@ class BotCore {
         // 3. Responde ao nome público do bot (qualquer um pode chamar)
         if (textoLower.includes(botName)) return true;
 
-        // 4. ✅ BUG FIX: 'Morena'/'Morema' é EXCLUSIVO do Dono
-        // Não-donos que usam 'morena' no texto são completamente ignorados
+        // 4. ✅ APELIDOS DE ATIVAÇÃO: Exclusivos do Dono
+        // Se o remetente for o dono, verifica se algum dos apelidos de ativação está no texto
         const isOwner = typeof this.config?.isDono === 'function'
             ? this.config.isDono(numeroRemetente, nomeRemetente)
             : false;
-        if ((textoLower.includes('morena') || textoLower.includes('morema')) && isOwner) return true;
+
+        if (isOwner && Array.isArray(this.config.DONO_APELIDOS)) {
+            const hasAlias = this.config.DONO_APELIDOS.some((alias: string) => textoLower.includes(alias.toLowerCase()));
+            if (hasAlias) {
+                this.logger.debug(`🎯 [ATIVAÇÃO] Dono chamou por apelido: "${texto.substring(0, 30)}"`);
+                return true;
+            }
+        }
 
         // 5. Se for reply a outra pessoa no grupo, ignora
         if (replyInfo?.isReply && !replyInfo?.ehRespostaAoBot) return false;
