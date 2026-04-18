@@ -84,6 +84,14 @@ class ConfigManager {
     public YT_COOKIES_PATH: string = "";
     public YT_PO_TOKEN: string = "";
     public DONO_APELIDOS: string[] = [""];
+    public AI_MODEL: string = "";
+    public AI_MAX_TOKENS: number = 0;
+    public AI_TEMPERATURE: number = 0;
+    public AI_SYSTEM_PROMPT_PERSONAL: string = "";
+    public API_AUTH_TOKEN: string = "";
+    public STICKER_AUTHOR: string = "";
+    public STICKER_PACK: string = "";
+    public FEATURE_AUTO_GROUP_JOIN: boolean = false;
     [key: string]: any;
 
     constructor() {
@@ -94,7 +102,7 @@ class ConfigManager {
         // ═══ PORTAS E URLS ═══
         this.PORT = Number(process.env?.PORT || process.env?.HF_PORT || 3000);
         this.API_URL = process.env?.API_URL || process.env?.HF_API_URL || 'https://akra35567-akira-softedge.hf.space/api';
-        this.API_TIMEOUT = Number(process.env?.API_TIMEOUT || 120000); // ✅ Sincronizado: 60s com Flask/Gunicorn padrão (antes 120s)
+        this.API_TIMEOUT = Number(process.env?.API_TIMEOUT || 60000); // ✅ Sincronizado: 60s com Flask/Gunicorn padrão (antes 120s)
         this.API_RETRY_ATTEMPTS = Number(process.env?.API_RETRY_ATTEMPTS || 3);
         this.API_RETRY_DELAY = Number(process.env?.API_RETRY_DELAY || 1000);
         this.BASE_URL = process.env?.BASE_URL || 'https://index-js21-production.up.railway.app'; // URL de Produção
@@ -137,7 +145,7 @@ class ConfigManager {
         // ═══ MODERAÇÃO ═══
         this.MUTE_DEFAULT_MINUTES = Number(process.env?.MUTE_DEFAULT_MINUTES || 5);
         this.MUTE_MAX_DAILY = Number(process.env?.MUTE_MAX_DAILY || 5);
-        this.AUTO_BAN_AFTER_MINUTES = Number(process.env?.AUTO_BAN_AFTER_MINUTES || process.env?.AUTO_BAN_AFTER_MUTES || 3);
+        this.AUTO_BAN_AFTER_MINUTES = Number(process.env?.AUTO_BAN_AFTER_MUTES || process.env?.AUTO_BAN_AFTER_MINUTES || 3);
 
         // ═══ YOUTUBE DOWNLOAD ═══
         this.YT_MAX_SIZE_MB = Number(process.env?.YT_MAX_SIZE_MB || 2048); // Aumentado para 2GB
@@ -148,19 +156,21 @@ class ConfigManager {
         this.YT_PO_TOKEN = process.env?.YT_PO_TOKEN || "";
 
         // 🔓 Decode de cookies via Base64 (Railway Variable)
-        if (process.env?.YT_COOKIES_BASE64 && !this.YT_COOKIES_PATH) {
+        if (process.env?.YT_COOKIES_BASE64) {
             try {
                 const cookiesDir = path.join(baseDataPath, 'cookies');
                 if (!fs.existsSync(cookiesDir)) fs.mkdirSync(cookiesDir, { recursive: true });
                 const cookiesFile = path.join(cookiesDir, 'youtube_cookies.txt');
-                const decoded = Buffer.from(process.env.YT_COOKIES_BASE64, 'base64').toString('utf-8');
-                // Non-blocking write; set path immediately for downstream code
-                fs.promises.writeFile(cookiesFile, decoded).then(() => {
+
+                // ✅ BUG FIX: Decodificação robusta para evitar erro de 'Object'
+                const base64Data = String(process.env.YT_COOKIES_BASE64).trim();
+                const decoded = Buffer.from(base64Data, 'base64').toString('utf-8');
+
+                if (decoded && decoded.length > 10) {
+                    fs.writeFileSync(cookiesFile, decoded);
                     console.log(`✅ ConfigManager: Cookies descodificados de YT_COOKIES_BASE64 para ${cookiesFile}`);
-                }).catch((err) => {
-                    console.error(`❌ ConfigManager: Falha ao escrever cookies: ${err.message}`);
-                });
-                this.YT_COOKIES_PATH = cookiesFile;
+                    this.YT_COOKIES_PATH = cookiesFile;
+                }
             } catch (err: any) {
                 console.error(`❌ ConfigManager: Erro ao descodificar YT_COOKIES_BASE64: ${err.message}`);
             }
@@ -218,7 +228,7 @@ class ConfigManager {
             { numero: '24478787009', nomeExato: 'Isaac Quarenta' }
         ];
 
-        const aliasesEnv = process.env?.DONO_APELIDOS || 'morema,morena';
+        const aliasesEnv = process.env?.DONO_APELIDOS || 'morena';
         this.DONO_APELIDOS = aliasesEnv.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
         // ═══ FEATURES ═══
@@ -229,6 +239,18 @@ class ConfigManager {
         this.FEATURE_MODERATION = process.env?.FEATURE_MODERATION !== 'false';
         this.FEATURE_LEVELING = process.env?.FEATURE_LEVELING !== 'false';
         this.FEATURE_VISION = process.env?.FEATURE_VISION !== 'false';
+        this.FEATURE_AUTO_GROUP_JOIN = process.env?.FEATURE_AUTO_GROUP_JOIN === 'true';
+
+        // ═══ AI CONFIG ═══
+        this.AI_MODEL = process.env?.AI_MODEL || 'meta-llama/llama-3.1-405b';
+        this.AI_MAX_TOKENS = Number(process.env?.AI_MAX_TOKENS || 2048);
+        this.AI_TEMPERATURE = Number(process.env?.AI_TEMPERATURE || 0.7);
+        this.AI_SYSTEM_PROMPT_PERSONAL = process.env?.AI_SYSTEM_PROMPT_PERSONAL || '';
+
+        // ═══ API & SECURITY ═══
+        this.API_AUTH_TOKEN = process.env?.API_AUTH_TOKEN || '';
+        this.STICKER_AUTHOR = process.env?.STICKER_AUTHOR || 'Akira Bot';
+        this.STICKER_PACK = process.env?.STICKER_PACK || 'V21 Enterprise';
 
         ConfigManager.instance = this;
     }

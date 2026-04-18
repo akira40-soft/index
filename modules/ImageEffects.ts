@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * MÓDULO: ImageEffects.ts
  * ═══════════════════════════════════════════════════════════════════════════
@@ -18,9 +18,9 @@ class ImageEffects {
     public sock: any;
     public ANGOLA_COLORS: { red: string, black: string, yellow: string };
 
-    constructor(config: any = null) {
+    constructor(config: any = null, logger: any = null) {
         this.config = config || ConfigManager.getInstance();
-        this.logger = console;
+        this.logger = logger || console;
         this.tempFolder = this.config?.TEMP_FOLDER || './temp';
 
         // Cores da bandeira de Angola
@@ -173,7 +173,8 @@ class ImageEffects {
 `;
 
             const bgPath = this.generateTempPath('svg');
-            fs.writeFileSync(bgPath, svgBackground);
+            const svgData = String(svgBackground); // ✅ Force to string to avoid [object Object] error
+            fs.writeFileSync(bgPath, svgData);
 
             // Redimensionar imagem principal para caber no centro
             const mainSize = Math.round(size * 0.6);
@@ -294,7 +295,8 @@ class ImageEffects {
 `;
 
             const bgPath = this.generateTempPath('svg');
-            fs.writeFileSync(bgPath, svgGradient);
+            const svgData = String(svgGradient); // ✅ Force to string to avoid [object Object] error
+            fs.writeFileSync(bgPath, svgData);
 
             // Redimensionar imagem principal
             const mainSize = Math.round(size * 0.7);

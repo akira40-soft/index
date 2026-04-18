@@ -117,8 +117,11 @@ class CommandHandler {
             this.groupManagement = bot?.groupManagement ?? new GroupManagement(sock, this.config, this.moderationSystem!, this.mediaProcessor!, this.levelSystem!);
             this.userProfile = bot?.userProfile ?? new UserProfile(sock, this.logger, this.config);
             this.botProfile = bot?.botProfile ?? new BotProfile(sock, this.logger, this.config);
-            this.imageEffects = bot?.imageEffects ?? new ImageEffects(this.logger);
+            this.imageEffects = bot?.imageEffects ?? new ImageEffects(this.config);
             this.presenceSimulator = bot?.presenceSimulator ?? new PresenceSimulator(sock);
+        } else {
+            // Fallback for when sock is null
+            this.imageEffects = bot?.imageEffects ?? new ImageEffects(this.config);
         }
     }
 
@@ -1484,13 +1487,13 @@ ${P}menu osint — Comandos OSINT avançados`,
                 return true;
             }
 
-            const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'sticker');
-            if (!buf) {
+            const mediaRes = await this.mediaProcessor.downloadMedia(targetMessage, 'sticker');
+            if (!mediaRes || !mediaRes.buffer) {
                 await this._reply(m, '❌ Não foi possível baixar a figurinha.');
                 return true;
             }
 
-            const res = await this.mediaProcessor.convertStickerToImage(buf);
+            const res = await this.mediaProcessor.convertStickerToImage(mediaRes.buffer);
 
             if (res.sucesso && res.buffer) {
                 await this.sock.sendMessage(m.key.remoteJid, {
@@ -2015,10 +2018,10 @@ ${P}menu osint — Comandos OSINT avançados`,
 
         await this._reply(m, '🎵 Convertendo para MP3...');
         try {
-            const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'video');
-            if (!buf) throw new Error('Falha ao baixar vídeo.');
+            const mediaRes = await this.mediaProcessor.downloadMedia(targetMessage, 'video');
+            if (!mediaRes || !mediaRes.buffer) throw new Error('Falha ao baixar vídeo.');
 
-            const res = await this.mediaProcessor.convertVideoToAudio(buf);
+            const res = await this.mediaProcessor.convertVideoToAudio(mediaRes.buffer);
 
             if (res.sucesso && res.buffer) {
                 await this.sock.sendMessage(m.key.remoteJid, { audio: res.buffer, mimetype: 'audio/mp4', ptt: false }, { quoted: m });
@@ -2045,14 +2048,16 @@ ${P}menu osint — Comandos OSINT avançados`,
 
         await this._reply(m, `📸 Atualizando foto do ${ehGrupo ? 'grupo' : 'bot'}...`);
         try {
-            const buf = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
-            if (!buf) throw new Error('Falha ao baixar imagem.');
+            const mediaRes = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
+            if (!mediaRes || !mediaRes.buffer) throw new Error('Falha ao baixar imagem.');
+
+            const buffer = mediaRes.buffer;
 
             let res;
             if (ehGrupo) {
-                res = await this.groupManagement.setGroupPhotoDirect(chatJid, buf);
+                res = await this.groupManagement.setGroupPhotoDirect(chatJid, buffer);
             } else {
-                res = await this.botProfile.setBotPhoto(buf);
+                res = await this.botProfile.setBotPhoto(buffer);
             }
 
             if (res.success) {
@@ -2830,12 +2835,14 @@ ${P}menu osint — Comandos OSINT avançados`,
 
             await this._reply(m, `⏳ Aplicando efeito *${effect}*... Aguarde.`);
 
-            const audioBuffer = await this.mediaProcessor.downloadMedia(targetMessage, 'audio');
+            const mediaRes = await this.mediaProcessor.downloadMedia(targetMessage, 'audio');
 
-            if (!audioBuffer || audioBuffer.length === 0) {
+            if (!mediaRes || !mediaRes.buffer || mediaRes.buffer.length === 0) {
                 await this._reply(m, '❌ Não consegui baixar o áudio. Certifique-se de responder a um áudio ou enviar um com o comando na legenda.');
                 return true;
             }
+
+            const audioBuffer = mediaRes.buffer;
 
             const audioProcessor = this.bot?.audioProcessor;
             if (!audioProcessor) {
@@ -3415,12 +3422,14 @@ ${P}menu osint — Comandos OSINT avançados`,
             await this._reply(m, `⏳ Aplicando efeito *${effect}*... Aguarde.`);
 
             // Download da imagem
-            const imageBuffer = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
+            const mediaRes = await this.mediaProcessor.downloadMedia(targetMessage, 'image');
 
-            if (!imageBuffer || imageBuffer.length === 0) {
+            if (!mediaRes || !mediaRes.buffer || mediaRes.buffer.length === 0) {
                 await this._reply(m, '❌ Não consegui baixar a imagem. Tente novamente.');
                 return true;
             }
+
+            const imageBuffer = mediaRes.buffer;
 
             // Módulo de efeitos
             if (!this.imageEffects) {

@@ -111,7 +111,8 @@ class AudioProcessor {
             const audioPath = this.generateRandomFilename('ogg');
             const convertedPath = this.generateRandomFilename('mp3');
 
-            await fs.promises.writeFile(audioPath, audioBuffer);
+            const audioData = Buffer.isBuffer(audioBuffer) ? audioBuffer : Buffer.from(audioBuffer);
+            await fs.promises.writeFile(audioPath, audioData);
 
             // Converte para MP3
             await new Promise((resolve, reject) => {
@@ -242,7 +243,8 @@ class AudioProcessor {
                 throw new Error('Audio buffer vazio ou inválido');
             }
 
-            await fs.promises.writeFile(outputPath, audioBuffer);
+            const audioData = Buffer.isBuffer(audioBuffer) ? audioBuffer : Buffer.from(audioBuffer);
+            await fs.promises.writeFile(outputPath, audioData);
 
             const stats = await fs.promises.stat(outputPath);
             if (stats.size > this.config?.MAX_AUDIO_SIZE_MB * 1024 * 1024) {
@@ -370,7 +372,8 @@ class AudioProcessor {
             const inputPath = this.generateRandomFilename('mp3');
             const outputPath = this.generateRandomFilename('mp3');
 
-            await fs.promises.writeFile(inputPath, inputBuffer);
+            const audioData = Buffer.isBuffer(inputBuffer) ? inputBuffer : Buffer.from(inputBuffer);
+            await fs.promises.writeFile(inputPath, audioData);
 
             this.logger?.info(`🎵 Aplicando efeito '${effectName}'...`);
 
