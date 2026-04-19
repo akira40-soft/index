@@ -222,103 +222,122 @@ class AudioProcessor {
             // ELEVENLABS TTS (Primário)
             // ════════════════════════════════════════════════
             if (elevenKey) {
-                this.logger?.info('🎙️ Iniciando TTS (ElevenLabs — Claudia)...');
-
-                // ElevenLabs recomenda ≤ 5000 chars por chamada
-                const maxChars = 4500;
-                const textTruncated = text.substring(0, maxChars);
-
-                const ttsUrl = `${ELEVENLABS_API_BASE}/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
-
-                const response = await axios.post(
-                    ttsUrl,
-                    {
-                        text: textTruncated,
-                        model_id: ELEVENLABS_MODEL_ID,
-                        language_code: language.split('-')[0] || 'pt', // 'pt-BR' → 'pt'
-                        voice_settings: {
-                            stability: 0.5,          // Padrão UI: More stable
-                            similarity_boost: 0.75,  // Alto (voz nítida)
-                            style: 0.0,              // None (padrão)
-                            speaker_boost: true      // Speaker boost ON
-                        }
-                    },
-                    {
-                        headers: {
-                            'xi-api-key': elevenKey,
-                            'Content-Type': 'application/json',
-                            'Accept': 'audio/mpeg'
-                        },
-                        responseType: 'arraybuffer',
-                        timeout: 30000
-                    }
-                );
-
-                const mp3Buffer = Buffer.from(response.data);
-                if (!mp3Buffer || mp3Buffer.length < 100) {
-                    throw new Error('ElevenLabs retornou buffer vazio');
-                }
-
-                // Converte MP3 → OGG Opus (WhatsApp voice note)
-                this.logger?.info('🛠️ Convertendo ElevenLabs MP3 → Ogg Opus...');
-                const mp3Path = this.generateRandomFilename('mp3');
-                const opusPath = this.generateRandomFilename('opus');
-
-                await fs.promises.writeFile(mp3Path, mp3Buffer);
-
                 try {
-                    await new Promise((resolve, reject) => {
-                        ffmpeg(mp3Path)
-                            .toFormat('opus')
-                            .audioCodec('libopus')
-                            .audioBitrate('48k')
-                            .audioFrequency(48000)
-                            .audioChannels(1)
-                            .on('end', resolve)
-                            .on('error', reject)
-                            .save(opusPath);
-                    });
+                    this.logger?.info('🎙️ Iniciando TTS (ElevenLabs — Claudia)...');
 
-                    const finalBuffer = await fs.promises.readFile(opusPath);
-                    await Promise.all([this.cleanupFile(mp3Path), this.cleanupFile(opusPath)]);
+                    // ElevenLabs recomenda ≤ 5000 chars por chamada
+                    const maxChars = 4500;
+                    const textTruncated = text.substring(0, maxChars);
 
-                    const result = {
-                        sucesso: true,
-                        buffer: finalBuffer,
-                        fonte: 'ElevenLabs TTS — Claudia (Ogg Opus)',
-                        size: finalBuffer.length,
-                        mimetype: 'audio/ogg; codecs=opus'
-                    };
+                    const ttsUrl = `${ELEVENLABS_API_BASE}/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
 
-                    // Cache (máx 50 entradas)
-                    this.ttsCache.set(cacheKey, result);
-                    if (this.ttsCache.size > 50) {
-                        const firstKey = this.ttsCache.keys().next().value;
-                        this.ttsCache.delete(firstKey);
+                    const response = await axios.post(
+                        ttsUrl,
+                        {
+                            text: textTruncated,
+                            model_id: ELEVENLABS_MODEL_ID,
+                            language_code: language.split('-')[0] || 'pt', // 'pt-BR' → 'pt'
+                            voice_settings: {
+                                stability: 0.5,          // Padrão UI: More stable
+                                similarity_boost: 0.75,  // Alto (voz nítida)
+                                style: 0.0,              // None (padrão)
+                                speaker_boost: true      // Speaker boost ON
+                            }
+                        },
+                        {
+                            headers: {
+                                'xi-api-key': elevenKey,
+                                'Content-Type': 'application/json',
+                                'Accept': 'audio/mpeg'
+                            },
+                            responseType: 'arraybuffer',
+                            timeout: 30000
+                        }
+                    );
+
+                    const mp3Buffer = Buffer.from(response.data);
+                    if (!mp3Buffer || mp3Buffer.length < 100) {
+                        throw new Error('ElevenLabs retornou buffer vazio');
                     }
 
-                    this.logger?.info(`🎙️ ElevenLabs TTS OK: "${textTruncated.substring(0, 50)}..." (${finalBuffer.length} bytes)`);
-                    return result;
+                    // Converte MP3 → OGG Opus (WhatsApp voice note)
+                    this.logger?.info('🛠️ Convertendo ElevenLabs MP3 → Ogg Opus...');
+                    const mp3Path = this.generateRandomFilename('mp3');
+                    const opusPath = this.generateRandomFilename('opus');
 
-                } catch (opusError: any) {
-                    // Ops: falha na conversão → devolve MP3 direto
-                    this.logger?.warn(`⚠️ Opus falhou, enviando MP3 do ElevenLabs: ${opusError.message}`);
-                    const finalBuffer = await fs.promises.readFile(mp3Path).catch(() => mp3Buffer);
-                    await this.cleanupFile(mp3Path).catch(() => { });
-                    return {
-                        sucesso: true,
-                        buffer: finalBuffer,
-                        fonte: 'ElevenLabs TTS — Claudia (MP3)',
-                        size: finalBuffer.length,
-                        mimetype: 'audio/mpeg'
-                    };
+                    await fs.promises.writeFile(mp3Path, mp3Buffer);
+
+                    try {
+                        await new Promise((resolve, reject) => {
+                            ffmpeg(mp3Path)
+                                .toFormat('opus')
+                                .audioCodec('libopus')
+                                .audioBitrate('48k')
+                                .audioFrequency(48000)
+                                .audioChannels(1)
+                                .on('end', resolve)
+                                .on('error', reject)
+                                .save(opusPath);
+                        });
+
+                        const finalBuffer = await fs.promises.readFile(opusPath);
+                        await Promise.all([this.cleanupFile(mp3Path), this.cleanupFile(opusPath)]);
+
+                        const result = {
+                            sucesso: true,
+                            buffer: finalBuffer,
+                            fonte: 'ElevenLabs TTS — Claudia (Ogg Opus)',
+                            size: finalBuffer.length,
+                            mimetype: 'audio/ogg; codecs=opus'
+                        };
+
+                        // Cache (máx 50 entradas)
+                        this.ttsCache.set(cacheKey, result);
+                        if (this.ttsCache.size > 50) {
+                            const firstKey = this.ttsCache.keys().next().value;
+                            this.ttsCache.delete(firstKey);
+                        }
+
+                        this.logger?.info(`🎙️ ElevenLabs TTS OK: "${textTruncated.substring(0, 50)}..." (${finalBuffer.length} bytes)`);
+                        return result;
+
+                    } catch (opusError: any) {
+                        // Ops: falha na conversão → devolve MP3 direto
+                        this.logger?.warn(`⚠️ Opus falhou, enviando MP3 do ElevenLabs: ${opusError.message}`);
+                        const finalBuffer = await fs.promises.readFile(mp3Path).catch(() => mp3Buffer);
+                        await this.cleanupFile(mp3Path).catch(() => { });
+                        return {
+                            sucesso: true,
+                            buffer: finalBuffer,
+                            fonte: 'ElevenLabs TTS — Claudia (MP3)',
+                            size: finalBuffer.length,
+                            mimetype: 'audio/mpeg'
+                        };
+                    }
+                } catch (elError: any) {
+                    // Decodifica a mensagem de erro do ArrayBuffer/Buffer para texto humano
+                    let errorDetails = '';
+                    if (elError.response && elError.response.data) {
+                        try {
+                            const data = elError.response.data;
+                            const dataStr = Buffer.isBuffer(data) || data instanceof ArrayBuffer
+                                ? Buffer.from(data).toString('utf8')
+                                : JSON.stringify(data);
+                            errorDetails = dataStr;
+                        } catch (e) { }
+                    }
+
+                    this.logger?.warn(`⚠️ ElevenLabs TTS falhou (Status: ${elError.response?.status}): ${errorDetails || elError.message}. Iniciando fallback para Google TTS...`);
+                    // Permite cair direto no bloco do Google TTS abaixo!
                 }
             }
 
             // ════════════════════════════════════════════════
-            // GOOGLE TTS (Fallback — sem chave ElevenLabs)
+            // GOOGLE TTS (Fallback — sem chave ou com falha)
             // ════════════════════════════════════════════════
-            this.logger?.warn('⚠️ ELEVENLABS_API_KEY não configurada — usando Google TTS como fallback');
+            if (!elevenKey) {
+                this.logger?.info('⚠️ ELEVENLABS_API_KEY não configurada. Usando Google TTS...');
+            }
             this.logger?.info('🔊 Iniciando TTS (Google Fallback)...');
 
             const maxCharsGoogle = 500;

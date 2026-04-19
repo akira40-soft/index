@@ -272,7 +272,20 @@ class MessageProcessor {
     */
     async extractReplyInfo(message: any): Promise<any> {
         try {
-            const context = message.message?.extendedTextMessage?.contextInfo;
+            const msgType = getContentType(message.message);
+            if (!msgType) return null;
+
+            // Extrai a mensagem real (pode ser audioMessage, imageMessage, extendedTextMessage, etc.)
+            let msgContent = message.message[msgType];
+
+            // Lida com viewOnceMessage que tem a mensagem real aninhada
+            if (msgType === 'viewOnceMessage' || msgType === 'viewOnceMessageV2') {
+                msgContent = msgContent.message;
+                const innerType = getContentType(msgContent);
+                if (innerType) msgContent = msgContent[innerType];
+            }
+
+            const context = msgContent?.contextInfo;
             if (!context || !context.quotedMessage) return null;
 
             const quoted = context.quotedMessage;
