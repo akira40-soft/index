@@ -126,7 +126,42 @@ class PresenceSimulator {
     }
 
     /**
-     * Simula gravação de áudio (Não-Bloqueante)
+     * ✅ LOOP DE GRAVAÇÃO CONTÍNUA — para uso com ElevenLabs/Deepgram
+     * Mantém o status "Gravando áudio..." ativo enquanto processa (renovando a cada 3s).
+     * Não-bloqueante: retorna imediatamente e continua em background.
+     * Para parar: chamar stop(jid).
+     */
+    async startRecordingLoop(jid: string) {
+        // Cancela qualquer simulação anterior
+        await this.stop(jid);
+
+        const controller = new AbortController();
+        this.activeSimulations.set(jid, controller);
+
+        const run = async () => {
+            try {
+                // Renova "recording" a cada 3s (o WhatsApp expira em ~6s)
+                while (!controller.signal.aborted) {
+                    await this.safeSendPresenceUpdate('recording', jid);
+                    // Aguarda em pequenos steps para cancelamento rápido
+                    const step = 200;
+                    let elapsed = 0;
+                    while (elapsed < 3000 && !controller.signal.aborted) {
+                        await delay(step);
+                        elapsed += step;
+                    }
+                }
+            } catch (e) {
+                this.activeSimulations.delete(jid);
+            }
+        };
+
+        run(); // não-bloqueante
+        return true;
+    }
+
+    /**
+     * Simula gravação de áudio (Não-Bloqueante) — duração fixa
      */
     async simulateRecording(jid: string, durationMs: number = 3000) {
         await this.stop(jid);

@@ -542,6 +542,18 @@ class BotCore {
             const textoFinal = texto || caption;
             const isCommand = this.messageProcessor.isCommand(textoFinal);
 
+            // ═══ FILTRO DE ÁUDIO EM GRUPO ═══
+            // Em grupos, áudios SEM reply ao bot são completamente ignorados:
+            // não transcrevemos, não gastamos tokens Deepgram, não contamos rate limit.
+            // A única forma de ativar a Akira via áudio no grupo é mandar o áudio em REPLY a ela.
+            if (temAudio && ehGrupo) {
+                const ehReplyAoBotParaAudio = !!replyInfo?.ehRespostaAoBot;
+                if (!ehReplyAoBotParaAudio) {
+                    this.logger.debug(`⏭️ [ÁUDIO GRUPO IGNORADO] ${nome}: áudio sem reply ao bot`);
+                    return;
+                }
+            }
+
             if (shouldLog) this.logger.debug(`🔹 [PIPELINE] txt=${!!texto} img=${temImagem} aud=${temAudio} sticker=${temSticker}`);
 
             if (ehGrupo && this.moderationSystem?.isMuted(remoteJid, participant)) {
@@ -626,7 +638,10 @@ class BotCore {
                 }
                 await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
             } else if (temAudio) {
-                await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+                // ═══ LÓGICA DE ÁUDIO ═══
+                // Grupo: chegou aqui = já passou pelo filtro acima (= reply ao bot) → sempre ativa áudio
+                // PV: qualquer áudio ativa STT + TTS
+                await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo, true);
             } else {
                 // Se for texto ou qualquer outra msg com texto (sticker com legenda, etc)
                 await this.handleTextMessage(m, nome, numeroReal, texto || caption, replyInfo, ehGrupo);
@@ -768,28 +783,53 @@ class BotCore {
         }
     }
 
-    async handleAudioMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
-        this.logger.info(`🎤 [ÁUDIO] ${nome}`);
+    async handleAudioMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean, ativarRespostaEmAudio: boolean = true): Promise<void> {
+        this.logger.info(`🎤 [ÁUDIO] ${nome} | grupo=${ehGrupo} | responderEmAudio=${ativarRespostaEmAudio}`);
         try {
             this.logger.debug('⬇️ Baixando áudio...');
             const result = await this.mediaProcessor.downloadMedia(m.message, 'audio');
-            await this.handleAudioMessage_internal(m, nome, numeroReal, replyInfo, ehGrupo, result?.buffer || null);
+            await this.handleAudioMessage_internal(m, nome, numeroReal, replyInfo, ehGrupo, result?.buffer || null, ativarRespostaEmAudio);
         } catch (error: any) {
             this.logger.error('❌ Erro áudio:', error.message);
         }
     }
 
-    async handleAudioMessage_internal(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean, audioBuffer: Buffer | null): Promise<void> {
+    async handleAudioMessage_internal(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean, audioBuffer: Buffer | null, ativarRespostaEmAudio: boolean = true): Promise<void> {
         try {
             if (!audioBuffer) { this.logger.error('❌ Buffer áudio vazio'); return; }
 
+            const jid = m.key.remoteJid;
+
+            // ═══ STATUS: "Gravando áudio" durante a transcrição (Deepgram) ═══
+            // O WhatsApp mostra "gravando áudio..." enquanto ouvimos/transcrevemos
+            if (this.presenceSimulator) {
+                this.presenceSimulator.startRecordingLoop(jid).catch(() => { });
+            }
+
+            // Marca como lido (ticks azuis) antes de transcrever
+            if (this.presenceSimulator) {
+                this.presenceSimulator.simulateTicks(m, true, ehGrupo).catch(() => { });
+            }
+
+            this.logger.info('🎧 Transcrevendo áudio com Deepgram...');
             const transcricao = await this.mediaProcessor.transcribeAudio(audioBuffer);
-            if (!transcricao.sucesso) { this.logger.warn('⚠️ Falha transcrição'); return; }
+
+            // Para o "recording" após STT concluir (handleTextMessage inicia o próprio loop de TTS)
+            if (this.presenceSimulator) {
+                await this.presenceSimulator.stop(jid);
+            }
+
+            if (!transcricao.sucesso) {
+                this.logger.warn('⚠️ Falha transcrição'); return;
+            }
 
             this.logger.info(`📝 Transcrição: ${transcricao.texto.substring(0, 80)}`);
-            await this.handleTextMessage(m, nome, numeroReal, transcricao.texto, replyInfo, ehGrupo, true);
+
+            // foiAudio=ativarRespostaEmAudio: handleTextMessage sabe se deve responder em voz
+            await this.handleTextMessage(m, nome, numeroReal, transcricao.texto, replyInfo, ehGrupo, ativarRespostaEmAudio);
         } catch (error: any) {
             this.logger.error('❌ Erro áudio interno:', error.message);
+            if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid).catch(() => { });
         }
     }
 
@@ -923,23 +963,38 @@ class BotCore {
             const resposta = resultado.resposta || 'Sem resposta';
 
             if (foiAudio) {
-                this.logger.info('🎤 [AUDIO RESPONSE]');
-                if (this.presenceSimulator) await this.presenceSimulator.simulateRecording(m.key.remoteJid, 2000);
+                this.logger.info('🎤 [AUDIO RESPONSE] Gerando voz com ElevenLabs...');
+
+                // ═══ INICIA "Gravando áudio..." EM PARALELO com o ElevenLabs ═══
+                // O status fica ativo durante TODO o processamento do TTS (pode demorar 2-5s)
+                // e só para EXATAMENTE quando o áudio for enviado.
+                if (this.presenceSimulator) {
+                    this.presenceSimulator.startRecordingLoop(m.key.remoteJid).catch(() => { });
+                }
+
                 try {
+                    // TTS roda enquanto o status "Gravando..." já está ativo
                     const tts = await this.audioProcessor.textToSpeech(resposta);
                     const bufferValid = tts?.buffer && Buffer.isBuffer(tts.buffer) && tts.buffer.length > 0;
+
+                    // Para o loop de "Gravando..." ANTES de enviar
+                    if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
+
                     if (!tts.sucesso || !bufferValid) {
-                        this.logger.warn('⚠️ Falha TTS', tts?.error || tts?.message || 'sem buffer de áudio');
-                        if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
+                        this.logger.warn('⚠️ Falha TTS — enviando texto como fallback', tts?.error || 'sem buffer');
                         await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, { quoted: m });
                     } else {
-                        this.logger.info('📤 Voice Note...');
-                        if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid);
-                        await this.sock.sendMessage(m.key.remoteJid, {
-                            audio: tts.buffer,
-                            mimetype: tts.mimetype || 'audio/ogg; codecs=opus',
-                            ptt: true
-                        }, { quoted: m });
+                        this.logger.info(`📤 Voice Note — ${tts.fonte || 'TTS'} (${tts.size} bytes)`);
+                        // Envia o áudio SEMPRE em reply ao usuário
+                        await this.sock.sendMessage(
+                            m.key.remoteJid,
+                            {
+                                audio: tts.buffer,
+                                mimetype: tts.mimetype || 'audio/ogg; codecs=opus',
+                                ptt: true   // voice note
+                            },
+                            { quoted: m }   // sempre reply
+                        );
                     }
                 } catch (err: any) {
                     this.logger.error(`❌ Erro TTS: ${err.message}`);

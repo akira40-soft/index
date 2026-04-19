@@ -50,6 +50,7 @@ class ConfigManager {
     public STT_LANGUAGE: string = "";
     public TTS_LANGUAGE: string = "";
     public TTS_SLOW: boolean = false;
+    public ELEVENLABS_API_KEY?: string;
     public RATE_LIMIT_WINDOW: number = 0;
     public RATE_LIMIT_MAX_CALLS: number = 0;
     public MUTE_DEFAULT_MINUTES: number = 0;
@@ -134,6 +135,9 @@ class ConfigManager {
         // ═══ TTS (TEXT-TO-SPEECH) ═══
         this.TTS_LANGUAGE = process.env?.TTS_LANGUAGE || 'pt';
         this.TTS_SLOW = process.env?.TTS_SLOW === 'true';
+        // ElevenLabs TTS — primário (voz Claudia JGnWZj684pcXmK2SxYIv)
+        // Se não configurado, o AudioProcessor usa Google TTS como fallback
+        this.ELEVENLABS_API_KEY = process.env?.ELEVENLABS_API_KEY || undefined;
 
         // ═══ RATE LIMITING ═══
         // Forçamos limites sensatos, ignorando se as variáveis do Railway forem muito bloqueantes (ex: 6 mensagens)
@@ -347,8 +351,8 @@ class ConfigManager {
         console.log(` 📌 Versão: ${this.BOT_VERSION}`);
         console.log(` 🎛️ Prefixo: ${this.PREFIXO}`);
         console.log(` 🔌 API: ${this.API_URL?.substring(0, 50)}...`);
-        console.log(` 🎤 STT: ${this.FEATURE_STT_ENABLED ? 'Ativado (Deepgram)' : 'Desativado'}`);
-        console.log(` 🔊 TTS: ${this.FEATURE_TTS_ENABLED ? 'Ativado (Google)' : 'Desativado'}`);
+        console.log(` 🎙️ STT: ${this.FEATURE_STT_ENABLED ? 'Ativado (Deepgram)' : 'Desativado'}`);
+        console.log(` 🔊 TTS: ${this.FEATURE_TTS_ENABLED ? (this.ELEVENLABS_API_KEY ? 'Ativado (ElevenLabs — Claudia)' : 'Ativado (Google Fallback)') : 'Desativado'}`);
         console.log(` 📥 YT Download: ${this.FEATURE_YT_DOWNLOAD ? 'Ativado' : 'Desativado'}`);
         console.log(` 🎨 Stickers: ${this.FEATURE_STICKERS ? 'Ativado' : 'Desativado'}`);
         console.log(` 🛡️ Moderação: ${this.FEATURE_MODERATION ? 'Ativado' : 'Desativado'}`);
