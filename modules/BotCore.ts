@@ -812,7 +812,7 @@ class BotCore {
             }
 
             this.logger.info('🎧 Transcrevendo áudio com Deepgram...');
-            const transcricao = await this.mediaProcessor.transcribeAudio(audioBuffer);
+            const transcricao = await this.audioProcessor.speechToText(audioBuffer);
 
             // Para o "recording" após STT concluir (handleTextMessage inicia o próprio loop de TTS)
             if (this.presenceSimulator) {
