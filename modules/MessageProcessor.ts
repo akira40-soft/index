@@ -487,9 +487,14 @@ class MessageProcessor {
         if (!jid) return false;
 
         const jidNumero = JidUtils.getNumber(String(jid));
-        const botNumero = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
+        const botNumeroEnv = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
-        return jidNumero === botNumero;
+        let sockNumero = null;
+        if (this.sock?.user?.id) {
+            sockNumero = JidUtils.getNumber(String(this.sock.user.id));
+        }
+
+        return jidNumero === botNumeroEnv || (sockNumero && jidNumero === sockNumero);
     }
 
     /**
