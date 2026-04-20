@@ -232,9 +232,17 @@ class AudioProcessor {
                 const tts = new MsEdgeTTS(this.logger);
                 await tts.setMetadata(EDGE_VOICE_ID, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
 
-                await tts.toFile(mp3Path, textTruncated, {
+                const { audioStream } = await tts.toStream(textTruncated, {
                     rate: EDGE_RATE,
                     pitch: EDGE_PITCH
+                });
+
+                // Grava o stream no arquivo MP3
+                await new Promise((resolve, reject) => {
+                    const writableStream = fs.createWriteStream(mp3Path);
+                    audioStream.pipe(writableStream);
+                    writableStream.on('finish', resolve);
+                    writableStream.on('error', reject);
                 });
 
                 this.logger?.info(`✅ Edge MP3 sintonizado e salvo.`);
