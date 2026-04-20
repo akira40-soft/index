@@ -16,10 +16,10 @@ import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
 import { EdgeTTS } from '@andresaya/edge-tts';
 
-// ═══ Microsoft Edge TTS — Config da voz Fernanda (PT-PT — Perfil Animado/Soft) ═══
-const EDGE_VOICE_ID = 'pt-PT-FernandaNeural';
-const EDGE_RATE = '+12%';   // Mais rápida para ser animada
-const EDGE_PITCH = '+15%';  // Mais aguda para ser jovem (rapariga)
+// ═══ Microsoft Edge TTS — Config da voz Thalita (PT-BR — Perfil Jovem/Animado) ═══
+const EDGE_VOICE_ID = 'pt-BR-ThalitaNeural';
+const EDGE_RATE = '+5%';    // Velocidade dinâmica
+const EDGE_PITCH = '+0Hz';  // Tom em Hz (conforme exigido pela nova biblioteca)
 
 class AudioProcessor {
     private config: any;
@@ -220,7 +220,7 @@ class AudioProcessor {
             // MICROSOFT EDGE TTS (Primário)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — Fernanda PT-PT Animada)...');
+                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — ThalitaNeural Young/BR)...');
 
                 // Edge TTS suporta textos mais longos, limitando por segurança
                 const maxChars = 5000;
@@ -258,7 +258,7 @@ class AudioProcessor {
                     const result = {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Thalita Young (Ogg Opus)',
+                        fonte: 'Edge TTS — Thalita Young/BR (Ogg Opus)',
                         size: finalBuffer.length,
                         mimetype: 'audio/ogg; codecs=opus'
                     };
@@ -281,7 +281,7 @@ class AudioProcessor {
                     return {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Thalita Young (MP3)',
+                        fonte: 'Edge TTS — Thalita Young/BR (MP3)',
                         size: finalBuffer.length,
                         mimetype: 'audio/mpeg'
                     };
@@ -543,12 +543,12 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
-            primaryEngine: 'Edge TTS (FernandaNeural PT-PT Animada)',
+            primaryEngine: 'Edge TTS (ThalitaNeural Young/BR)',
             fallbackEngine: 'Google TTS',
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
             deepgramConfigured: !!this.config?.DEEPGRAM_API_KEY,
-            edgeTtsVoice: EDGE_VOICE_ID,
+            edgeTtsVoice: 'pt-BR-ThalitaNeural',
             sttEnabled: this.config?.FEATURE_STT_ENABLED,
             ttsEnabled: this.config?.FEATURE_TTS_ENABLED
         };
