@@ -36,6 +36,7 @@ class AudioProcessor {
     private ttsCache: Map<string, any>;
     private AUDIO_FILTERS: Record<string, string>;
     public sock: any;
+    [key: string]: any;
 
     constructor(logger: any = null) {
         this.config = ConfigManager.getInstance();
@@ -226,7 +227,7 @@ class AudioProcessor {
                 {
                     headers: {
                         'User-Agent': 'com.zhiliaoapp.musically/2022600030 (Linux; U; Android 7.1.2; en_US; SM-G988N; Build/NRD90M;tt-ok/3.10.0.2)',
-                        'Cookie': `sessionid=${process.env.TIKTOK_SESSION_ID || ''}`,
+                        'Cookie': `sessionid=${this.config?.TIKTOK_SESSION_ID || ''}`,
                         'Content-Type': 'application/x-www-form-urlencoded'
                     },
                     timeout: 10000
@@ -334,22 +335,52 @@ class AudioProcessor {
             // CAMADA 3: GOOGLE TTS (Fallback Final)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Camada 3: Iniciando Google TTS Fallback...');
-                const url = googleTTS.getAudioUrl(textTruncated, {
+                this.logger?.info(`🎙️ Camada 3: Iniciando Google TTS Fallback para ${textTruncated.length} caracteres...`);
+
+                // Divide o texto em partes de no máximo 200 caracteres (limite do Google Translate)
+                const chunks = googleTTS.getAllAudioUrls(textTruncated, {
                     lang: language === 'pt' ? 'pt-PT' : 'pt-BR',
                     slow: false,
                     host: 'https://translate.google.com',
                 });
 
-                const response = await axios({
-                    method: 'get',
-                    url: url,
-                    responseType: 'arraybuffer',
-                    timeout: 10000
+                const chunkFiles: string[] = [];
+                const ttsDir = path.join(this.tempFolder, `google-${Date.now()}`);
+                if (!fs.existsSync(ttsDir)) fs.mkdirSync(ttsDir, { recursive: true });
+
+                this.logger?.info(`📥 Baixando ${chunks.length} partes do Google...`);
+
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunkPath = path.join(ttsDir, `chunk-${i}.mp3`);
+                    const response = await axios({
+                        method: 'get',
+                        url: chunks[i].url,
+                        responseType: 'arraybuffer',
+                        timeout: 10000
+                    });
+                    await fs.promises.writeFile(chunkPath, response.data);
+                    chunkFiles.push(chunkPath);
+                }
+
+                // Concatena as partes em um único arquivo
+                await new Promise((resolve, reject) => {
+                    const mergeCommand = ffmpeg();
+
+                    // Adiciona cada arquivo para concatenação
+                    chunkFiles.forEach(file => mergeCommand.input(file));
+
+                    mergeCommand
+                        .on('error', reject)
+                        .on('end', resolve)
+                        .mergeToFile(mp3Path, ttsDir);
                 });
 
-                await fs.promises.writeFile(mp3Path, response.data);
-                return await this.finalizeSpeech(mp3Path, opusPath, cacheKey, 'Google TTS (Fallback)');
+                // Limpa os pedaços temporários
+                fs.rmSync(ttsDir, { recursive: true, force: true });
+
+                this.logger?.info(`✅ Google TTS Long Text OK (${fs.statSync(mp3Path).size} bytes)`);
+                return await this.finalizeSpeech(mp3Path, opusPath, cacheKey, 'Google TTS (Long Text Fallback)');
+
             } catch (googleError: any) {
                 this.logger?.error(`❌ Falha no Google TTS: ${googleError.message}`);
                 throw googleError;

@@ -94,6 +94,7 @@ class ConfigManager {
     public STICKER_PACK: string = "";
     public FEATURE_AUTO_GROUP_JOIN: boolean = false;
     public TTS_PROXY: string = "";
+    public TIKTOK_SESSION_ID: string = "";
     [key: string]: any;
 
     constructor() {
@@ -140,6 +141,7 @@ class ConfigManager {
         // Se não configurado, o AudioProcessor usa Google TTS como fallback
         this.ELEVENLABS_API_KEY = process.env?.ELEVENLABS_API_KEY || undefined;
         this.TTS_PROXY = process.env?.TTS_PROXY || "";
+        this.TIKTOK_SESSION_ID = process.env?.TIKTOK_SESSION_ID || "";
 
         // ═══ RATE LIMITING ═══
         // Forçamos limites sensatos, ignorando se as variáveis do Railway forem muito bloqueantes (ex: 6 mensagens)
