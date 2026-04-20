@@ -16,10 +16,10 @@ import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
 import { EdgeTTS } from '@andresaya/edge-tts';
 
-// ═══ Microsoft Edge TTS — Config da voz Thalita (PT-BR — Perfil Jovem/Animado) ═══
-const EDGE_VOICE_ID = 'pt-BR-ThalitaNeural';
-const EDGE_RATE = '+5%';    // Velocidade dinâmica
-const EDGE_PITCH = '+0Hz';  // Tom em Hz (conforme exigido pela nova biblioteca)
+// ═══ Microsoft Edge TTS — Config da voz Fernanda (PT-PT — Perfil Jovem/Animado) ═══
+const EDGE_VOICE_ID = 'pt-PT-FernandaNeural';
+const EDGE_RATE = '+12%';    // Velocidade animada
+const EDGE_PITCH = '+30Hz';  // Tom em Hz para efeito "Young" (Aprox +15%)
 
 class AudioProcessor {
     private config: any;
@@ -220,7 +220,7 @@ class AudioProcessor {
             // MICROSOFT EDGE TTS (Primário)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — ThalitaNeural Young/BR)...');
+                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — Fernanda PT-PT Young/Animada)...');
 
                 // Edge TTS suporta textos mais longos, limitando por segurança
                 const maxChars = 5000;
@@ -234,7 +234,14 @@ class AudioProcessor {
                     rate: EDGE_RATE,
                     pitch: EDGE_PITCH
                 });
-                await tts.toFile(mp3Path);
+
+                const audioBuffer = tts.toBuffer();
+                if (!audioBuffer || audioBuffer.length < 100) {
+                    throw new Error('O buffer de áudio gerado pelo Edge TTS está vazio ou é inválido.');
+                }
+
+                await fs.promises.writeFile(mp3Path, audioBuffer);
+                this.logger?.info(`✅ Edge MP3 sintonizado e salsvo (${audioBuffer.length} bytes)`);
 
                 // Converte MP3 → OGG Opus (WhatsApp voice note)
                 this.logger?.info('🛠️ Convertendo Edge MP3 → Ogg Opus...');
@@ -258,7 +265,7 @@ class AudioProcessor {
                     const result = {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Thalita Young/BR (Ogg Opus)',
+                        fonte: 'Edge TTS — Fernanda Young/PT (Ogg Opus)',
                         size: finalBuffer.length,
                         mimetype: 'audio/ogg; codecs=opus'
                     };
@@ -281,7 +288,7 @@ class AudioProcessor {
                     return {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Thalita Young/BR (MP3)',
+                        fonte: 'Edge TTS — Fernanda Young/PT (MP3)',
                         size: finalBuffer.length,
                         mimetype: 'audio/mpeg'
                     };
@@ -543,12 +550,12 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
-            primaryEngine: 'Edge TTS (ThalitaNeural Young/BR)',
+            primaryEngine: 'Edge TTS (FernandaNeural PT-PT Animada)',
             fallbackEngine: 'Google TTS',
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
             deepgramConfigured: !!this.config?.DEEPGRAM_API_KEY,
-            edgeTtsVoice: 'pt-BR-ThalitaNeural',
+            edgeTtsVoice: EDGE_VOICE_ID,
             sttEnabled: this.config?.FEATURE_STT_ENABLED,
             ttsEnabled: this.config?.FEATURE_TTS_ENABLED
         };
