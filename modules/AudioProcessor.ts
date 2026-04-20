@@ -16,8 +16,10 @@ import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
 import { EdgeTTS } from 'node-edge-tts';
 
-// ═══ Microsoft Edge TTS — Config da voz Raquel (PT-PT Feminina) ═══
-const EDGE_VOICE_ID = 'pt-PT-RaquelNeural';
+// ═══ Microsoft Edge TTS — Config da voz Fatima (PT-AO — Natural/Jovem) ═══
+const EDGE_VOICE_ID = 'pt-AO-FatimaNeural';
+const EDGE_RATE = '+5%';  // Jovem fala um pouco mais rápido
+const EDGE_PITCH = '+10%'; // Tom mais alto para soar mais jovem (jovem/teen)
 
 class AudioProcessor {
     private config: any;
@@ -218,7 +220,7 @@ class AudioProcessor {
             // MICROSOFT EDGE TTS (Primário)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — RaquelNeural PT-PT)...');
+                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — FatimaNeural PT-AO)...');
 
                 // Edge TTS suporta textos mais longos, limitando por segurança
                 const maxChars = 5000;
@@ -227,7 +229,11 @@ class AudioProcessor {
                 const mp3Path = this.generateRandomFilename('mp3');
                 const opusPath = this.generateRandomFilename('opus');
 
-                const tts = new EdgeTTS({ voice: EDGE_VOICE_ID });
+                const tts = new EdgeTTS({
+                    voice: EDGE_VOICE_ID,
+                    rate: EDGE_RATE,
+                    pitch: EDGE_PITCH
+                });
                 await tts.ttsPromise(textTruncated, mp3Path);
 
                 // Converte MP3 → OGG Opus (WhatsApp voice note)
@@ -252,7 +258,7 @@ class AudioProcessor {
                     const result = {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Raquel PT-PT (Ogg Opus)',
+                        fonte: 'Edge TTS — Fatima PT-AO (Ogg Opus)',
                         size: finalBuffer.length,
                         mimetype: 'audio/ogg; codecs=opus'
                     };
@@ -275,7 +281,7 @@ class AudioProcessor {
                     return {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Raquel PT-PT (MP3)',
+                        fonte: 'Edge TTS — Fatima PT-AO (MP3)',
                         size: finalBuffer.length,
                         mimetype: 'audio/mpeg'
                     };
@@ -536,12 +542,12 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
-            primaryEngine: 'Edge TTS (RaquelNeural PT-PT)',
+            primaryEngine: 'Edge TTS (FatimaNeural PT-AO)',
             fallbackEngine: 'Google TTS',
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
             deepgramConfigured: !!this.config?.DEEPGRAM_API_KEY,
-            edgeTtsVoice: 'pt-PT-RaquelNeural',
+            edgeTtsVoice: EDGE_VOICE_ID,
             sttEnabled: this.config?.FEATURE_STT_ENABLED,
             ttsEnabled: this.config?.FEATURE_TTS_ENABLED
         };
