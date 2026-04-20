@@ -209,44 +209,52 @@ class AudioProcessor {
 
     /**
      * TTS usando TikTok (Neural e Animado)
-     * Fallback excelente para o Edge TTS
+     * Fallback excelente para o Edge TTS com sistema de redundância de vozes
      */
     async tiktokTTS(text: string, language: string = 'pt'): Promise<Buffer | null> {
-        try {
-            const voice = language === 'pt' ? TIKTOK_VOICE_PT : TIKTOK_VOICE_BR;
-            this.logger?.info(`🎙️ Iniciando TikTok TTS (Voz: ${voice})...`);
+        // Lista de vozes candidatas (Ana é a prioridade)
+        const candidateVoices = language === 'pt'
+            ? ['br_003', 'br_005', 'pt_001', 'br_001'] // Prioriza BR (Ana) mesmo em PT
+            : ['br_003', 'br_005', 'br_001'];
 
-            const response = await axios.post(
-                TIKTOK_API_URL,
-                new URLSearchParams({
-                    text_speaker: voice,
-                    req_text: text,
-                    speaker_map_type: '0',
-                    aid: '1233'
-                }).toString(),
-                {
-                    headers: {
-                        'User-Agent': 'com.zhiliaoapp.musically/2022600030 (Linux; U; Android 7.1.2; en_US; SM-G988N; Build/NRD90M;tt-ok/3.10.0.2)',
-                        'Cookie': `sessionid=${this.config?.TIKTOK_SESSION_ID || ''}`,
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    timeout: 10000
+        for (const voiceId of candidateVoices) {
+            try {
+                this.logger?.info(`🎙️ Tentando TikTok TTS (Voz: ${voiceId})...`);
+
+                const response = await axios.post(
+                    TIKTOK_API_URL,
+                    new URLSearchParams({
+                        text_speaker: voiceId,
+                        req_text: text,
+                        speaker_map_type: '0',
+                        aid: '1233'
+                    }).toString(),
+                    {
+                        headers: {
+                            'User-Agent': 'com.zhiliaoapp.musically/2022600030 (Linux; U; Android 7.1.2; en_US; SM-G988N; Build/NRD90M;tt-ok/3.10.0.2)',
+                            'Cookie': `sessionid=${this.config?.TIKTOK_SESSION_ID || ''}`,
+                            'Content-Type': 'application/x-www-form-urlencoded'
+                        },
+                        timeout: 10000
+                    }
+                );
+
+                const status = response.data?.status_code;
+                if (status === 0) {
+                    const base64Data = response.data?.data?.v_str;
+                    if (base64Data) {
+                        this.logger?.info(`✅ TikTok TTS OK com Voz: ${voiceId}`);
+                        return Buffer.from(base64Data, 'base64');
+                    }
                 }
-            );
 
-            if (response.data?.status_code !== 0) {
-                this.logger?.warn(`⚠️ TikTok TTS retornou status ${response.data?.status_code}: ${response.data?.status_msg}`);
-                return null;
+                this.logger?.warn(`⚠️ TikTok Voz ${voiceId} indisponível (Status: ${status}). Tentando próxima...`);
+            } catch (error: any) {
+                this.logger?.error(`❌ Erro tentativa TikTok (${voiceId}): ${error.message}`);
             }
-
-            const base64Data = response.data?.data?.v_str;
-            if (!base64Data) return null;
-
-            return Buffer.from(base64Data, 'base64');
-        } catch (error: any) {
-            this.logger?.error(`❌ Erro TikTok TTS: ${error.message}`);
-            return null;
         }
+
+        return null;
     }
     /**
     * TTS usando ElevenLabs (Claudia - JGnWZj684pcXmK2SxYIv)
