@@ -17,9 +17,9 @@ import ConfigManager from './ConfigManager.js';
 import { EdgeTTS } from 'node-edge-tts';
 
 // ═══ Microsoft Edge TTS — Config da voz Thalita (PT-BR — A mais Jovem e Amigável) ═══
-const EDGE_VOICE_ID = 'pt-BR-ThalitaNeural';
+const EDGE_VOICE_ID = 'pt-PT-FernandaNeural';
 const EDGE_RATE = '+2%';   // Velocidade ideal para o estilo "jovem"
-const EDGE_PITCH = '+0%';  // Tom natural (ela já soa jovem)
+const EDGE_PITCH = '+5%';  // Tom natural (ela já soa jovem)
 
 class AudioProcessor {
     private config: any;
