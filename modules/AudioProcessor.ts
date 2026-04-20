@@ -16,10 +16,10 @@ import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
 import { EdgeTTS } from 'node-edge-tts';
 
-// ═══ Microsoft Edge TTS — Config da voz Fatima (PT-AO — Natural/Jovem) ═══
-const EDGE_VOICE_ID = 'pt-AO-FatimaNeural';
-const EDGE_RATE = '+5%';  // Jovem fala um pouco mais rápido
-const EDGE_PITCH = '+10%'; // Tom mais alto para soar mais jovem (jovem/teen)
+// ═══ Microsoft Edge TTS — Config da voz Thalita (PT-BR — A mais Jovem e Amigável) ═══
+const EDGE_VOICE_ID = 'pt-BR-ThalitaNeural';
+const EDGE_RATE = '+2%';   // Velocidade ideal para o estilo "jovem"
+const EDGE_PITCH = '+0%';  // Tom natural (ela já soa jovem)
 
 class AudioProcessor {
     private config: any;
@@ -220,7 +220,7 @@ class AudioProcessor {
             // MICROSOFT EDGE TTS (Primário)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — FatimaNeural PT-AO)...');
+                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — ThalitaNeural Young/Friendly)...');
 
                 // Edge TTS suporta textos mais longos, limitando por segurança
                 const maxChars = 5000;
@@ -258,7 +258,7 @@ class AudioProcessor {
                     const result = {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Fatima PT-AO (Ogg Opus)',
+                        fonte: 'Edge TTS — Thalita Young (Ogg Opus)',
                         size: finalBuffer.length,
                         mimetype: 'audio/ogg; codecs=opus'
                     };
@@ -281,13 +281,14 @@ class AudioProcessor {
                     return {
                         sucesso: true,
                         buffer: finalBuffer,
-                        fonte: 'Edge TTS — Fatima PT-AO (MP3)',
+                        fonte: 'Edge TTS — Thalita Young (MP3)',
                         size: finalBuffer.length,
                         mimetype: 'audio/mpeg'
                     };
                 }
             } catch (edgeError: any) {
-                this.logger?.warn(`⚠️ Edge TTS falhou: ${edgeError.message}. Iniciando fallback para Google TTS...`);
+                const errMsg = edgeError?.message || (typeof edgeError === 'string' ? edgeError : JSON.stringify(edgeError));
+                this.logger?.warn(`⚠️ Edge TTS falhou: ${errMsg}. Iniciando fallback para Google TTS...`);
                 // Permite cair direto no bloco do Google TTS abaixo!
             }
 
@@ -542,7 +543,7 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
-            primaryEngine: 'Edge TTS (FatimaNeural PT-AO)',
+            primaryEngine: 'Edge TTS (ThalitaNeural Young)',
             fallbackEngine: 'Google TTS',
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
