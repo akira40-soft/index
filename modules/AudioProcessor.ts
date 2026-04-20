@@ -214,8 +214,8 @@ class AudioProcessor {
     async tiktokTTS(text: string, language: string = 'pt'): Promise<Buffer | null> {
         // Lista de vozes candidatas (Ana é a prioridade)
         const candidateVoices = language === 'pt'
-            ? ['br_003', 'br_005', 'pt_001', 'br_001'] // Prioriza BR (Ana) mesmo em PT
-            : ['br_003', 'br_005', 'br_001'];
+            ? ['br_005', 'br_003', 'pt_001', 'br_001'] // Prioriza BR (Ana) mesmo em PT
+            : ['br_005', 'br_003', 'br_001'];
 
         for (const voiceId of candidateVoices) {
             try {
