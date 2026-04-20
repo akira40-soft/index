@@ -14,12 +14,10 @@ import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
+import { EdgeTTS } from 'node-edge-tts';
 
-// ═══ ElevenLabs TTS — Config da voz Claudia (Voice Library) ═══
-const ELEVENLABS_VOICE_ID = 'JGnWZj684pcXmK2SxYIv'; // Claudia - Friendly
-const ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2'; // Most expressive TTS
-const ELEVENLABS_OUTPUT_FORMAT = 'mp3_44100_128';    // MP3 44.1kHz 128kbps
-const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1';
+// ═══ Microsoft Edge TTS — Config da voz Raquel (PT-PT Feminina) ═══
+const EDGE_VOICE_ID = 'pt-PT-RaquelNeural';
 
 class AudioProcessor {
     private config: any;
@@ -216,128 +214,80 @@ class AudioProcessor {
                 return this.ttsCache.get(cacheKey);
             }
 
-            const elevenKey = this.config?.ELEVENLABS_API_KEY;
+            // ════════════════════════════════════════════════
+            // MICROSOFT EDGE TTS (Primário)
+            // ════════════════════════════════════════════════
+            try {
+                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — RaquelNeural PT-PT)...');
 
-            // ════════════════════════════════════════════════
-            // ELEVENLABS TTS (Primário)
-            // ════════════════════════════════════════════════
-            if (elevenKey) {
+                // Edge TTS suporta textos mais longos, limitando por segurança
+                const maxChars = 5000;
+                const textTruncated = text.substring(0, maxChars);
+
+                const mp3Path = this.generateRandomFilename('mp3');
+                const opusPath = this.generateRandomFilename('opus');
+
+                const tts = new EdgeTTS({ voice: EDGE_VOICE_ID });
+                await tts.ttsPromise(textTruncated, mp3Path);
+
+                // Converte MP3 → OGG Opus (WhatsApp voice note)
+                this.logger?.info('🛠️ Convertendo Edge MP3 → Ogg Opus...');
+
                 try {
-                    this.logger?.info('🎙️ Iniciando TTS (ElevenLabs — Claudia)...');
+                    await new Promise((resolve, reject) => {
+                        ffmpeg(mp3Path)
+                            .toFormat('opus')
+                            .audioCodec('libopus')
+                            .audioBitrate('48k')
+                            .audioFrequency(48000)
+                            .audioChannels(1)
+                            .on('end', resolve)
+                            .on('error', reject)
+                            .save(opusPath);
+                    });
 
-                    // ElevenLabs recomenda ≤ 5000 chars por chamada
-                    const maxChars = 4500;
-                    const textTruncated = text.substring(0, maxChars);
+                    const finalBuffer = await fs.promises.readFile(opusPath);
+                    await Promise.all([this.cleanupFile(mp3Path), this.cleanupFile(opusPath)]);
 
-                    const ttsUrl = `${ELEVENLABS_API_BASE}/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
+                    const result = {
+                        sucesso: true,
+                        buffer: finalBuffer,
+                        fonte: 'Edge TTS — Raquel PT-PT (Ogg Opus)',
+                        size: finalBuffer.length,
+                        mimetype: 'audio/ogg; codecs=opus'
+                    };
 
-                    const response = await axios.post(
-                        ttsUrl,
-                        {
-                            text: textTruncated,
-                            model_id: ELEVENLABS_MODEL_ID,
-                            language_code: language.split('-')[0] || 'pt', // 'pt-BR' → 'pt'
-                            voice_settings: {
-                                stability: 0.5,          // Padrão UI: More stable
-                                similarity_boost: 0.75,  // Alto (voz nítida)
-                                style: 0.0,              // None (padrão)
-                                speaker_boost: true      // Speaker boost ON
-                            }
-                        },
-                        {
-                            headers: {
-                                'xi-api-key': elevenKey,
-                                'Content-Type': 'application/json',
-                                'Accept': 'audio/mpeg'
-                            },
-                            responseType: 'arraybuffer',
-                            timeout: 30000
-                        }
-                    );
-
-                    const mp3Buffer = Buffer.from(response.data);
-                    if (!mp3Buffer || mp3Buffer.length < 100) {
-                        throw new Error('ElevenLabs retornou buffer vazio');
+                    // Cache (máx 50 entradas)
+                    this.ttsCache.set(cacheKey, result);
+                    if (this.ttsCache.size > 50) {
+                        const firstKey = this.ttsCache.keys().next().value;
+                        this.ttsCache.delete(firstKey);
                     }
 
-                    // Converte MP3 → OGG Opus (WhatsApp voice note)
-                    this.logger?.info('🛠️ Convertendo ElevenLabs MP3 → Ogg Opus...');
-                    const mp3Path = this.generateRandomFilename('mp3');
-                    const opusPath = this.generateRandomFilename('opus');
+                    this.logger?.info(`🎙️ Edge TTS OK: "${textTruncated.substring(0, 50)}..." (${finalBuffer.length} bytes)`);
+                    return result;
 
-                    await fs.promises.writeFile(mp3Path, mp3Buffer);
-
-                    try {
-                        await new Promise((resolve, reject) => {
-                            ffmpeg(mp3Path)
-                                .toFormat('opus')
-                                .audioCodec('libopus')
-                                .audioBitrate('48k')
-                                .audioFrequency(48000)
-                                .audioChannels(1)
-                                .on('end', resolve)
-                                .on('error', reject)
-                                .save(opusPath);
-                        });
-
-                        const finalBuffer = await fs.promises.readFile(opusPath);
-                        await Promise.all([this.cleanupFile(mp3Path), this.cleanupFile(opusPath)]);
-
-                        const result = {
-                            sucesso: true,
-                            buffer: finalBuffer,
-                            fonte: 'ElevenLabs TTS — Claudia (Ogg Opus)',
-                            size: finalBuffer.length,
-                            mimetype: 'audio/ogg; codecs=opus'
-                        };
-
-                        // Cache (máx 50 entradas)
-                        this.ttsCache.set(cacheKey, result);
-                        if (this.ttsCache.size > 50) {
-                            const firstKey = this.ttsCache.keys().next().value;
-                            this.ttsCache.delete(firstKey);
-                        }
-
-                        this.logger?.info(`🎙️ ElevenLabs TTS OK: "${textTruncated.substring(0, 50)}..." (${finalBuffer.length} bytes)`);
-                        return result;
-
-                    } catch (opusError: any) {
-                        // Ops: falha na conversão → devolve MP3 direto
-                        this.logger?.warn(`⚠️ Opus falhou, enviando MP3 do ElevenLabs: ${opusError.message}`);
-                        const finalBuffer = await fs.promises.readFile(mp3Path).catch(() => mp3Buffer);
-                        await this.cleanupFile(mp3Path).catch(() => { });
-                        return {
-                            sucesso: true,
-                            buffer: finalBuffer,
-                            fonte: 'ElevenLabs TTS — Claudia (MP3)',
-                            size: finalBuffer.length,
-                            mimetype: 'audio/mpeg'
-                        };
-                    }
-                } catch (elError: any) {
-                    // Decodifica a mensagem de erro do ArrayBuffer/Buffer para texto humano
-                    let errorDetails = '';
-                    if (elError.response && elError.response.data) {
-                        try {
-                            const data = elError.response.data;
-                            const dataStr = Buffer.isBuffer(data) || data instanceof ArrayBuffer
-                                ? Buffer.from(data).toString('utf8')
-                                : JSON.stringify(data);
-                            errorDetails = dataStr;
-                        } catch (e) { }
-                    }
-
-                    this.logger?.warn(`⚠️ ElevenLabs TTS falhou (Status: ${elError.response?.status}): ${errorDetails || elError.message}. Iniciando fallback para Google TTS...`);
-                    // Permite cair direto no bloco do Google TTS abaixo!
+                } catch (opusError: any) {
+                    // Ops: falha na conversão → devolve MP3 direto
+                    this.logger?.warn(`⚠️ Opus falhou, enviando MP3 do Edge: ${opusError.message}`);
+                    const finalBuffer = await fs.promises.readFile(mp3Path);
+                    await this.cleanupFile(mp3Path).catch(() => { });
+                    return {
+                        sucesso: true,
+                        buffer: finalBuffer,
+                        fonte: 'Edge TTS — Raquel PT-PT (MP3)',
+                        size: finalBuffer.length,
+                        mimetype: 'audio/mpeg'
+                    };
                 }
+            } catch (edgeError: any) {
+                this.logger?.warn(`⚠️ Edge TTS falhou: ${edgeError.message}. Iniciando fallback para Google TTS...`);
+                // Permite cair direto no bloco do Google TTS abaixo!
             }
 
             // ════════════════════════════════════════════════
-            // GOOGLE TTS (Fallback — sem chave ou com falha)
+            // GOOGLE TTS (Fallback — se o Edge falhar)
             // ════════════════════════════════════════════════
-            if (!elevenKey) {
-                this.logger?.info('⚠️ ELEVENLABS_API_KEY não configurada. Usando Google TTS...');
-            }
             this.logger?.info('🔊 Iniciando TTS (Google Fallback)...');
 
             const maxCharsGoogle = 500;
@@ -586,12 +536,12 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
+            primaryEngine: 'Edge TTS (RaquelNeural PT-PT)',
+            fallbackEngine: 'Google TTS',
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
             deepgramConfigured: !!this.config?.DEEPGRAM_API_KEY,
-            elevenLabsConfigured: !!this.config?.ELEVENLABS_API_KEY,
-            elevenLabsVoice: ELEVENLABS_VOICE_ID,
-            elevenLabsModel: ELEVENLABS_MODEL_ID,
+            edgeTtsVoice: 'pt-PT-RaquelNeural',
             sttEnabled: this.config?.FEATURE_STT_ENABLED,
             ttsEnabled: this.config?.FEATURE_TTS_ENABLED
         };
