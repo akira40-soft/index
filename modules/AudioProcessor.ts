@@ -232,20 +232,36 @@ class AudioProcessor {
                 const tts = new MsEdgeTTS(this.logger);
                 await tts.setMetadata(EDGE_VOICE_ID, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
 
-                const { audioStream } = await tts.toStream(textTruncated, {
+                // msedge-tts exige um diretório como alvo do toFile
+                const requestDir = path.join(this.tempFolder, `tts-${Date.now()}`);
+                if (!fs.existsSync(requestDir)) fs.mkdirSync(requestDir, { recursive: true });
+
+                this.logger?.info('🎙️ Solicitando áudio ao Edge TTS...');
+                const { audioFilePath } = await tts.toFile(requestDir, textTruncated, {
                     rate: EDGE_RATE,
                     pitch: EDGE_PITCH
                 });
 
-                // Grava o stream no arquivo MP3
-                await new Promise((resolve, reject) => {
-                    const writableStream = fs.createWriteStream(mp3Path);
-                    audioStream.pipe(writableStream);
-                    writableStream.on('finish', resolve);
-                    writableStream.on('error', reject);
-                });
+                // Validação de integridade: verifica se o arquivo realmente é um áudio (Magic Bytes)
+                const header = Buffer.alloc(4);
+                const fd = fs.openSync(audioFilePath, 'r');
+                fs.readSync(fd, header, 0, 4, 0);
+                fs.closeSync(fd);
 
-                this.logger?.info(`✅ Edge MP3 sintonizado e salvo.`);
+                // Checa se o arquivo começa com ID3 (MP3) ou 0xFF 0xFB (MP3 frame)
+                const isMp3 = header.toString('hex').startsWith('494433') || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0);
+
+                if (!isMp3) {
+                    const content = fs.readFileSync(audioFilePath).toString().substring(0, 100);
+                    this.logger?.error(`❌ Dados inválidos do Edge TTS. Conteúdo inicial: ${content}`);
+                    throw new Error('O servidor Edge TTS retornou dados que não são áudio (possível bloqueio ou erro de SSML).');
+                }
+
+                // Move o arquivo para o mp3Path definitivo e limpa a pasta temporária
+                fs.renameSync(audioFilePath, mp3Path);
+                fs.rmSync(requestDir, { recursive: true, force: true });
+
+                this.logger?.info(`✅ Edge MP3 validado e salvo (${fs.statSync(mp3Path).size} bytes)`);
 
                 // Converte MP3 → OGG Opus (WhatsApp voice note)
                 this.logger?.info('🛠️ Convertendo Edge MP3 → Ogg Opus...');
