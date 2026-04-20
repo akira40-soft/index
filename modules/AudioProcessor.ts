@@ -15,6 +15,13 @@ import ffmpeg from 'fluent-ffmpeg';
 import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
+
+// ═══ Configurações das Vozes TikTok ═══
+const TIKTOK_VOICE_BR = 'br_003'; // Ana (Jovem/Amigável)
+const TIKTOK_VOICE_PT = 'pt_001'; // Portugal (Feminina)
+const TIKTOK_API_URL = 'https://api16-normal-v6.tiktokv.com/media/api/text/speech/invoke/';
 
 // ═══ Microsoft Edge TTS — Config da voz Fernanda (PT-PT — Perfil Jovem/Animado) ═══
 const EDGE_VOICE_ID = 'pt-PT-FernandaNeural';
@@ -198,6 +205,48 @@ class AudioProcessor {
             };
         }
     }
+
+    /**
+     * TTS usando TikTok (Neural e Animado)
+     * Fallback excelente para o Edge TTS
+     */
+    async tiktokTTS(text: string, language: string = 'pt'): Promise<Buffer | null> {
+        try {
+            const voice = language === 'pt' ? TIKTOK_VOICE_PT : TIKTOK_VOICE_BR;
+            this.logger?.info(`🎙️ Iniciando TikTok TTS (Voz: ${voice})...`);
+
+            const response = await axios.post(
+                TIKTOK_API_URL,
+                new URLSearchParams({
+                    text_speaker: voice,
+                    req_text: text,
+                    speaker_map_type: '0',
+                    aid: '1233'
+                }).toString(),
+                {
+                    headers: {
+                        'User-Agent': 'com.zhiliaoapp.musically/2022600030 (Linux; U; Android 7.1.2; en_US; SM-G988N; Build/NRD90M;tt-ok/3.10.0.2)',
+                        'Cookie': `sessionid=${process.env.TIKTOK_SESSION_ID || ''}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    timeout: 10000
+                }
+            );
+
+            if (response.data?.status_code !== 0) {
+                this.logger?.warn(`⚠️ TikTok TTS retornou status ${response.data?.status_code}: ${response.data?.status_msg}`);
+                return null;
+            }
+
+            const base64Data = response.data?.data?.v_str;
+            if (!base64Data) return null;
+
+            return Buffer.from(base64Data, 'base64');
+        } catch (error: any) {
+            this.logger?.error(`❌ Erro TikTok TTS: ${error.message}`);
+            return null;
+        }
+    }
     /**
     * TTS usando ElevenLabs (Claudia - JGnWZj684pcXmK2SxYIv)
     * Modelo: eleven_multilingual_v2 | Formato: mp3_44100_128
@@ -210,204 +259,160 @@ class AudioProcessor {
             }
 
             // Verifica cache
-            const cacheKey = `el_${text.substring(0, 50)}_${language}`;
+            const cacheKey = `tts_${text.substring(0, 50)}_${language}`;
             if (this.ttsCache?.has(cacheKey)) {
                 this.logger?.debug('💾 TTS from cache');
                 return this.ttsCache.get(cacheKey);
             }
 
+            const maxChars = 5000;
+            const textTruncated = text.substring(0, maxChars);
+            const mp3Path = this.generateRandomFilename('mp3');
+            const opusPath = this.generateRandomFilename('opus');
+
             // ════════════════════════════════════════════════
-            // MICROSOFT EDGE TTS (Primário)
+            // CAMADA 1: MICROSOFT EDGE TTS (Primário)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — Fernanda PT-PT Young/Animada)...');
+                this.logger?.info('🎙️ Camada 1: Iniciando Edge TTS...');
 
-                // Edge TTS suporta textos mais longos, limitando por segurança
-                const maxChars = 5000;
-                const textTruncated = text.substring(0, maxChars);
+                // Configuração de Proxy se disponível
+                let agent = undefined;
+                const proxyUrl = this.config?.TTS_PROXY;
+                if (proxyUrl) {
+                    this.logger?.info(`🌐 Usando Proxy para Edge TTS: ${proxyUrl.substring(0, 20)}...`);
+                    agent = proxyUrl.startsWith('socks') ? new SocksProxyAgent(proxyUrl) : new HttpsProxyAgent(proxyUrl);
+                }
 
-                const mp3Path = this.generateRandomFilename('mp3');
-                const opusPath = this.generateRandomFilename('opus');
-
-                const tts = new MsEdgeTTS(this.logger);
+                const tts = new MsEdgeTTS({ enableLogger: false, agent });
                 await tts.setMetadata(EDGE_VOICE_ID, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
 
-                // msedge-tts exige um diretório como alvo do toFile
-                const requestDir = path.join(this.tempFolder, `tts-${Date.now()}`);
+                const requestDir = path.join(this.tempFolder, `edge-${Date.now()}`);
                 if (!fs.existsSync(requestDir)) fs.mkdirSync(requestDir, { recursive: true });
 
-                this.logger?.info('🎙️ Solicitando áudio ao Edge TTS...');
                 const { audioFilePath } = await tts.toFile(requestDir, textTruncated, {
                     rate: EDGE_RATE,
                     pitch: EDGE_PITCH
                 });
 
-                // Validação de integridade: verifica se o arquivo realmente é um áudio (Magic Bytes)
+                // Validação de integridade
                 const header = Buffer.alloc(4);
                 const fd = fs.openSync(audioFilePath, 'r');
                 fs.readSync(fd, header, 0, 4, 0);
                 fs.closeSync(fd);
 
-                // Checa se o arquivo começa com ID3 (MP3) ou 0xFF 0xFB (MP3 frame)
                 const isMp3 = header.toString('hex').startsWith('494433') || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0);
+                if (!isMp3) throw new Error('Dados inválidos do Edge TTS (IP bloqueado?)');
 
-                if (!isMp3) {
-                    const content = fs.readFileSync(audioFilePath).toString().substring(0, 100);
-                    this.logger?.error(`❌ Dados inválidos do Edge TTS. Conteúdo inicial: ${content}`);
-                    throw new Error('O servidor Edge TTS retornou dados que não são áudio (possível bloqueio ou erro de SSML).');
-                }
-
-                // Move o arquivo para o mp3Path definitivo e limpa a pasta temporária
                 fs.renameSync(audioFilePath, mp3Path);
                 fs.rmSync(requestDir, { recursive: true, force: true });
 
-                this.logger?.info(`✅ Edge MP3 validado e salvo (${fs.statSync(mp3Path).size} bytes)`);
+                this.logger?.info(`✅ Edge TTS OK (${fs.statSync(mp3Path).size} bytes)`);
+                return await this.finalizeSpeech(mp3Path, opusPath, cacheKey, 'Edge TTS (Neural)');
 
-                // Converte MP3 → OGG Opus (WhatsApp voice note)
-                this.logger?.info('🛠️ Convertendo Edge MP3 → Ogg Opus...');
-
-                try {
-                    await new Promise((resolve, reject) => {
-                        ffmpeg(mp3Path)
-                            .toFormat('opus')
-                            .audioCodec('libopus')
-                            .audioBitrate('48k')
-                            .audioFrequency(48000)
-                            .audioChannels(1)
-                            .on('end', resolve)
-                            .on('error', reject)
-                            .save(opusPath);
-                    });
-
-                    const finalBuffer = await fs.promises.readFile(opusPath);
-                    await Promise.all([this.cleanupFile(mp3Path), this.cleanupFile(opusPath)]);
-
-                    const result = {
-                        sucesso: true,
-                        buffer: finalBuffer,
-                        fonte: 'Edge TTS — Fernanda Young/PT (Ogg Opus)',
-                        size: finalBuffer.length,
-                        mimetype: 'audio/ogg; codecs=opus'
-                    };
-
-                    // Cache (máx 50 entradas)
-                    this.ttsCache.set(cacheKey, result);
-                    if (this.ttsCache.size > 50) {
-                        const firstKey = this.ttsCache.keys().next().value;
-                        this.ttsCache.delete(firstKey);
-                    }
-
-                    this.logger?.info(`🎙️ Edge TTS OK: "${textTruncated.substring(0, 50)}..." (${finalBuffer.length} bytes)`);
-                    return result;
-
-                } catch (opusError: any) {
-                    // Ops: falha na conversão → devolve MP3 direto
-                    this.logger?.warn(`⚠️ Opus falhou, enviando MP3 do Edge: ${opusError.message}`);
-                    const finalBuffer = await fs.promises.readFile(mp3Path);
-                    await this.cleanupFile(mp3Path).catch(() => { });
-                    return {
-                        sucesso: true,
-                        buffer: finalBuffer,
-                        fonte: 'Edge TTS — Fernanda Young/PT (MP3)',
-                        size: finalBuffer.length,
-                        mimetype: 'audio/mpeg'
-                    };
-                }
-            } catch (edgeError: any) {
-                const errMsg = edgeError?.message || (typeof edgeError === 'string' ? edgeError : JSON.stringify(edgeError));
-                this.logger?.warn(`⚠️ Edge TTS falhou: ${errMsg}. Iniciando fallback para Google TTS...`);
-                // Permite cair direto no bloco do Google TTS abaixo!
+            } catch (e: any) {
+                this.logger?.warn(`⚠️ Edge TTS falhou: ${e.message}. Tentando TikTok...`);
             }
 
             // ════════════════════════════════════════════════
-            // GOOGLE TTS (Fallback — se o Edge falhar)
+            // CAMADA 2: TIKTOK TTS (Fallback Neural Animado)
             // ════════════════════════════════════════════════
-            this.logger?.info('🔊 Iniciando TTS (Google Fallback)...');
-
-            const maxCharsGoogle = 500;
-            const textTruncatedGoogle = text.substring(0, maxCharsGoogle);
-
-            const audioUrl = googleTTS.getAudioUrl(textTruncatedGoogle, {
-                lang: language || this.config?.TTS_LANGUAGE,
-                slow: this.config?.TTS_SLOW,
-                host: 'https://translate.google.com'
-            });
-
-            if (!audioUrl || typeof audioUrl !== 'string') {
-                throw new Error('URL de áudio TTS inválida');
-            }
-
-            const outputPath = this.generateRandomFilename('mp3');
-            const dlResp = await axios({
-                url: audioUrl,
-                method: 'GET',
-                responseType: 'arraybuffer',
-                timeout: 20000,
-                validateStatus: (status) => status >= 200 && status < 300
-            });
-
-            const audioBuffer = Buffer.from(dlResp.data || []);
-            if (!audioBuffer || audioBuffer.length === 0) {
-                throw new Error('Audio buffer vazio ou inválido');
-            }
-
-            await fs.promises.writeFile(outputPath, audioBuffer);
-
-            const opusPath2 = this.generateRandomFilename('opus');
             try {
-                await new Promise((resolve, reject) => {
-                    ffmpeg(outputPath)
-                        .toFormat('opus')
-                        .audioCodec('libopus')
-                        .audioBitrate('32k')
-                        .audioFrequency(48000)
-                        .audioChannels(1)
-                        .on('end', resolve)
-                        .on('error', reject)
-                        .save(opusPath2);
+                this.logger?.info('🎙️ Camada 2: Iniciando TikTok TTS...');
+                const tiktokBuffer = await this.tiktokTTS(textTruncated, language);
+
+                if (tiktokBuffer) {
+                    await fs.promises.writeFile(mp3Path, tiktokBuffer);
+                    this.logger?.info(`✅ TikTok TTS OK (${tiktokBuffer.length} bytes)`);
+                    return await this.finalizeSpeech(mp3Path, opusPath, cacheKey, 'TikTok TTS (Neural/Animado)');
+                }
+            } catch (e: any) {
+                this.logger?.warn(`⚠️ TikTok TTS falhou: ${e.message}. Usando Google Fallback.`);
+            }
+
+            // ════════════════════════════════════════════════
+            // CAMADA 3: GOOGLE TTS (Fallback Final)
+            // ════════════════════════════════════════════════
+            try {
+                this.logger?.info('🎙️ Camada 3: Iniciando Google TTS Fallback...');
+                const url = googleTTS.getAudioUrl(textTruncated, {
+                    lang: language === 'pt' ? 'pt-PT' : 'pt-BR',
+                    slow: false,
+                    host: 'https://translate.google.com',
                 });
 
-                const finalBuffer = await fs.promises.readFile(opusPath2);
-                await Promise.all([this.cleanupFile(outputPath), this.cleanupFile(opusPath2)]);
+                const response = await axios({
+                    method: 'get',
+                    url: url,
+                    responseType: 'arraybuffer',
+                    timeout: 10000
+                });
 
-                const result = {
-                    sucesso: true,
-                    buffer: finalBuffer,
-                    fonte: 'Google TTS Fallback (Ogg Opus)',
-                    size: finalBuffer.length,
-                    mimetype: 'audio/ogg; codecs=opus'
-                };
-
-                this.ttsCache.set(cacheKey, result);
-                if (this.ttsCache.size > 50) {
-                    const firstKey = this.ttsCache.keys().next().value;
-                    this.ttsCache.delete(firstKey);
-                }
-
-                this.logger?.info(`🔊 Google TTS Fallback OK: ${textTruncatedGoogle.substring(0, 50)}... (${finalBuffer.length} bytes)`);
-                return result;
-
-            } catch (opusError: any) {
-                this.logger?.error('⚠️ Opus falhou (Google fallback), enviando MP3:', opusError.message);
-                const finalBuffer = await fs.promises.readFile(outputPath);
-                await this.cleanupFile(outputPath);
-                return {
-                    sucesso: true,
-                    buffer: finalBuffer,
-                    fonte: 'Google TTS Fallback (MP3)',
-                    size: finalBuffer.length,
-                    mimetype: 'audio/mpeg'
-                };
+                await fs.promises.writeFile(mp3Path, response.data);
+                return await this.finalizeSpeech(mp3Path, opusPath, cacheKey, 'Google TTS (Fallback)');
+            } catch (googleError: any) {
+                this.logger?.error(`❌ Falha no Google TTS: ${googleError.message}`);
+                throw googleError;
             }
 
         } catch (error: any) {
-            this.logger?.error('❌ Erro TTS:', error.message);
-            if (error.response) {
-                this.logger?.error(`Status: ${error.response?.status} — ${JSON.stringify(error.response?.data)?.substring(0, 120)}`);
-            }
-            return { sucesso: false, error: 'Erro ao gerar TTS: ' + error.message };
+            this.logger?.error('❌ Falha crítica no pipeline de TTS:', error.message);
+            return { sucesso: false, error: error.message };
         }
     }
+
+    /**
+     * Finaliza o processamento: Converte MP3 -> OGG Opus e limpa arquivos
+     */
+    private async finalizeSpeech(mp3Path: string, opusPath: string, cacheKey: string, source: string): Promise<any> {
+        try {
+            await new Promise((resolve, reject) => {
+                ffmpeg(mp3Path)
+                    .toFormat('opus')
+                    .audioCodec('libopus')
+                    .audioBitrate('48k')
+                    .audioFrequency(48000)
+                    .audioChannels(1)
+                    .on('end', resolve)
+                    .on('error', reject)
+                    .save(opusPath);
+            });
+
+            const finalBuffer = await fs.promises.readFile(opusPath);
+            await Promise.all([this.cleanupFile(mp3Path), this.cleanupFile(opusPath)]);
+
+            const result = {
+                sucesso: true,
+                buffer: finalBuffer,
+                fonte: source,
+                size: finalBuffer.length,
+                mimetype: 'audio/ogg; codecs=opus'
+            };
+
+            this.ttsCache.set(cacheKey, result);
+            if (this.ttsCache.size > 100) this.ttsCache.delete(this.ttsCache.keys().next().value);
+
+            return result;
+        } catch (e: any) {
+            this.logger?.error(`Erro ao finalizar áudio: ${e.message}`);
+            // Fallback: se falhar o opus, tenta mandar MP3 original antes de desistir
+            try {
+                const mp3Buffer = await fs.promises.readFile(mp3Path);
+                await this.cleanupFile(mp3Path);
+                return {
+                    sucesso: true,
+                    buffer: mp3Buffer,
+                    fonte: `${source} (Fallback MP3)`,
+                    size: mp3Buffer.length,
+                    mimetype: 'audio/mpeg'
+                };
+            } catch {
+                throw e;
+            }
+        }
+    }
+
+
 
     /**
     * Detecta se é áudio animado (apenas tipo)
@@ -570,8 +575,9 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
-            primaryEngine: 'Edge TTS (FernandaNeural PT-PT Animada)',
-            fallbackEngine: 'Google TTS',
+            primaryEngine: 'Triple-Threat Pipeline',
+            tiers: ['Microsoft Edge (Neural)', 'TikTok (Neural/Animado)', 'Google (Legacy)'],
+            proxyConfigured: !!this.config?.TTS_PROXY,
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
             deepgramConfigured: !!this.config?.DEEPGRAM_API_KEY,
