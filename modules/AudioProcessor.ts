@@ -14,12 +14,12 @@ import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
-import { EdgeTTS } from 'node-edge-tts';
+import { EdgeTTS } from '@andresaya/edge-tts';
 
-// ═══ Microsoft Edge TTS — Config da voz Thalita (PT-BR — A mais Jovem e Amigável) ═══
+// ═══ Microsoft Edge TTS — Config da voz Fernanda (PT-PT — Perfil Animado/Soft) ═══
 const EDGE_VOICE_ID = 'pt-PT-FernandaNeural';
-const EDGE_RATE = '+2%';   // Velocidade ideal para o estilo "jovem"
-const EDGE_PITCH = '+5%';  // Tom natural (ela já soa jovem)
+const EDGE_RATE = '+12%';   // Mais rápida para ser animada
+const EDGE_PITCH = '+15%';  // Mais aguda para ser jovem (rapariga)
 
 class AudioProcessor {
     private config: any;
@@ -220,7 +220,7 @@ class AudioProcessor {
             // MICROSOFT EDGE TTS (Primário)
             // ════════════════════════════════════════════════
             try {
-                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — ThalitaNeural Young/Friendly)...');
+                this.logger?.info('🎙️ Iniciando TTS (Microsoft Edge — Fernanda PT-PT Animada)...');
 
                 // Edge TTS suporta textos mais longos, limitando por segurança
                 const maxChars = 5000;
@@ -229,12 +229,12 @@ class AudioProcessor {
                 const mp3Path = this.generateRandomFilename('mp3');
                 const opusPath = this.generateRandomFilename('opus');
 
-                const tts = new EdgeTTS({
-                    voice: EDGE_VOICE_ID,
+                const tts = new EdgeTTS();
+                await tts.synthesize(textTruncated, EDGE_VOICE_ID, {
                     rate: EDGE_RATE,
                     pitch: EDGE_PITCH
                 });
-                await tts.ttsPromise(textTruncated, mp3Path);
+                await tts.toFile(mp3Path);
 
                 // Converte MP3 → OGG Opus (WhatsApp voice note)
                 this.logger?.info('🛠️ Convertendo Edge MP3 → Ogg Opus...');
@@ -543,7 +543,7 @@ class AudioProcessor {
     */
     getStats(): any {
         return {
-            primaryEngine: 'Edge TTS (ThalitaNeural Young)',
+            primaryEngine: 'Edge TTS (FernandaNeural PT-PT Animada)',
             fallbackEngine: 'Google TTS',
             sttCacheSize: this.sttCache?.size,
             ttsCacheSize: this.ttsCache?.size,
