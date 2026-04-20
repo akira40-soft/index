@@ -14,7 +14,7 @@ import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import googleTTS from 'google-tts-api';
 import ConfigManager from './ConfigManager.js';
-import { EdgeTTS } from '@andresaya/edge-tts';
+import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 
 // ═══ Microsoft Edge TTS — Config da voz Fernanda (PT-PT — Perfil Jovem/Animado) ═══
 const EDGE_VOICE_ID = 'pt-PT-FernandaNeural';
@@ -229,19 +229,15 @@ class AudioProcessor {
                 const mp3Path = this.generateRandomFilename('mp3');
                 const opusPath = this.generateRandomFilename('opus');
 
-                const tts = new EdgeTTS();
-                await tts.synthesize(textTruncated, EDGE_VOICE_ID, {
+                const tts = new MsEdgeTTS(this.logger);
+                await tts.setMetadata(EDGE_VOICE_ID, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+
+                await tts.toFile(mp3Path, textTruncated, {
                     rate: EDGE_RATE,
                     pitch: EDGE_PITCH
                 });
 
-                const audioBuffer = tts.toBuffer();
-                if (!audioBuffer || audioBuffer.length < 100) {
-                    throw new Error('O buffer de áudio gerado pelo Edge TTS está vazio ou é inválido.');
-                }
-
-                await fs.promises.writeFile(mp3Path, audioBuffer);
-                this.logger?.info(`✅ Edge MP3 sintonizado e salsvo (${audioBuffer.length} bytes)`);
+                this.logger?.info(`✅ Edge MP3 sintonizado e salvo.`);
 
                 // Converte MP3 → OGG Opus (WhatsApp voice note)
                 this.logger?.info('🛠️ Convertendo Edge MP3 → Ogg Opus...');
