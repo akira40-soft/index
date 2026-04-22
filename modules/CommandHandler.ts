@@ -129,16 +129,20 @@ class CommandHandler {
         this.sock = sock;
 
         // ✅ Propaga o socket para TODOS os sub-módulos que já existem
-        // Nunca cria novas instâncias aqui — as instâncias são controladas pelo BotCore
         if (this.groupManagement?.setSocket) this.groupManagement.setSocket(sock);
         if (this.stickerHandler?.setSocket) this.stickerHandler.setSocket(sock);
         if (this.userProfile?.setSocket) this.userProfile.setSocket(sock);
         if (this.botProfile?.setSocket) this.botProfile.setSocket(sock);
         if (this.presenceSimulator) this.presenceSimulator.sock = sock;
 
-        // Inicializa apenas se não existirem ainda (primeiro boot com socket nulo)
+        // Inicializa módulos que dependem de socket se ainda não existirem
         if (!this.stickerHandler) this.stickerHandler = new StickerViewOnceHandler(sock, this.config);
         if (!this.presenceSimulator) this.presenceSimulator = new PresenceSimulator(sock);
+        if (!this.userProfile) this.userProfile = new UserProfile(sock, this.logger, this.config);
+        if (!this.botProfile) this.botProfile = new BotProfile(sock, this.logger, this.config);
+        if (!this.groupManagement) {
+            this.groupManagement = new GroupManagement(sock, this.config, this.moderationSystem!, this.mediaProcessor!, this.levelSystem!);
+        }
     }
 
     public async handle(m: any, meta: any): Promise<boolean | void> {
