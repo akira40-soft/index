@@ -2139,8 +2139,21 @@ ${P}menu osint — Comandos OSINT avançados`,
     // ═══════════════════════════════════════════════════════════════════════
 
     public async _handlePinterest(m: any, query: string, args: string[]): Promise<boolean> {
+        // ─── Detecta busca visual (reply a uma imagem) ───
+        const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const isRepliedToImage = !!(
+            quotedMsg?.imageMessage ||
+            quotedMsg?.viewOnceMessage?.message?.imageMessage ||
+            quotedMsg?.viewOnceMessageV2?.message?.imageMessage
+        );
+
+        if (isRepliedToImage && !query) {
+            // ───  MODO VISUAL SEARCH  ───
+            return await this._pinterestVisualSearch(m, 3);
+        }
+
         if (!query) {
-            await this._reply(m, `🔎 Uso: ${this.config.PREFIXO}pinterest <busca> | <quantidade 1-5>`);
+            await this._reply(m, `🔎 Uso: *${this.config.PREFIXO}pinterest* <busca> | <quantidade 1-5>\n📸 Ou responda a uma *foto* com *${this.config.PREFIXO}pinterest* para busca visual`);
             return true;
         }
 
@@ -2212,6 +2225,140 @@ ${P}menu osint — Comandos OSINT avançados`,
         } catch (e: any) {
             await this._reply(m, '❌ Erro ao acessar o serviço de busca.');
             console.error(e);
+        }
+        return true;
+    }
+
+    /** Faz upload de um Buffer de imagem para telegra.ph e retorna a URL pública */
+    private async _uploadToTelegraph(buffer: Buffer): Promise<string | null> {
+        try {
+            // Node 18+ tem FormData nativo, mas usamos a abordagem multipart manual para compatibilidade
+            const boundary = `----FormBoundary${Date.now()}`;
+            const header = Buffer.from(
+                `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
+            );
+            const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+            const body = Buffer.concat([header, buffer, footer]);
+
+            const res = await axios.post('https://telegra.ph/upload', body, {
+                headers: {
+                    'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                    'User-Agent': 'Mozilla/5.0 (compatible; AkiraBot/1.0)'
+                },
+                timeout: 20000
+            });
+
+            if (Array.isArray(res.data) && res.data[0]?.src) {
+                return `https://telegra.ph${res.data[0].src}`;
+            }
+            return null;
+        } catch (e: any) {
+            this.logger?.warn(`⚠️ [Telegraph] Upload falhou: ${e.message}`);
+            return null;
+        }
+    }
+
+    /** Busca visual no Pinterest: baixa a imagem citada, sobe para telegra.ph,
+     *  pesquisa no Google filtrado a pinterest.com e retorna os pins encontrados */
+    private async _pinterestVisualSearch(m: any, count: number): Promise<boolean> {
+        try {
+            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!quotedMsg) {
+                await this._reply(m, '⚠️ Responda a uma foto com *#pinterest* para busca visual.');
+                return true;
+            }
+
+            await this._reply(m, '🔍 Analisando imagem e buscando similares no Pinterest...');
+
+            // 1) Baixar a imagem citada
+            const mediaRes = await this.mediaProcessor.downloadMedia(quotedMsg, 'image');
+            if (!mediaRes?.buffer || mediaRes.buffer.length === 0) {
+                await this._reply(m, '❌ Não consegui baixar a imagem. Tente novamente.');
+                return true;
+            }
+
+            // 2) Upload para telegra.ph → URL pública
+            const publicUrl = await this._uploadToTelegraph(mediaRes.buffer);
+            if (!publicUrl) {
+                await this._reply(m, '❌ Falha ao processar imagem para busca visual. Tente novamente.');
+                return true;
+            }
+
+            this.logger?.info(`📷 [Pinterest Visual] Imagem hospedada: ${publicUrl}`);
+
+            // 3) Google reverse image search filtrado a pinterest.com
+            //    POST multipart para o endpoint de upload de imagem do Google
+            const gBoundary = `----FormBoundary${Date.now()}`;
+            const gHeader = Buffer.from(
+                `--${gBoundary}\r\nContent-Disposition: form-data; name="encoded_image"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
+            );
+            const gFooter = Buffer.from(`\r\n--${gBoundary}--\r\n`);
+            const gBody = Buffer.concat([gHeader, mediaRes.buffer, gFooter]);
+
+            const googleRes = await axios.post(
+                'https://www.google.com/searchbyimage/upload',
+                gBody,
+                {
+                    headers: {
+                        'Content-Type': `multipart/form-data; boundary=${gBoundary}`,
+                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                        'Referer': 'https://www.google.com/',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                    },
+                    maxRedirects: 5,
+                    timeout: 20000
+                }
+            );
+
+            const googleHtml = googleRes.data as string;
+
+            // Extrai todas as URLs do Pinterest encontradas nos resultados do Google
+            const pinterestImgUrls = (googleHtml.match(/https:\/\/i\.pinimg\.com\/[^\s\"\'<>\\]+\.(?:jpg|png|gif|webp)/gi) || [])
+                .map((url: string) => url.replace(/\/([0-9]+x[0-9]*|[0-9]+x|originals)\//, '/736x/'))
+                .filter((url: string) => url.includes('/736x/'));
+
+            const uniqueResults = [...new Set(pinterestImgUrls)].slice(0, count) as string[];
+
+            if (uniqueResults.length === 0) {
+                await this._reply(m, '🔍 Nenhuma imagem similar encontrada no Pinterest.\n💡 Tente com uma foto mais nítida ou use *#pinterest <texto>* para busca por palavras.');
+                return true;
+            }
+
+            const dlHeaders = {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                'Referer': 'https://www.pinterest.com/',
+                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-us'
+            };
+
+            let sentCount = 0;
+            for (const imgUrl of uniqueResults) {
+                try {
+                    const imgRes = await axios.get(imgUrl, {
+                        responseType: 'arraybuffer',
+                        timeout: 15000,
+                        headers: dlHeaders
+                    });
+                    const buf = Buffer.from(imgRes.data);
+                    if (buf.length > 0) {
+                        await this.sock.sendMessage(m.key.remoteJid, {
+                            image: buf,
+                            caption: `📌 *Pinterest* — Busca visual\n🔍 Imagem similar #${sentCount + 1}`
+                        }, { quoted: m });
+                        sentCount++;
+                    }
+                } catch (e: any) {
+                    this.logger?.warn(`⚠️ [Pinterest Visual] Falha ao baixar: ${imgUrl} — ${e.message}`);
+                }
+            }
+
+            if (sentCount === 0) {
+                await this._reply(m, '❌ Encontrei resultados mas não consegui baixar as imagens. Tente novamente.');
+            }
+
+        } catch (e: any) {
+            this.logger?.error('❌ [Pinterest Visual] Erro:', e.message);
+            await this._reply(m, '❌ Erro na busca visual. Tente novamente mais tarde.');
         }
         return true;
     }
