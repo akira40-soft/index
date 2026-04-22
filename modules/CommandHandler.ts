@@ -2162,35 +2162,51 @@ ${P}menu osint — Comandos OSINT avançados`,
 
             const html = response.data as string;
             const urlRegex = /https:\/\/i\.pinimg\.com\/[^\s\"\'\\]+/g;
-            const matches = html.match(urlRegex) || [];
+            const rawMatches = html.match(urlRegex) || [];
 
-            let images: string[] = matches
+            // Normalizar todas as URLs para 736x (máxima resolução acessível server-side)
+            // /originals/ retorna 403 quando acessado sem sessão de browser real
+            let images: string[] = rawMatches
                 .filter(url => /\.(jpg|png|gif|webp)$/i.test(url))
                 .map(url => {
-                    // Transforma apenas se encontrar um padrão de tamanho conhecido (ex: 236x, 736x, 60x60)
-                    // Isso evita quebrar caminhos como /videos/thumbnails/originals/
-                    return url.replace(/\/([0-9]+x[0-9]*|[0-9]+x)\//, '/originals/');
-                });
+                    // Substitui qualquer variante de tamanho para 736x (melhor qualidade sem bloqueio)
+                    return url.replace(/\/([0-9]+x[0-9]*|[0-9]+x|originals)\//, '/736x/');
+                })
+                .filter(url => url.includes('/736x/'));
 
-            // Remove duplicatas e garante que a URL tenha o padrão de alta resolução ou seja um thumbnail original
-            images = [...new Set(images)].filter(url => url.includes('/originals/'));
+            // Remove duplicatas
+            images = [...new Set(images)];
 
             if (images.length === 0) {
                 await this._reply(m, '❌ Não consegui encontrar imagens no Pinterest no momento. Tente novamente mais tarde.');
                 return true;
             }
 
-            const uniqueImages = Array.from(new Set(images)).slice(0, count) as string[];
+            const uniqueImages = images.slice(0, count);
+
+            const downloadHeaders = {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                'Referer': 'https://www.pinterest.com/',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-us'
+            };
 
             for (const imageUrl of uniqueImages) {
                 try {
-                    const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
-                    await this.sock.sendMessage(m.key.remoteJid, {
-                        image: Buffer.from(imgRes.data),
-                        caption: `🔎 *Busca:* ${searchTerm}\n📌 *Pinterest*`
-                    }, { quoted: m });
+                    const imgRes = await axios.get(imageUrl, {
+                        responseType: 'arraybuffer',
+                        timeout: 15000,
+                        headers: downloadHeaders
+                    });
+                    const buffer = Buffer.from(imgRes.data);
+                    if (buffer.length > 0) {
+                        await this.sock.sendMessage(m.key.remoteJid, {
+                            image: buffer,
+                            caption: `🔎 *Busca:* ${searchTerm}\n📌 *Pinterest*`
+                        }, { quoted: m });
+                    }
                 } catch (e: any) {
-                    this.logger?.error(`Erro ao baixar imagem: ${imageUrl}`, e.message);
+                    this.logger?.warn(`⚠️ [Pinterest] Falha ao baixar: ${imageUrl} — ${e.message}`);
                 }
             }
         } catch (e: any) {
