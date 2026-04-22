@@ -1625,11 +1625,11 @@ ${P}menu osint — Comandos OSINT avançados`,
         const uid = m.key.participant || m.key.remoteJid;
 
         try {
-            if (!this.bot?.levelSystem) {
+            if (!this.levelSystem) {
                 throw new Error('LevelSystem não inicializado');
             }
             // Obtém dados do levelSystem
-            const record = this.bot.levelSystem.getGroupRecord(m.key.remoteJid, uid, true);
+            const record = this.levelSystem.getGroupRecord(m.key.remoteJid, uid, true);
 
             // Obtém dados extras do UserProfile (Bio, Foto, etc)
             const userInfo = await this.userProfile.getUserInfo(uid);
@@ -1642,11 +1642,11 @@ ${P}menu osint — Comandos OSINT avançados`,
             msg += `📜 *Bio:* ${userInfo.status || 'Sem biografia'}\n\n`;
 
             msg += `🏆 *CONQUISTAS:* ${record.level > 10 ? '🎖️ Veterano' : '🐣 Novato'}\n`;
-            msg += `💎 *Status:* ${this.bot.subscriptionManager.isPremium(uid) ? 'PREMIUM 💎' : 'FREE'}\n`;
+            msg += `💎 *Status:* ${this.subscriptionManager.isPremium(uid) ? 'PREMIUM 💎' : 'FREE'}\n`;
 
-            if (userInfo.picture) {
+            if (userInfo.photoUrl) {
                 await this.sock.sendMessage(m.key.remoteJid, {
-                    image: { url: userInfo.picture },
+                    image: { url: userInfo.photoUrl },
                     caption: msg
                 }, { quoted: m });
             } else {
@@ -1819,7 +1819,7 @@ ${P}menu osint — Comandos OSINT avançados`,
 
 
     public async _handlePremiumInfo(m: any, senderId: string): Promise<boolean> {
-        const info = this.bot.subscriptionManager.getSubscriptionInfo(senderId);
+        const info = this.subscriptionManager.getSubscriptionInfo(senderId);
         let msg = `💎 *STATUS PREMIUM*\n\n`;
         msg += `🏷️ Nível: ${info.tier}\n`;
         msg += `📊 Status: ${info.status}\n`;
@@ -1849,7 +1849,7 @@ ${P}menu osint — Comandos OSINT avançados`,
         // O senderId vem como numero@s.whatsapp.net. Vamos manter consistência.
         const targetJid = targetUser + '@s.whatsapp.net';
 
-        const res = this.bot.subscriptionManager.subscribe(targetJid, days);
+        const res = this.subscriptionManager.subscribe(targetJid, days);
 
         if (res.sucesso) {
             await this._reply(m, `✅ Premium adicionado para ${targetUser} por ${days} dias.\nExpira em: ${res.expiraEm}`);
@@ -1868,7 +1868,7 @@ ${P}menu osint — Comandos OSINT avançados`,
         let targetUser = args[0].replace(/\D/g, '');
         const targetJid = targetUser + '@s.whatsapp.net';
 
-        const res = this.bot.subscriptionManager.unsubscribe(targetJid);
+        const res = this.subscriptionManager.unsubscribe(targetJid);
 
         if (res.sucesso) {
             await this._reply(m, `✅ Premium removido de ${targetUser}`);
@@ -2150,24 +2150,30 @@ ${P}menu osint — Comandos OSINT avançados`,
             const searchUrl = `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(searchTerm)}`;
             const response = await axios.get(searchUrl, {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us'
                 }
             });
 
-            const jsonMatch = response.data.match(/\"id\":\"[0-9]+\",\"images\":\{\"orig\":\{\"url\":\"(https:\/\/i\.pinimg\.com\/originals\/[a-f0-9]+\.(jpg|png|gif))\"/g);
+            const html = response.data as string;
+            const urlRegex = /https:\/\/i\.pinimg\.com\/[^\s\"\'\\]+/g;
+            const matches = html.match(urlRegex) || [];
 
-            let images: (string | null)[] = [];
-            if (jsonMatch) {
-                images = jsonMatch.map((match: string) => {
-                    const urlMatch = match.match(/url\":\"(https:\/\/i\.pinimg\.com\/originals\/[a-f0-9]+\.(jpg|png|gif))/);
-                    return urlMatch ? urlMatch[1] : null;
-                }).filter((url: string | null) => url !== null);
-            }
+            let images: string[] = matches
+                .filter(url => /\.(jpg|png|gif|webp)$/i.test(url))
+                .map(url => {
+                    // Transforma URLs de baixa resolução (ex: 236x, 60x60) para alta resolução (originals)
+                    const parts = url.split('/');
+                    if (parts.length > 4) {
+                        parts[3] = 'originals';
+                        return parts.join('/');
+                    }
+                    return url;
+                });
 
-            if (images.length === 0) {
-                const genericMatch = (response.data as string).match(/https:\/\/i\.pinimg\.com\/[^\/]+\/[a-f0-9]+\.(jpg|png|gif)/g);
-                if (genericMatch) images = [...new Set(genericMatch)];
-            }
+            // Remove duplicatas e imagens irrelevantes (como avatars de 60x60 que não viraram originals)
+            images = [...new Set(images)].filter(url => url.includes('/originals/'));
 
             if (images.length === 0) {
                 await this._reply(m, '❌ Não consegui encontrar imagens no Pinterest no momento. Tente novamente mais tarde.');
