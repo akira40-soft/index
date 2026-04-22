@@ -2167,16 +2167,12 @@ ${P}menu osint — Comandos OSINT avançados`,
             let images: string[] = matches
                 .filter(url => /\.(jpg|png|gif|webp)$/i.test(url))
                 .map(url => {
-                    // Transforma URLs de baixa resolução (ex: 236x, 60x60) para alta resolução (originals)
-                    const parts = url.split('/');
-                    if (parts.length > 4) {
-                        parts[3] = 'originals';
-                        return parts.join('/');
-                    }
-                    return url;
+                    // Transforma apenas se encontrar um padrão de tamanho conhecido (ex: 236x, 736x, 60x60)
+                    // Isso evita quebrar caminhos como /videos/thumbnails/originals/
+                    return url.replace(/\/([0-9]+x[0-9]*|[0-9]+x)\//, '/originals/');
                 });
 
-            // Remove duplicatas e imagens irrelevantes (como avatars de 60x60 que não viraram originals)
+            // Remove duplicatas e garante que a URL tenha o padrão de alta resolução ou seja um thumbnail original
             images = [...new Set(images)].filter(url => url.includes('/originals/'));
 
             if (images.length === 0) {
