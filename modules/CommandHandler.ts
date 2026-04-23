@@ -2229,37 +2229,8 @@ ${P}menu osint — Comandos OSINT avançados`,
         return true;
     }
 
-    /** Faz upload de um Buffer de imagem para telegra.ph e retorna a URL pública */
-    private async _uploadToTelegraph(buffer: Buffer): Promise<string | null> {
-        try {
-            // Node 18+ tem FormData nativo, mas usamos a abordagem multipart manual para compatibilidade
-            const boundary = `----FormBoundary${Date.now()}`;
-            const header = Buffer.from(
-                `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
-            );
-            const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
-            const body = Buffer.concat([header, buffer, footer]);
-
-            const res = await axios.post('https://telegra.ph/upload', body, {
-                headers: {
-                    'Content-Type': `multipart/form-data; boundary=${boundary}`,
-                    'User-Agent': 'Mozilla/5.0 (compatible; AkiraBot/1.0)'
-                },
-                timeout: 20000
-            });
-
-            if (Array.isArray(res.data) && res.data[0]?.src) {
-                return `https://telegra.ph${res.data[0].src}`;
-            }
-            return null;
-        } catch (e: any) {
-            this.logger?.warn(`⚠️ [Telegraph] Upload falhou: ${e.message}`);
-            return null;
-        }
-    }
-
-    /** Busca visual no Pinterest: baixa a imagem citada, sobe para telegra.ph,
-     *  pesquisa no Google filtrado a pinterest.com e retorna os pins encontrados */
+    /** Busca visual no Pinterest: baixa a imagem citada, envia diretamente para o Google
+     *  Reverse Image Search (sem precisar de host externo) e retorna pins similares */
     private async _pinterestVisualSearch(m: any, count: number): Promise<boolean> {
         try {
             const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -2277,47 +2248,68 @@ ${P}menu osint — Comandos OSINT avançados`,
                 return true;
             }
 
-            // 2) Upload para telegra.ph → URL pública
-            const publicUrl = await this._uploadToTelegraph(mediaRes.buffer);
-            if (!publicUrl) {
-                await this._reply(m, '❌ Falha ao processar imagem para busca visual. Tente novamente.');
-                return true;
+            // 2) POST direto para Google Reverse Image Search (sem precisar de host externo)
+            const { default: FormData } = await import('form-data');
+            const form = new FormData();
+            form.append('encoded_image', mediaRes.buffer, {
+                filename: 'image.jpg',
+                contentType: 'image/jpeg'
+            });
+
+            let googleHtml = '';
+            try {
+                const googleRes = await axios.post(
+                    'https://www.google.com/searchbyimage/upload',
+                    form,
+                    {
+                        headers: {
+                            ...form.getHeaders(),
+                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                            'Referer': 'https://www.google.com/',
+                            'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+                        },
+                        maxRedirects: 5,
+                        timeout: 25000
+                    }
+                );
+                googleHtml = googleRes.data as string;
+            } catch (googleErr: any) {
+                this.logger?.warn(`⚠️ [Pinterest Visual] Google search falhou: ${googleErr.message}`);
             }
 
-            this.logger?.info(`📷 [Pinterest Visual] Imagem hospedada: ${publicUrl}`);
+            // 3) Extrai URLs do Pinterest dos resultados do Google
+            let pinterestImgUrls: string[] = [];
+            if (googleHtml) {
+                pinterestImgUrls = (googleHtml.match(/https:\/\/i\.pinimg\.com\/[^\s\"\'<>\\]+\.(?:jpg|png|gif|webp)/gi) || [])
+                    .map((url: string) => url.replace(/\/([0-9]+x[0-9]*|[0-9]+x|originals)\//, '/736x/'))
+                    .filter((url: string) => url.includes('/736x/'));
+            }
 
-            // 3) Google reverse image search filtrado a pinterest.com
-            //    POST multipart para o endpoint de upload de imagem do Google
-            const gBoundary = `----FormBoundary${Date.now()}`;
-            const gHeader = Buffer.from(
-                `--${gBoundary}\r\nContent-Disposition: form-data; name="encoded_image"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
-            );
-            const gFooter = Buffer.from(`\r\n--${gBoundary}--\r\n`);
-            const gBody = Buffer.concat([gHeader, mediaRes.buffer, gFooter]);
-
-            const googleRes = await axios.post(
-                'https://www.google.com/searchbyimage/upload',
-                gBody,
-                {
-                    headers: {
-                        'Content-Type': `multipart/form-data; boundary=${gBoundary}`,
-                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
-                        'Referer': 'https://www.google.com/',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-                    },
-                    maxRedirects: 5,
-                    timeout: 20000
+            // 4) Fallback: extrai uma label de pesquisa da página do Google e busca no Pinterest por texto
+            if (pinterestImgUrls.length === 0 && googleHtml) {
+                const labelMatch = googleHtml.match(/<title>([^<]+)<\/title>/i);
+                const rawLabel = labelMatch ? labelMatch[1].replace(/ - Google.*/i, '').trim() : '';
+                if (rawLabel && rawLabel.length > 2) {
+                    this.logger?.info(`📷 [Pinterest Visual] Fallback com label: "${rawLabel}"`);
+                    const searchUrl = `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(rawLabel)}`;
+                    const pRes = await axios.get(searchUrl, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                        }
+                    });
+                    const rawMatches = (pRes.data as string).match(/https:\/\/i\.pinimg\.com\/[^\s\"\'\\]+/g) || [];
+                    pinterestImgUrls = rawMatches
+                        .filter((u: string) => /\.(jpg|png|gif|webp)$/i.test(u))
+                        .map((u: string) => u.replace(/\/([0-9]+x[0-9]*|[0-9]+x|originals)\//, '/736x/'))
+                        .filter((u: string) => u.includes('/736x/'));
+                    if (pinterestImgUrls.length > 0) {
+                        await this._reply(m, `📌 Mostrando resultados similares para: *${rawLabel}*`);
+                    }
                 }
-            );
+            }
 
-            const googleHtml = googleRes.data as string;
-
-            // Extrai todas as URLs do Pinterest encontradas nos resultados do Google
-            const pinterestImgUrls = (googleHtml.match(/https:\/\/i\.pinimg\.com\/[^\s\"\'<>\\]+\.(?:jpg|png|gif|webp)/gi) || [])
-                .map((url: string) => url.replace(/\/([0-9]+x[0-9]*|[0-9]+x|originals)\//, '/736x/'))
-                .filter((url: string) => url.includes('/736x/'));
-
-            const uniqueResults = [...new Set(pinterestImgUrls)].slice(0, count) as string[];
+            const uniqueResults = [...new Set(pinterestImgUrls)].slice(0, count);
 
             if (uniqueResults.length === 0) {
                 await this._reply(m, '🔍 Nenhuma imagem similar encontrada no Pinterest.\n💡 Tente com uma foto mais nítida ou use *#pinterest <texto>* para busca por palavras.');
@@ -2327,8 +2319,7 @@ ${P}menu osint — Comandos OSINT avançados`,
             const dlHeaders = {
                 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
                 'Referer': 'https://www.pinterest.com/',
-                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-                'Accept-Language': 'en-us'
+                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
             };
 
             let sentCount = 0;
