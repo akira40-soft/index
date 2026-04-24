@@ -46,6 +46,7 @@ class ModerationSystem {
     private SPAM_WINDOW_MS: number;
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
+    private lidMap: Map<string, string>; // {lid} -> {realJid}
     public sock: any;
 
     constructor(logger: any = null) {
@@ -93,6 +94,9 @@ class ModerationSystem {
         // ═══ CONSTANTES ANTIGAS ═══
         this.SPAM_THRESHOLD = 3;
         this.SPAM_WINDOW_MS = 3000;
+
+        // ═══ MAPEAMENTO DE IDENTIDADE (LID -> PN) ═══
+        this.lidMap = new Map();
 
         // ═══ LOG DETALHADO ═══
         this.enableDetailedLogging = true;
@@ -560,6 +564,37 @@ class ModerationSystem {
 
     public isAntiFakeActive(groupId: string): boolean {
         return this.antiFakeGroups.has(groupId);
+    }
+
+    /**
+     * Registra um mapeamento entre LID e JID real (Número de Telefone)
+     */
+    public updateLidMapping(lid: string, realJid: string): void {
+        if (!lid || !realJid) return;
+        const cleanLid = lid.split(':')[0];
+        const cleanReal = realJid.split(':')[0];
+        if (cleanLid.includes('@lid') && cleanReal.includes('@s.whatsapp.net')) {
+            this.lidMap.set(cleanLid, cleanReal);
+            this.logger.debug(`[ModerationSystem] Mapeamento atualizado: ${cleanLid} -> ${cleanReal}`);
+        }
+    }
+
+    /**
+     * Tenta resolver um JID (que pode ser um LID) para o seu número real (JID)
+     */
+    public resolveRealJid(jid: string): string {
+        if (!jid) return '';
+        const cleanJid = jid.split(':')[0];
+
+        // Se já for um JID de telefone, retorna ele mesmo
+        if (cleanJid.includes('@s.whatsapp.net')) return cleanJid;
+
+        // Se for um LID, tenta buscar no mapa
+        if (cleanJid.includes('@lid')) {
+            return this.lidMap.get(cleanJid) || cleanJid;
+        }
+
+        return cleanJid;
     }
 
     /**
