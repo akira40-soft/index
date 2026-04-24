@@ -588,7 +588,20 @@ class BotCore {
             }
 
             if (!deveResponder) {
-                this.logger.debug(`⏭️ [IGNORADO] ${nome}: "${textoFinal.substring(0, 50)}" (genérico${ehGrupo ? ' em grupo' : ''})`);
+                if (ehGrupo) {
+                    this.logger.debug(`⏭️ [ESCUTA GRUPO] ${nome}: "${textoFinal.substring(0, 50)}"`);
+                    const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
+                    this.apiClient.listenMessage({
+                        usuario: nome,
+                        numero: numeroReal,
+                        mensagem: textoFinal,
+                        tipo_conversa: 'grupo',
+                        grupo_id: remoteJid,
+                        grupo_nome: grupoNome
+                    }).catch(() => { });
+                } else {
+                    this.logger.debug(`⏭️ [IGNORADO] ${nome}: "${textoFinal.substring(0, 50)}" (genérico${ehGrupo ? ' em grupo' : ''})`);
+                }
                 return;
             }
 

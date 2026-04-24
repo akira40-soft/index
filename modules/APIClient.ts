@@ -58,9 +58,9 @@ class APIClient {
         // ✅ SINCRONIZAÇÃO: Detectar tipo_mensagem (inclui 'game' para comandos de jogo)
         const gameCommands = ['#play', '#game', '#grid', '#tactics', '#economy', '#level'];
         const isGameCmd = isGameCommand || gameCommands.some(cmd => (mensagem || '').toLowerCase().startsWith(cmd));
-        
-        const finalTipoMensagem = isGameCmd ? 'game' : 
-                                  (['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto');
+
+        const finalTipoMensagem = isGameCmd ? 'game' :
+            (['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto');
 
         const payload: any = {
             usuario: String(usuario || 'anonimo').substring(0, 50),
@@ -80,7 +80,7 @@ class APIClient {
         if (mensagem_citada) {
             // ✅ CORREÇÃO: Também garantir que quoted_author_numero é sempre apenas dígitos
             const quotedAuthorNumerolimpo = JidUtils.cleanPhoneNumber(reply_metadata.quoted_author_numero) || 'desconhecido';
-            
+
             payload.mensagem_citada = String(mensagem_citada).substring(0, 3000);
             payload.reply_metadata = {
                 is_reply: true,
@@ -198,6 +198,27 @@ class APIClient {
         }
 
         return { success: false, error: errorMsg, lastError };
+    }
+
+    /**
+     * Envia mensagem para o endpoint de escuta passiva (LSTM / Background Context)
+     */
+    async listenMessage(messageData: any): Promise<void> {
+        try {
+            const payload = this.buildPayload({
+                ...messageData,
+                tipo_mensagem: 'texto' // força para texto por segurança
+            });
+
+            // FIRE AND FORGET - não bloqueia o event loop principal
+            const url = `${this.config.API_URL}/escutar`;
+            axios.post(url, payload, {
+                timeout: 10000,
+                headers: { 'Content-Type': 'application/json' }
+            }).catch(() => { });
+        } catch (e) {
+            // Silencioso
+        }
     }
 
     /**
