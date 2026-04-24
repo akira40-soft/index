@@ -23,10 +23,10 @@ const TIKTOK_VOICE_BR = 'br_003'; // Ana (Jovem/Amigável)
 const TIKTOK_VOICE_PT = 'pt_001'; // Portugal (Feminina)
 const TIKTOK_API_URL = 'https://api16-normal-v6.tiktokv.com/media/api/text/speech/invoke/';
 
-// ═══ Microsoft Edge TTS — Config da voz Francisca (PT-BR — Estável/Neural) ═══
-const EDGE_VOICE_ID = 'pt-BR-FranciscaNeural';
-const EDGE_RATE = '+0%';    // Velocidade padrão
-const EDGE_PITCH = '+0Hz';  // Tom padrão para evitar erros de servidor
+// ═══ Microsoft Edge TTS — Config da voz Raquel (PT-PT — Alta Fidelidade/Neural) ═══
+const EDGE_VOICE_ID = 'pt-PT-RaquelNeural';
+const EDGE_RATE = '+5%';    // Velocidade levemente ajustada
+const EDGE_PITCH = '+0Hz';  // Tom estável para máxima qualidade
 
 class AudioProcessor {
     private config: any;
