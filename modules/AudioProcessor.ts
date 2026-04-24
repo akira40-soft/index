@@ -221,6 +221,13 @@ class AudioProcessor {
             try {
                 this.logger?.info(`🎙️ Tentando TikTok TTS (Voz: ${voiceId})...`);
 
+                // Configuração de Proxy para TikTok se disponível
+                let httpsAgent = undefined;
+                const proxyUrl = this.config?.TTS_PROXY;
+                if (proxyUrl) {
+                    httpsAgent = proxyUrl.startsWith('socks') ? new SocksProxyAgent(proxyUrl) : new HttpsProxyAgent(proxyUrl);
+                }
+
                 const response = await axios.post(
                     TIKTOK_API_URL,
                     new URLSearchParams({
@@ -235,7 +242,8 @@ class AudioProcessor {
                             'Cookie': `sessionid=${this.config?.TIKTOK_SESSION_ID || ''}`,
                             'Content-Type': 'application/x-www-form-urlencoded'
                         },
-                        timeout: 10000
+                        timeout: 10000,
+                        httpsAgent
                     }
                 );
 
