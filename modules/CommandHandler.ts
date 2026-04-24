@@ -2195,10 +2195,9 @@ ${P}menu osint — Comandos OSINT avançados`,
             let images: string[] = rawMatches
                 .filter(url => /\.(jpg|png|gif|webp)$/i.test(url))
                 .map(url => {
-                    // Substitui qualquer variante de tamanho para 736x (melhor qualidade sem bloqueio)
+                    if (url.includes('/videos/thumbnails/')) return url;
                     return url.replace(/\/([0-9]+x[0-9]*|[0-9]+x|originals)\//, '/736x/');
-                })
-                .filter(url => url.includes('/736x/'));
+                });
 
             // Remove duplicatas
             images = [...new Set(images)];
