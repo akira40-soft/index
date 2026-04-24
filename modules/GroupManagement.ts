@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * MÓDULO: GroupManagement.js
  * ═══════════════════════════════════════════════════════════════════════════
@@ -30,7 +30,7 @@ class GroupManagement {
      * Cria uma lista de alvos a partir da mensagem, incluindo mentions e
      * usuário citado no reply. Retorna array vazio se nenhum alvo encontrado.
      */
-    private _extractTargets(m: any, args: any[] = []): string[] {
+    public _extractTargets(m: any, args: any[] = []): string[] {
         // ✅ 1. Tenta extrair de menções diretas na mensagem
         const mentioned: string[] = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
         if (mentioned.length > 0) {
@@ -644,6 +644,16 @@ class GroupManagement {
             }
         }
 
+        // 🛡️ PROTEÇÃO DO DONO: Impedir ações contra o dono
+        const isTargetingOwner = targets.some(t => this.config.isDono(t));
+
+        if (isTargetingOwner) {
+            if (this.sock) await this.sock.sendMessage(groupJid, {
+                text: '🚫 **ERRO DE SEGURANÇA** 🚫\n\nTentativa de violação detectada. Você não tem permissão para realizar ações contra o meu Criador.'
+            }, { quoted: m });
+            return true;
+        }
+
         if (this.moderationSystem) {
             const muteInfo = this.moderationSystem.muteUser(groupJid, target, duration);
 
@@ -903,6 +913,16 @@ class GroupManagement {
         console.log(`🔍 [GroupManagement] Bot ID (BOT_NUMERO_REAL): ${botId}`);
         console.log(`🔍 [GroupManagement] Admins (normalizados): ${admins.join(', ')}`);
         console.log(`🔍 [GroupManagement] Targets: ${targets.join(', ')}`);
+
+        // 🛡️ PROTEÇÃO DO DONO: Impedir expulsão do dono
+        const isTargetingOwner = targets.some(t => this.config.isDono(t));
+
+        if (isTargetingOwner) {
+            await this.sock.sendMessage(groupJid, {
+                text: '🚫 **ERRO DE SEGURANÇA** 🚫\n\nTentativa de expulsão do meu Criador bloqueada. Seus privilégios não alcançam o mestre.'
+            }, { quoted: m });
+            return true;
+        }
 
         if (!admins.includes(botId)) {
             console.log(`❌ [GroupManagement] Bot NÃO está na lista de admins!`);

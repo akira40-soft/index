@@ -40,8 +40,8 @@ class ModerationSystem {
     private antiFakeExceptionsPath: string;
     private antiImagePath: string;
     private antiStickerPath: string;
-    private HOURLY_LIMIT: number;
-    private HOURLY_WINDOW_MS: number;
+    private antiLinkExceptions: Map<string, string[]>; // groupId -> [userNumbers]
+    private antiLinkExceptionsPath: string;
     private SPAM_THRESHOLD: number;
     private SPAM_WINDOW_MS: number;
     private enableDetailedLogging: boolean;
@@ -85,12 +85,12 @@ class ModerationSystem {
         this.antiFakeExceptionsPath = path.join(basePath, 'data', 'antifake_exceptions.json');
         this.antiImagePath = path.join(basePath, 'data', 'antiimage.json');
         this.antiStickerPath = path.join(basePath, 'data', 'antisticker.json');
+        this.antiLinkExceptions = new Map();
+        this.antiLinkExceptionsPath = path.join(basePath, 'data', 'antilink_exceptions.json');
 
         this._loadAllSettings();
 
         // ═══ CONSTANTES ANTIGAS ═══
-        this.HOURLY_LIMIT = 300;
-        this.HOURLY_WINDOW_MS = 60 * 60 * 1000;
         this.SPAM_THRESHOLD = 3;
         this.SPAM_WINDOW_MS = 3000;
 
@@ -493,6 +493,41 @@ class ModerationSystem {
         return this.antiLinkGroups.has(groupId);
     }
 
+    public isUserExcepted(groupId: string, userId: string): boolean {
+        const exceptions = this.antiLinkExceptions.get(groupId) || [];
+        // Normaliza o userId para pegar apenas o número
+        const numericId = JidUtils.getNumber(userId) || userId.replace(/\D/g, '');
+        return exceptions.includes(numericId) || exceptions.includes(userId);
+    }
+
+    public addAntiLinkException(groupId: string, userId: string): void {
+        const numericId = JidUtils.getNumber(userId) || userId.replace(/\D/g, '');
+        const current = this.antiLinkExceptions.get(groupId) || [];
+        if (!current.includes(numericId)) {
+            current.push(numericId);
+            this.antiLinkExceptions.set(groupId, current);
+            this._saveAllSettings();
+        }
+    }
+
+    public removeAntiLinkException(groupId: string, userId: string): boolean {
+        const numericId = JidUtils.getNumber(userId) || userId.replace(/\D/g, '');
+        const current = this.antiLinkExceptions.get(groupId) || [];
+        const index = current.indexOf(numericId);
+        if (index >= 0) {
+            current.splice(index, 1);
+            if (current.length === 0) this.antiLinkExceptions.delete(groupId);
+            else this.antiLinkExceptions.set(groupId, current);
+            this._saveAllSettings();
+            return true;
+        }
+        return false;
+    }
+
+    public getAntiLinkExceptions(groupId: string): string[] {
+        return this.antiLinkExceptions.get(groupId) || [];
+    }
+
     // ═══ SISTEMA DE AVISOS ═══
     public addWarning(groupId: string, userId: string, reason: string = 'No reason'): number {
         const key = `${groupId}_${userId}`;
@@ -631,6 +666,7 @@ class ModerationSystem {
         this._loadSettingsMap(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._loadSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._loadSettingsSet(this.antiStickerPath, this.antiStickerGroups);
+        this._loadSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._loadSettingsMap(this.warningsPath, this.warnings);
     }
 
@@ -640,6 +676,7 @@ class ModerationSystem {
         this._saveSettingsMap(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._saveSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._saveSettingsSet(this.antiStickerPath, this.antiStickerGroups);
+        this._saveSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._saveSettingsMap(this.warningsPath, this.warnings);
     }
 
@@ -689,6 +726,7 @@ class ModerationSystem {
     public checkLink(text: string, groupId: string, userId: string, isAdmin: boolean = false): boolean {
         if (!this.isAntiLinkActive(groupId)) return false;
         if (isAdmin) return false; // Admins podem enviar links
+        if (this.isUserExcepted(groupId, userId)) return false; // Usuários confiáveis também!
 
         // Regex extremamente agressivo para links (http, www, domínios puros, wa.me, t.me, IPs)
         const linkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]{2,}\.[a-zA-Z]{2,}(\.[a-zA-Z]{2,})?(\/[^\s]*)?)|(bit\.ly\/[^\s]+)|(t\.me\/[^\s]+)|(wa\.me\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)|(discord\.gg\/[^\s]+)|(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)/gi;

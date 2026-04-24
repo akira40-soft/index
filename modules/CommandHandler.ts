@@ -786,23 +786,27 @@ class CommandHandler {
                 case 'add':
                 case 'promote':
                 case 'demote': {
-                    // ✅ Permitir: Dono OU Admin do grupo
-                    // Verifica se é dono
+                    // ✅ Permitir: Dono OU Admin do grupo OU Usuário na lista #except
                     let podeExecutar = isOwner;
 
-                    // Se não for dono e estiva em grupo, verifica se é admin
-                    if (!isOwner && ehGrupo && this.groupManagement) {
-                        podeExecutar = await this.groupManagement.isGroupAdmin(m.key.remoteJid, numeroReal);
+                    // Se não for dono e estiver em grupo, verifica se é admin ou excepted
+                    if (!isOwner && ehGrupo) {
+                        const isAdminInGroup = await this.groupManagement?.isUserAdmin(m.key.remoteJid, senderId);
+                        const isExcepted = this.moderationSystem?.isUserExcepted(m.key.remoteJid, senderId);
+                        podeExecutar = isAdminInGroup || isExcepted;
                     }
 
                     if (!podeExecutar) {
                         if (ehGrupo) {
-                            await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas administradores podem usar este comando.');
+                            await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas administradores ou usuários autorizados podem usar este comando.');
                         } else {
                             await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
                         }
                         return true;
                     }
+
+                    // 🛡️ PROTEÇÃO DO DONO: Impedir ações contra o dono (mesmo por admins/excepted)
+                    // (O GroupManagement já deve ter essa trava, mas reforçamos aqui se possível)
 
                     // Verifica se groupManagement está disponível
                     if (!this.groupManagement) {
@@ -1008,6 +1012,14 @@ class CommandHandler {
                 case 'resetwarns':
                     if (!isOwner && !isAdminUsers) return false;
                     return await this._handleResetWarns(m, args);
+
+                case 'except':
+                case 'excep':
+                    if (!isOwner && !isAdminUsers) {
+                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas administradores podem gerenciar a lista de exceções.');
+                        return true;
+                    }
+                    return await this._handleExceptCommand(m, args);
 
                 case 'restart':
                     if (!isOwner) return false;
@@ -1224,6 +1236,7 @@ _Akira V21 — Desenvolvido por Isaac Quarenta_`;
 • ${P}setdesc | ${P}setfoto 👑
 • ${P}welcome on/off 👑
 • ${P}antilink on/off 👑
+• ${P}except add/remove/list 👑 — Usuários confiáveis
 • ${P}antispam on/off 👑
 • ${P}blacklist 👑 — Relatório de banidos
 • ${P}mutelist | ${P}silenciados 👑
@@ -3116,6 +3129,56 @@ ${P}menu osint — Comandos OSINT avançados`,
                 await this._reply(m, `✅ Anti-Sticker ${actionStr} para este grupo.`);
                 break;
         }
+        return true;
+    }
+
+    private async _handleExceptCommand(m: any, args: string[]): Promise<boolean> {
+        const chatJid = m.key.remoteJid;
+        const subCommand = (args[0] || '').toLowerCase();
+
+        if (subCommand === 'add') {
+            const targets = this.groupManagement?._extractTargets(m, args.slice(1));
+            const target = targets?.[0];
+            if (!target) {
+                await this._reply(m, '❌ Marque um usuário, responda a uma mensagem ou digite o número para adicionar às exceções.');
+                return true;
+            }
+            this.moderationSystem.addAntiLinkException(chatJid, target);
+            await this._reply(m, `✅ Usuário @${target.split('@')[0]} adicionado à lista de confiança deste grupo.`, { mentions: [target] });
+            return true;
+        }
+
+        if (subCommand === 'remove' || subCommand === 'del') {
+            const targets = this.groupManagement?._extractTargets(m, args.slice(1));
+            const target = targets?.[0];
+            if (!target) {
+                await this._reply(m, '❌ Marque um usuário, responda a uma mensagem ou digite o número para remover das exceções.');
+                return true;
+            }
+            const removed = this.moderationSystem.removeAntiLinkException(chatJid, target);
+            if (removed) {
+                await this._reply(m, `✅ Usuário @${target.split('@')[0]} removido da lista de confiança deste grupo.`, { mentions: [target] });
+            } else {
+                await this._reply(m, '❌ Este usuário não está na lista de confiança deste grupo.');
+            }
+            return true;
+        }
+
+        if (subCommand === 'list') {
+            const list = this.moderationSystem.getAntiLinkExceptions(chatJid);
+            if (list.length === 0) {
+                await this._reply(m, '📝 A lista de confiança deste grupo está vazia.');
+                return true;
+            }
+            let text = '📝 *USUÁRIOS CONFIÁVEIS (ANTILINK)*\n\n';
+            list.forEach((num: string, i: number) => {
+                text += `${i + 1}. @${num}\n`;
+            });
+            await this._reply(m, text, { mentions: list.map((n: string) => `${n}@s.whatsapp.net`) });
+            return true;
+        }
+
+        await this._reply(m, '❓ Uso: *#except add/remove/list*');
         return true;
     }
 
