@@ -259,6 +259,8 @@ class ConfigManager {
         this.API_AUTH_TOKEN = process.env?.API_AUTH_TOKEN || '';
         this.STICKER_AUTHOR = process.env?.STICKER_AUTHOR || 'Akira Bot';
         this.STICKER_PACK = process.env?.STICKER_PACK || 'V21 Enterprise';
+        this.TTS_PROXY = process.env?.TTS_PROXY || "http://pgwtfkpg:oyqt2wfsbzsu@198.23.239.134:6540/";
+        this.TIKTOK_SESSION_ID = process.env?.TIKTOK_SESSION_ID || "";
 
         ConfigManager.instance = this;
     }

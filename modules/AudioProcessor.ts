@@ -214,8 +214,8 @@ class AudioProcessor {
     async tiktokTTS(text: string, language: string = 'pt'): Promise<Buffer | null> {
         // Lista de vozes candidatas (Ana é a prioridade)
         const candidateVoices = language === 'pt'
-            ? ['pt_001', 'br_003', 'br_001', 'br_005'] // Prioriza BR (Ana) mesmo em PT
-            : ['pt_001', 'br_003', 'br_001', 'br_005'];
+            ? ['pt_001', 'br_003', 'br_005', 'br_001'] // Prioriza BR (Ana) mesmo em PT
+            : ['pt_001', 'br_006', 'pt_003', 'pt_005'];
 
         for (const voiceId of candidateVoices) {
             try {
@@ -320,7 +320,8 @@ class AudioProcessor {
                 return await this.finalizeSpeech(mp3Path, opusPath, cacheKey, 'Edge TTS (Neural)');
 
             } catch (e: any) {
-                this.logger?.warn(`⚠️ Edge TTS falhou: ${e.message}. Tentando TikTok...`);
+                const errorMsg = e?.message || (typeof e === 'string' ? e : '') || 'Erro na conexão ou Voz indisponível';
+                this.logger?.warn(`⚠️ Edge TTS falhou: ${errorMsg}. Tentando TikTok...`);
             }
 
             // ════════════════════════════════════════════════
