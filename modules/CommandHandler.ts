@@ -3308,7 +3308,9 @@ ${P}menu osint — Comandos OSINT avançados`,
                         `📌 *Variáveis disponíveis:*\n` +
                         `• [username] - Nome do novo membro\n` +
                         `• [group] - Nome do grupo\n` +
-                        `• [date] - Data de entrada\n\n` +
+                        `• [date] - Data de entrada\n` +
+                        `• [desc] - Descrição do grupo\n` +
+                        `• [links] - Link de convite do grupo\n\n` +
                         `📝 *Exemplo:*\n` +
                         `#setwelcome Bem-vindo/a [username] ao [group]! 🎉 Leia a descrição!`
                     );
@@ -3327,7 +3329,9 @@ ${P}menu osint — Comandos OSINT avançados`,
                         `📌 *Variáveis disponíveis:*\n` +
                         `• [username] - Nome do membro que saiu\n` +
                         `• [group] - Nome do grupo\n` +
-                        `• [date] - Data de saída\n\n` +
+                        `• [date] - Data de saída\n` +
+                        `• [desc] - Descrição do grupo\n` +
+                        `• [links] - Link de convite do grupo\n\n` +
                         `📝 *Exemplo:*\n` +
                         `#setgoodbye Tchau [username]! Volte sempre! 👋`
                     );

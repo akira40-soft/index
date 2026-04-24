@@ -540,11 +540,15 @@ class GroupManagement {
                 }
             } catch (e) { }
 
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('pt-BR');
+
             return template
-                .replace(/@user/g, userTag)
-                .replace(/@group/g, groupName)
-                .replace(/@desc/g, groupDesc)
-                .replace(/@links/g, groupLink);
+                .replace(/@user|\[username\]/g, userTag)
+                .replace(/@group|\[group\]/g, groupName)
+                .replace(/@desc|\[desc\]/g, groupDesc)
+                .replace(/@links|\[links\]/g, groupLink)
+                .replace(/\[date\]/g, dateStr);
         } catch (e) {
             return template;
         }
