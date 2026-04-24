@@ -690,8 +690,8 @@ class ModerationSystem {
         if (!this.isAntiLinkActive(groupId)) return false;
         if (isAdmin) return false; // Admins podem enviar links
 
-        // Regex robusto para links (http, www, wa.me, t.me, IPs)
-        const linkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|(bit\.ly\/[^\s]+)|(t\.me\/[^\s]+)|(wa\.me\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)|(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)/gi;
+        // Regex extremamente agressivo para links (http, www, domínios puros, wa.me, t.me, IPs)
+        const linkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]{2,}\.[a-zA-Z]{2,}(\.[a-zA-Z]{2,})?(\/[^\s]*)?)|(bit\.ly\/[^\s]+)|(t\.me\/[^\s]+)|(wa\.me\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)|(discord\.gg\/[^\s]+)|(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)/gi;
 
         const hasLink = linkRegex.test(text);
 

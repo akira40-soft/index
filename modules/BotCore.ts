@@ -1150,15 +1150,21 @@ class BotCore {
         this.logger.warn(`🚫 [VIOLAÇÃO] ${tipo} de ${participant} (${nome})`);
 
         try {
-            // 1. Deletar mensagem
+            // 1. Deletar mensagem (isolado para não quebrar o resto se falhar)
             await this.sock.sendMessage(jid, { delete: m.key });
+        } catch (delError: any) {
+            this.logger.debug(`Não foi possível deletar a mensagem (bot pode não ser admin): ${delError.message}`);
+        }
 
+        try {
             // 2. Notificar e agir com base no tipo
             if (tipo === 'link') {
                 await this.sock.sendMessage(jid, {
-                    text: `🚫 *ANTILINK* 🚫\n\n@${numeroReal}, links não são permitidos neste grupo.`,
+                    text: `🚫 *ANTILINK* 🚫\n\n@${numeroReal}, links não são permitidos neste grupo! Você será removido.`,
                     mentions: [participant]
                 });
+                // Remove o usuário infrator do grupo
+                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
             } else if (tipo === 'mute') {
                 await this.sock.sendMessage(jid, { text: `🚫 *${nome} removido por falar durante o silenciamento!*` });
                 await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
