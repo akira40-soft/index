@@ -46,6 +46,44 @@ COPY . .
 RUN dos2unix /app/docker-entrypoint.sh && \
     chmod +x /app/docker-entrypoint.sh
 
+# Garantir que MessageStore.ts existe (substituto do makeInMemoryStore removido no Baileys 6.7+)
+RUN cat > /app/modules/MessageStore.ts << 'MSGSTORE_EOF'
+import fs from 'fs';
+import path from 'path';
+const MAX_MESSAGES_PER_JID = 200;
+export class MessageStore {
+    public messages: Record<string, { array: any[] }> = {};
+    bind(ev: any): void {
+        ev.on('messages.upsert', ({ messages }: { messages: any[] }) => {
+            for (const msg of messages) {
+                const jid: string = msg.key?.remoteJid;
+                if (!jid) continue;
+                if (!this.messages[jid]) this.messages[jid] = { array: [] };
+                const arr = this.messages[jid].array;
+                const exists = arr.findIndex((m: any) => m.key?.id === msg.key?.id);
+                if (exists >= 0) { arr[exists] = msg; }
+                else { arr.push(msg); if (arr.length > MAX_MESSAGES_PER_JID) arr.splice(0, arr.length - MAX_MESSAGES_PER_JID); }
+            }
+        });
+        ev.on('messages.delete', (item: any) => {
+            if (item.keys) { for (const key of item.keys) { const jid: string = key.remoteJid; if (!jid || !this.messages[jid]) continue; this.messages[jid].array = this.messages[jid].array.filter((m: any) => m.key?.id !== key.id); } }
+        });
+        ev.on('messages.update', (updates: any[]) => {
+            for (const update of updates) { const jid: string = update.key?.remoteJid; if (!jid || !this.messages[jid]) continue; const idx = this.messages[jid].array.findIndex((m: any) => m.key?.id === update.key?.id); if (idx >= 0) this.messages[jid].array[idx] = { ...this.messages[jid].array[idx], ...update.update }; }
+        });
+    }
+    async loadMessage(jid: string, id: string): Promise<any | undefined> {
+        return this.messages[jid]?.array?.find((m: any) => m.key?.id === id);
+    }
+    readFromFile(filePath: string): void {
+        try { if (fs.existsSync(filePath)) { const data = JSON.parse(fs.readFileSync(filePath, 'utf8')); for (const [jid, msgs] of Object.entries(data)) this.messages[jid] = { array: msgs as any[] }; } } catch (_) {}
+    }
+    writeToFile(filePath: string): void {
+        try { const dir = path.dirname(filePath); if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); const data: Record<string, any[]> = {}; for (const [jid, val] of Object.entries(this.messages)) data[jid] = val.array; fs.writeFileSync(filePath, JSON.stringify(data), 'utf8'); } catch (_) {}
+    }
+}
+MSGSTORE_EOF
+
 # Limpar dist anterior e compilar TypeScript (usando npx para garantir path)
 RUN rm -rf dist/ && \
     npx tsc && \
