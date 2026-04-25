@@ -603,6 +603,13 @@ class ModerationSystem {
      * então extraímos apenas os dígitos e verificamos o DDD.
      */
     public isFakeNumber(userId: string, groupId?: string): boolean {
+        // ✅ TRAVA DE SEGURANÇA: Ignorar LIDs (IDs de Privacidade)
+        // LIDs não seguem o padrão de DDI e causam expulsão injusta.
+        if (userId.includes('@lid') || userId.startsWith('lid_')) {
+            this.logger.debug(`[ANTI-FAKE] Ignorando LID por segurança: ${userId}`);
+            return false;
+        }
+
         // Limpa @ e mantém só dígitos
         const rawNumber = userId.replace(/[@a-z._:-]/gi, '');
         const ddd = rawNumber.substring(0, 3); // ex: "244"

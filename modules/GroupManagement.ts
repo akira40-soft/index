@@ -393,6 +393,9 @@ class GroupManagement {
                 return await this.toggleSetting(m, 'antifake', args[0]);
             case 'antispam':
                 return await this.toggleSetting(m, 'antispam', args[0]);
+            case 'leveling':
+            case 'levelup':
+                return await this.toggleSetting(m, 'leveling', args[0]);
             case 'setdesc':
             case 'descricao':
                 return await this.setGroupDesc(m, args);
@@ -408,6 +411,9 @@ class GroupManagement {
             case 'rank':
             case 'level':
             case 'nivel':
+                if (args[0] === 'on' || args[0] === 'off') {
+                    return await this.toggleSetting(m, 'leveling', args[0]);
+                }
                 return await this.getRank(m);
             case 'resetwins':
                 // ... (existing logic or placeholder)

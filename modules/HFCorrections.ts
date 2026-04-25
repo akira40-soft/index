@@ -19,6 +19,7 @@ import dns from 'dns';
 import https from 'https';
 import http from 'http';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import ConfigManager from './ConfigManager.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // 2. IP'S DIRETOS DO WHATSAPP (FALLBACK PARA CASO DNS FALHE)
@@ -43,12 +44,16 @@ function getWhatsAppIP(): string {
 
 function createHFAgent(): https.Agent | http.Agent | undefined {
     try {
-        // Verifica se há proxy configurado
-        const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy;
+        // Verifica se há proxy configurado (prioriza ConfigManager)
+        const config = ConfigManager.getInstance();
+        const proxy = config.TTS_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy;
 
-        if (proxy) {
-            console.log(`🌐 HFCorrections: Usando Proxy: ${proxy}`);
-            return new HttpsProxyAgent(proxy);
+        if (proxy && proxy.trim() !== "") {
+            console.log(`🌐 HFCorrections: Conectando via Proxy Residencial: ${proxy.split('@').pop()}`);
+            return new HttpsProxyAgent(proxy, {
+                keepAlive: true,
+                timeout: 60000
+            });
         }
 
         // Se não tem proxy, usa DNS customizado no agente
