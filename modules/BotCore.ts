@@ -401,10 +401,12 @@ class BotCore {
 
             this.sock.ev.on('group-participants.update', async (update: any) => {
                 const { id, participants, action } = update;
+                this.logger.debug(`👥 [GROUP UPDATE] Ação: ${action} em ${id} | Participantes: ${participants.length}`);
 
                 if (action === 'add') {
                     // 0. VERIFICAÇÃO DE BLACKLIST (Banimento Permanente)
-                    // Se o usuário estiver na blacklist global, remove imediatamente antes de qualquer outra ação
+                    const allowedParticipants: string[] = [];
+
                     if (this.moderationSystem) {
                         for (const participant of participants) {
                             if (this.moderationSystem.isBlacklisted(participant)) {
@@ -415,55 +417,50 @@ class BotCore {
                                         mentions: [participant]
                                     });
                                     await this.sock.groupParticipantsUpdate(id, [participant], 'remove');
-
-                                    // Remove do array para evitar que o welcome ou anti-fake processe esse usuário
-                                    const idx = participants.indexOf(participant);
-                                    if (idx > -1) participants.splice(idx, 1);
                                 } catch (e: any) {
                                     this.logger.error(`Falha ao executar auto-ban: ${e.message}`);
                                 }
-                                continue;
+                            } else {
+                                allowedParticipants.push(participant);
                             }
                         }
+                    } else {
+                        allowedParticipants.push(...participants);
                     }
+
+                    if (allowedParticipants.length === 0) return;
 
                     // 1. Anti-Fake
+                    const finalParticipants: string[] = [];
                     if (this.moderationSystem?.isAntiFakeActive(id)) {
-                        for (const participant of participants) {
-                            // Tenta resolver a identidade real antes de verificar se é fake
-                            const resolvedJid = await this.resolveIdentity(participant);
-
+                        for (const p of allowedParticipants) {
+                            const resolvedJid = await this.resolveIdentity(p);
                             if (this.moderationSystem.isFakeNumber(resolvedJid, id)) {
-                                this.logger.warn(`🚫 [ANTI-FAKE] ${resolvedJid} (Original: ${participant}) - DDD não permitido no grupo ${id}`);
-                                await this.sock.sendMessage(id, { text: '⚠️ Número fake removido.' });
-                                await this.sock.groupParticipantsUpdate(id, [participant], 'remove');
-                                // Remove from the list so welcome isn't sent
-                                participants.splice(participants.indexOf(participant), 1);
+                                this.logger.warn(`🚫 [ANTI-FAKE] ${resolvedJid} - DDD não permitido no grupo ${id}`);
+                                try {
+                                    await this.sock.sendMessage(id, { text: '⚠️ Número fake removido.' });
+                                    await this.sock.groupParticipantsUpdate(id, [p], 'remove');
+                                } catch (e) { }
+                            } else {
+                                finalParticipants.push(p);
                             }
                         }
+                    } else {
+                        finalParticipants.push(...allowedParticipants);
+                    }
+
+                    if (finalParticipants.length === 0) return;
+
+                    // 2. Welcome Message
+                    if (this.groupManagement && this.groupManagement.getWelcomeStatus(id)) {
+                        this.logger.info(`👋 Enviando Welcome para ${finalParticipants.length} membros no grupo ${id}`);
+                        await this.groupManagement.sendWelcomeMessage(id, finalParticipants);
                     }
                 }
 
-                if (action === 'add' && this.groupManagement && participants.length > 0) {
-                    const isWelcomeOn = this.groupManagement.groupSettings?.[id]?.welcome;
-                    if (isWelcomeOn) {
-                        for (const p of participants) {
-                            const template = this.groupManagement.getCustomMessage(id, 'welcome') || 'Olá @user!';
-                            const formatted = await this.groupManagement.formatMessage(id, p, template);
-                            await this.sock.sendMessage(id, { text: formatted, mentions: [p] });
-                        }
-                    }
-                }
-
-                if (action === 'remove' && this.groupManagement) {
-                    const isGoodbyeOn = this.groupManagement.groupSettings?.[id]?.goodbye;
-                    if (isGoodbyeOn) {
-                        for (const p of participants) {
-                            const template = this.groupManagement.getCustomMessage(id, 'goodbye') || 'Adeus @user!';
-                            const formatted = await this.groupManagement.formatMessage(id, p, template);
-                            await this.sock.sendMessage(id, { text: formatted, mentions: [p] });
-                        }
-                    }
+                if (action === 'remove' && this.groupManagement && this.groupManagement.getGoodbyeStatus(id)) {
+                    this.logger.info(`👋 Enviando Goodbye para ${participants.length} membros no grupo ${id}`);
+                    await this.groupManagement.sendGoodbyeMessage(id, participants);
                 }
             });
 
