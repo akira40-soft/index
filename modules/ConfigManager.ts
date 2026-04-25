@@ -119,7 +119,14 @@ class ConfigManager {
         // ═══ PATHS E FOLDERS ═══
         const isHuggingFaceSpace = process.env?.HF_SPACE === 'true';
         const isRailway = process.env?.RAILWAY_ENVIRONMENT === 'true' || !!process.env?.RAILWAY_STATIC_URL;
-        const baseDataPath = (isHuggingFaceSpace || isRailway) ? '/tmp/akira_data' : '.';
+
+        let baseDataPath = '.';
+        if (isHuggingFaceSpace) {
+            baseDataPath = '/tmp/akira_data';
+        } else if (isRailway) {
+            // Railway: Prioriza volume persistente /app/data se existir
+            baseDataPath = fs.existsSync('/app/data') ? '/app/data' : '/tmp/akira_data';
+        }
 
         this.TEMP_FOLDER = process.env?.TEMP_FOLDER || path.join(baseDataPath, 'temp');
         this.AUTH_FOLDER = process.env?.AUTH_FOLDER || path.join(baseDataPath, 'auth_info_baileys');

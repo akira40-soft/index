@@ -45,7 +45,7 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, delay, Browsers, getContentType } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, delay, Browsers, getContentType, makeInMemoryStore } from '@whiskeysockets/baileys';
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
@@ -99,10 +99,11 @@ class BotCore {
     public audioProcessor: any;
     public paymentManager: any;
     public subscriptionManager: any;
-    public commandHandler: any;
-    public presenceSimulator: any;
-    public rateLimiter: any;
     public economySystem: any;
+    public presenceSimulator: any;
+    public store: any;
+    private storePath: string = '';
+    public rateLimiter: any;
     public gameSystem: any;
     public gridTacticsGame: any;
     public userProfile: any;
@@ -111,6 +112,7 @@ class BotCore {
     public imageEffects: any;
     public permissionManager: any;
     public stickerViewOnceHandler: any;
+    public commandHandler: any;
 
     // Event listeners
     public eventListeners: {
@@ -131,11 +133,40 @@ class BotCore {
 
     constructor() {
         this.config = ConfigManager.getInstance();
-        this.logger = this.config.logger || pino({
+        this.logger = pino({
             level: this.config.LOG_LEVEL || 'info',
-            timestamp: () => `,"time":"${new Date().toISOString()}"`
+            transport: {
+                target: 'pino-pretty',
+                options: { colorize: true }
+            }
         });
+
+        // Inicializa store de mensagens (ajuda com 'Bad MAC' e 'Waiting for message')
+        this.storePath = path.join(this.config.DATABASE_FOLDER, 'baileys_store.json');
+        this.store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
+        this._loadStore();
         this.sock = null;
+    }
+
+    private _loadStore() {
+        try {
+            if (fs.existsSync(this.storePath)) {
+                this.store.readFromFile(this.storePath);
+                this.logger.debug('✅ Store carregado com sucesso');
+            }
+        } catch (e: any) {
+            this.logger.warn(`⚠️ Falha ao carregar store: ${e.message}`);
+        }
+    }
+
+    private _saveStore() {
+        try {
+            const dir = path.dirname(this.storePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            this.store.writeToFile(this.storePath);
+        } catch (e: any) {
+            this.logger.error(`❌ Falha ao salvar store: ${e.message}`);
+        }
     }
 
     async initialize(): Promise<boolean> {
@@ -302,7 +333,13 @@ class BotCore {
                 },
                 browser: Browsers.macOS('Akira-Bot'),
                 generateHighQualityLinkPreview: true,
-                getMessage: async (key: any) => undefined,
+                getMessage: async (key: any) => {
+                    if (this.store) {
+                        const msg = await this.store.loadMessage(key.remoteJid, key.id);
+                        return msg?.message || undefined;
+                    }
+                    return undefined;
+                },
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
                 keepAliveIntervalMs: 10000,
@@ -317,6 +354,13 @@ class BotCore {
             }
 
             this.sock = makeWASocket(socketConfig);
+
+            // Liga o store ao socket
+            this.store.bind(this.sock.ev);
+
+            // Auto-salvamento periódico do store (a cada 10 min)
+            setInterval(() => this._saveStore(), 10 * 60 * 1000);
+
             this._updateComponentsSocket(this.sock);
 
             this.sock.ev.on('connection.update', async (update: any) => {
