@@ -998,7 +998,7 @@ class CommandHandler {
                         return true;
                     }
                     try {
-                        if (['welcome', 'goodbye', 'setwelcome', 'setgoodbye'].includes(command)) {
+                        if (['welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'antipalavrao', 'antipalavras', 'antibadwords'].includes(command)) {
                             return await this.groupManagement.handleCommand(m, command, args);
                         }
                         return await this._handleToggleModeration(m, command, args);
