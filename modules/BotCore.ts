@@ -403,6 +403,30 @@ class BotCore {
                 const { id, participants, action } = update;
 
                 if (action === 'add') {
+                    // 0. VERIFICAÇÃO DE BLACKLIST (Banimento Permanente)
+                    // Se o usuário estiver na blacklist global, remove imediatamente antes de qualquer outra ação
+                    if (this.moderationSystem) {
+                        for (const participant of participants) {
+                            if (this.moderationSystem.isBlacklisted(participant)) {
+                                this.logger.warn(`🚫 [AUTO-BAN] Usuário banido tentou entrar no grupo ${id}: ${participant}`);
+                                try {
+                                    await this.sock.sendMessage(id, {
+                                        text: `🚫 *BANIMENTO PERMANENTE* 🚫\n\nO usuário @${participant.split('@')[0]} está na lista negra global da Akira e foi removido automaticamente.`,
+                                        mentions: [participant]
+                                    });
+                                    await this.sock.groupParticipantsUpdate(id, [participant], 'remove');
+
+                                    // Remove do array para evitar que o welcome ou anti-fake processe esse usuário
+                                    const idx = participants.indexOf(participant);
+                                    if (idx > -1) participants.splice(idx, 1);
+                                } catch (e: any) {
+                                    this.logger.error(`Falha ao executar auto-ban: ${e.message}`);
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
                     // 1. Anti-Fake
                     if (this.moderationSystem?.isAntiFakeActive(id)) {
                         for (const participant of participants) {
@@ -691,7 +715,9 @@ class BotCore {
                 await this.handleTextMessage(m, nome, numeroReal, texto || caption, replyInfo, ehGrupo);
             }
         } catch (error: any) {
-            this.logger.error('❌ Erro pipeline:', error?.message);
+            const errMsg = error?.message || String(error) || 'erro desconhecido';
+            const errStack = error?.stack ? `\n${error.stack.split('\n').slice(0, 3).join('\n')}` : '';
+            this.logger.error(`❌ Erro pipeline: ${errMsg}${errStack}`);
         }
     }
 
@@ -1190,11 +1216,23 @@ class BotCore {
         try {
             // 2. Notificar e agir com base no tipo
             if (tipo === 'link') {
+                // 1. Notificar
                 await this.sock.sendMessage(jid, {
-                    text: `🚫 *ANTILINK* 🚫\n\n@${numeroReal}, links não são permitidos neste grupo! Você será removido.`,
+                    text: `🚫 *BANIDO POR ANTILINK* 🚫\n\n@${numeroReal}, você enviou um link proibido! Foi removido do grupo e banido da Akira.`,
                     mentions: [participant]
                 });
-                // Remove o usuário infrator do grupo
+
+                // 2. Adicionar à Blacklist (Banimento Global)
+                if (this.moderationSystem) {
+                    this.moderationSystem.addToBlacklist(
+                        participant,
+                        nome,
+                        numeroReal,
+                        'Violação de AntiLink (Banimento Automático)'
+                    );
+                }
+
+                // 3. Remover do grupo
                 await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
             } else if (tipo === 'mute') {
                 await this.sock.sendMessage(jid, { text: `🚫 *${nome} removido por falar durante o silenciamento!*` });
