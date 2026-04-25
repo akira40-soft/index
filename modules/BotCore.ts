@@ -45,7 +45,22 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, delay, Browsers, getContentType, makeInMemoryStore } from '@whiskeysockets/baileys';
+import * as Baileys from '@whiskeysockets/baileys';
+const {
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    delay,
+    Browsers,
+    getContentType
+} = Baileys as any;
+
+// @ts-ignore
+const makeWASocket = Baileys.default || (Baileys as any).makeWASocket;
+// @ts-ignore
+const makeInMemoryStore = (Baileys as any).makeInMemoryStore;
+
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
@@ -143,8 +158,14 @@ class BotCore {
 
         // Inicializa store de mensagens (ajuda com 'Bad MAC' e 'Waiting for message')
         this.storePath = path.join(this.config.DATABASE_FOLDER, 'baileys_store.json');
-        this.store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
-        this._loadStore();
+
+        if (typeof makeInMemoryStore === 'function') {
+            this.store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
+            this._loadStore();
+        } else {
+            this.logger.warn('⚠️ [BotCore] makeInMemoryStore não disponível no pacote Baileys. Store desativado.');
+            this.store = null;
+        }
         this.sock = null;
     }
 
@@ -356,10 +377,13 @@ class BotCore {
             this.sock = makeWASocket(socketConfig);
 
             // Liga o store ao socket
-            this.store.bind(this.sock.ev);
+            // Liga o store ao socket (se disponível)
+            if (this.store) {
+                this.store.bind(this.sock.ev);
 
-            // Auto-salvamento periódico do store (a cada 10 min)
-            setInterval(() => this._saveStore(), 10 * 60 * 1000);
+                // Auto-salvamento periódico do store (a cada 10 min)
+                setInterval(() => this._saveStore(), 10 * 60 * 1000);
+            }
 
             this._updateComponentsSocket(this.sock);
 
