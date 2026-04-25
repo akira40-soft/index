@@ -393,6 +393,10 @@ class GroupManagement {
                 return await this.toggleSetting(m, 'antifake', args[0]);
             case 'antispam':
                 return await this.toggleSetting(m, 'antispam', args[0]);
+            case 'antipalavrao':
+            case 'antipalavras':
+            case 'antibadwords':
+                return await this.toggleSetting(m, 'antipalavrao', args[0]);
             case 'leveling':
             case 'levelup':
                 return await this.toggleSetting(m, 'leveling', args[0]);
@@ -438,13 +442,22 @@ class GroupManagement {
         }
 
         if (!this.groupSettings[groupJid]) this.groupSettings[groupJid] = {};
-
         this.groupSettings[groupJid][setting] = state;
         this.saveGroupSettings();
 
+        // Sincroniza com ModerationSystem se aplicável
+        if (this.moderationSystem) {
+            if (setting === 'antilink') this.moderationSystem.toggleAntiLink(groupJid, state);
+            if (setting === 'antispam') this.moderationSystem.toggleAntiSpam(groupJid, state);
+            if (setting === 'antipalavrao') this.moderationSystem.toggleAntiBadwords(groupJid, state);
+            if (setting === 'antifake') this.moderationSystem.toggleAntiFake(groupJid, state);
+            if (setting === 'antiimage') this.moderationSystem.toggleAntiImage(groupJid, state);
+            if (setting === 'antisticker') this.moderationSystem.toggleAntiSticker(groupJid, state);
+        }
+
         const statusStr = state ? 'ATIVADO' : 'DESATIVADO';
         if (this._checkSocket()) {
-            await this.sock.sendMessage(groupJid, { text: `✅ **${setting.toUpperCase()}** agora está **${statusStr}** para este grupo.` }, { quoted: m });
+            await this.sock.sendMessage(groupJid, { text: `✅ *${setting.toUpperCase()}* agora está *${statusStr}* para este grupo.` }, { quoted: m });
         }
         return true;
     }

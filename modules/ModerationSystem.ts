@@ -21,6 +21,8 @@ class ModerationSystem {
     private blacklistPath: string;
     private mutedUsers: Map<string, any>;
     private antiLinkGroups: Set<string>;
+    private antiSpamGroups: Set<string>;
+    private antiBadwordsGroups: Set<string>;
     private antiLinkPath: string;
     private muteCounts: Map<string, any>;
     private bannedUsers: Map<string, any>;
@@ -42,8 +44,31 @@ class ModerationSystem {
     private antiStickerPath: string;
     private antiLinkExceptions: Map<string, string[]>; // groupId -> [userNumbers]
     private antiLinkExceptionsPath: string;
+    private antiSpamPath: string;
+    private antiBadwordsPath: string;
+    private badwordsList: string[] = [
+        // RACISMO / XENOFOBIA
+        'negão', 'preto de merda', 'negro de merda', 'negona', 'estrangeiro de merda', '',
+        'chimp', 'nigga', 'senzala', '', 'nazismo', 'nazista', 'hitler', 'suástica',
+
+        // SEXISMO / MISOGINIA / MISANDRIA
+        'feminazi', 'machista', 'vou te estrupar', 'puta', 'vagabunda', 'vadia', 'piranha', 'cadela',
+        'chupa meu pinto', 'seu cão', 'vagabunda', 'vagabundo',
+
+        // PALAVRÕES GERAIS (PT/BR/AO)
+        'caralho', 'porra', 'foda-se', 'merda', 'filho da puta', 'fdp', 'cu', 'bunda', 'buceta', 'pica',
+        'rola', 'caralhão', 'puta que pariu', 'cona da tua mãe', 'foder', 'fodase', 'cuzão', 'cona', 'chupa minhas bola',
+        'cdtm', 'chupa minhas rolas', 'cuzona', 'chupaminhas bolas', 'arrombado', 'arrombada', 'cabrão', 'gozei', 'gema meu nome', 'geme meu nome',
+
+        // HUMOR NEGRO / DISCURSO DE ÓDIO
+        'morte aos', 'matar todos', 'vou te esbagaçar', 'vou bombardear', 'vou te matar', 'morra', 'cortar os pulsos',
+        'doente mental', 'Ⓜ️ LIBERAÇÃO DE SALDO Ⓜ️', '', 'aleijado'
+    ];
     private SPAM_THRESHOLD: number;
     private SPAM_WINDOW_MS: number;
+    private FLOOD_THRESHOLD: number = 2; // 2 mensagens
+    private FLOOD_WINDOW_MS: number = 1000; // em 1 segundo
+    private MAX_FLOOD_WARNINGS: number = 3;
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
     private lidMap: Map<string, string>; // {lid} -> {realJid}
@@ -62,7 +87,11 @@ class ModerationSystem {
         // ═══ ESTRUTURAS DE DADOS ═══
         this.mutedUsers = new Map(); // {groupId_userId} -> {expires, mutedAt, minutes}
         this.antiLinkGroups = new Set(); // groupIds com anti-link ativo
+        this.antiSpamGroups = new Set(); // groupIds com anti-spam ativo
+        this.antiBadwordsGroups = new Set(); // groupIds com anti-palavrão ativo
         this.antiLinkPath = path.join(basePath, 'data', 'antilink.json');
+        this.antiSpamPath = path.join(basePath, 'data', 'antispam.json');
+        this.antiBadwordsPath = path.join(basePath, 'data', 'antipalavrao.json');
 
         this.muteCounts = new Map(); // {groupId_userId} -> {count, lastMuteDate}
         this.bannedUsers = new Map(); // {userId} -> {reason, bannedAt, expiresAt}
@@ -731,6 +760,8 @@ class ModerationSystem {
         this._loadSettingsMap(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._loadSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._loadSettingsSet(this.antiStickerPath, this.antiStickerGroups);
+        this._loadSettingsSet(this.antiSpamPath, this.antiSpamGroups);
+        this._loadSettingsSet(this.antiBadwordsPath, this.antiBadwordsGroups);
         this._loadSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._loadSettingsMap(this.warningsPath, this.warnings);
     }
@@ -741,6 +772,8 @@ class ModerationSystem {
         this._saveSettingsMap(this.antiFakeExceptionsPath, this.antiFakeExceptions);
         this._saveSettingsSet(this.antiImagePath, this.antiImageGroups);
         this._saveSettingsSet(this.antiStickerPath, this.antiStickerGroups);
+        this._saveSettingsSet(this.antiSpamPath, this.antiSpamGroups);
+        this._saveSettingsSet(this.antiBadwordsPath, this.antiBadwordsGroups);
         this._saveSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._saveSettingsMap(this.warningsPath, this.warnings);
     }
@@ -852,29 +885,91 @@ class ModerationSystem {
     }
 
     public checkSpam(userId: string): boolean {
-        const now = Date.now();
-        const userData = this.spamCache?.get(userId) || [];
+        return false; // Deprecated em favor de checkFlood
+    }
 
-        const filtered = userData.filter(t => (now - t) < this.SPAM_WINDOW_MS);
+    public toggleAntiSpam(groupId: string, enable: boolean = true): boolean {
+        if (enable) this.antiSpamGroups.add(groupId);
+        else this.antiSpamGroups.delete(groupId);
+        this._saveAllSettings();
+        return enable;
+    }
 
-        if (filtered.length >= this.SPAM_THRESHOLD) {
-            return true;
+    public isAntiSpamActive(groupId: string): boolean {
+        return this.antiSpamGroups.has(groupId);
+    }
+
+    public toggleAntiBadwords(groupId: string, enable: boolean = true): boolean {
+        if (enable) this.antiBadwordsGroups.add(groupId);
+        else this.antiBadwordsGroups.delete(groupId);
+        this._saveAllSettings();
+        return enable;
+    }
+
+    public isAntiBadwordsActive(groupId: string): boolean {
+        return this.antiBadwordsGroups.has(groupId);
+    }
+
+    public checkBadwords(text: string, groupId: string, userId: string): { action: 'none' | 'warning' | 'kick', warnings: number, word: string } {
+        if (!this.isAntiBadwordsActive(groupId)) return { action: 'none', warnings: 0, word: '' };
+
+        const textLower = text.toLowerCase();
+
+        // Verifica se alguma palavra proibida está no texto
+        const foundWord = this.badwordsList.find(word => {
+            // Usa regex para encontrar a palavra exata, evitando falsos positivos (ex: "caralho" em "caralhão" ok, mas "cu" em "curso" não)
+            const regex = new RegExp(`\\b${word}\\b`, 'i');
+            return regex.test(textLower) || textLower.includes(word);
+        });
+
+        if (foundWord) {
+            const warnings = this.addWarning(groupId, userId, `Uso de palavra proibida: ${foundWord}`);
+
+            if (warnings > 3) {
+                return { action: 'kick', warnings, word: foundWord };
+            }
+            return { action: 'warning', warnings, word: foundWord };
         }
 
-        filtered.push(now);
-        this.spamCache?.set(userId, filtered);
-
-        // Limpeza automática
-        if (this.spamCache?.size > 1000) {
-            const oldestKey = this.spamCache?.keys().next().value;
-            if (oldestKey) this.spamCache?.delete(oldestKey);
-        }
-
-        return false;
+        return { action: 'none', warnings: 0, word: '' };
     }
 
     public clearSpamCache(): void {
         this.spamCache?.clear();
+    }
+
+    /**
+     * NOVO: Sistema de Anti-Flood para Grupos
+     * Verifica se o usuário está mandando mensagens rápido demais.
+     * Lógica: 2 msgs em 1s = Warning. 3 Warnings = Kick/Ban.
+     */
+    public checkFlood(groupId: string, userId: string): { action: 'none' | 'warning' | 'kick', warnings: number } {
+        const key = `${groupId}_${userId}`;
+        const now = Date.now();
+        const userData = this.spamCache?.get(key) || [];
+
+        // Filtra mensagens nos últimos 1000ms
+        const recentMessages = userData.filter(t => (now - t) < this.FLOOD_WINDOW_MS);
+        recentMessages.push(now);
+        this.spamCache?.set(key, recentMessages);
+
+        // Se mandou 2 ou mais mensagens em 1 segundo
+        if (recentMessages.length >= this.FLOOD_THRESHOLD) {
+            const warnings = this.addWarning(groupId, userId, 'Flood de mensagens');
+
+            if (warnings > this.MAX_FLOOD_WARNINGS) {
+                return { action: 'kick', warnings };
+            }
+            return { action: 'warning', warnings };
+        }
+
+        // Limpeza periódica do Map para não estourar memória
+        if (this.spamCache.size > 5000) {
+            const firstKey = this.spamCache.keys().next().value;
+            if (firstKey) this.spamCache.delete(firstKey);
+        }
+
+        return { action: 'none', warnings: 0 };
     }
 
     /**

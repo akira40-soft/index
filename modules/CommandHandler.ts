@@ -984,6 +984,9 @@ class CommandHandler {
                 case 'antifake':
                 case 'antiimage':
                 case 'antisticker':
+                case 'antipalavrao':
+                case 'antipalavras':
+                case 'antibadwords':
                     // SEGURANÇA: Apenas o DONO ou ADMINS podem usar comandos de moderação/config
                     if (!isOwner && !isAdminUsers) {
                         await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas admins ou o proprietário do bot podem usar este comando.');

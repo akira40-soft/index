@@ -658,6 +658,15 @@ class BotCore {
                 } catch (e) { isAdmin = false; }
 
                 if (!isAdmin) {
+                    // 0. AntiFlood / AntiSpam
+                    if (this.moderationSystem.isAntiSpamActive(remoteJid)) {
+                        const floodStatus = this.moderationSystem.checkFlood(remoteJid, participant);
+                        if (floodStatus.action !== 'none') {
+                            await this.handleViolation(m, `flood_${floodStatus.action}`, floodStatus);
+                            return;
+                        }
+                    }
+
                     // 1. AntiLink
                     if (textoFinal && this.moderationSystem.isAntiLinkActive(remoteJid)) {
                         if (this.moderationSystem.checkLink(textoFinal, remoteJid, participant, isAdmin)) {
@@ -676,6 +685,15 @@ class BotCore {
                     if (temImagem && this.moderationSystem.isAntiImageActive(remoteJid)) {
                         await this.handleViolation(m, 'imagem');
                         return;
+                    }
+
+                    // 4. AntiBadwords
+                    if (textoFinal && this.moderationSystem.isAntiBadwordsActive(remoteJid)) {
+                        const bwStatus = this.moderationSystem.checkBadwords(textoFinal, remoteJid, participant);
+                        if (bwStatus.action !== 'none') {
+                            await this.handleViolation(m, `badword_${bwStatus.action}`, bwStatus);
+                            return;
+                        }
                     }
                 }
             }
@@ -1272,10 +1290,15 @@ class BotCore {
         this.logger.warn(`🚫 [VIOLAÇÃO] ${tipo} de ${participant} (${nome})`);
 
         try {
-            // 1. Deletar mensagem (isolado para não quebrar o resto se falhar)
+            // 1. Deletar mensagem atual
             await this.sock.sendMessage(jid, { delete: m.key });
+
+            // 2. Se for FLOOD, deletar TODAS as mensagens recentes do usuário (últimos 5 segundos)
+            if (tipo.startsWith('flood_')) {
+                await this._deleteRecentMessages(jid, participant, 5, m.key.id);
+            }
         } catch (delError: any) {
-            this.logger.debug(`Não foi possível deletar a mensagem (bot pode não ser admin): ${delError.message}`);
+            this.logger.debug(`Não foi possível deletar a mensagem: ${delError.message}`);
         }
 
         try {
@@ -1324,6 +1347,30 @@ class BotCore {
                     text: mensagem,
                     mentions: [participant]
                 });
+            } else if (tipo === 'flood_warning') {
+                const warnings = limitStatus?.warnings || 0;
+                await this.sock.sendMessage(jid, {
+                    text: `⚠️ *AVISO DE FLOOD* ⚠️\n\n@${numeroReal}, pare de enviar mensagens tão rápido! O limite é de 1 mensagem por segundo.\n\nVocê tem *${warnings}/3* avisos. No próximo você será removido.`,
+                    mentions: [participant]
+                });
+            } else if (tipo === 'flood_kick') {
+                await this.sock.sendMessage(jid, {
+                    text: `🚫 *REMOVIDO POR FLOOD* 🚫\n\n@${numeroReal} foi removido por ignorar os avisos de flood.`,
+                    mentions: [participant]
+                });
+                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+            } else if (tipo === 'badword_warning') {
+                const warnings = limitStatus?.warnings || 0;
+                await this.sock.sendMessage(jid, {
+                    text: `⚠️ *AVISO DE PALAVRÃO* ⚠️\n\n@${numeroReal}, não é permitido o uso de palavras ofensivas/palavrões neste grupo.\n\nPalavra detectada: *${limitStatus?.word || '***'}*\nVocê tem *${warnings}/3* avisos. No próximo você será removido.`,
+                    mentions: [participant]
+                });
+            } else if (tipo === 'badword_kick') {
+                await this.sock.sendMessage(jid, {
+                    text: `🚫 *REMOVIDO POR PALAVRÃO* 🚫\n\n@${numeroReal} foi removido por uso excessivo de palavras ofensivas.`,
+                    mentions: [participant]
+                });
+                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
             } else {
                 await this.sock.sendMessage(jid, {
                     text: `🚫 *ANTI-${tipo.toUpperCase()}* 🚫\n\nEste tipo de mídia não é permitido no momento.`,
@@ -1332,6 +1379,38 @@ class BotCore {
             }
         } catch (e: any) {
             this.logger.error(`Erro ao tratar violação: ${e.message}`);
+        }
+    }
+
+    /**
+     * Deleta mensagens recentes de um participante em um chat específico
+     */
+    private async _deleteRecentMessages(jid: string, participant: string, seconds: number = 5, excludeId?: string): Promise<void> {
+        try {
+            if (!this.store || !this.sock) return;
+
+            const now = Math.floor(Date.now() / 1000);
+
+            const messages = this.store.messages[jid];
+            if (!messages) return;
+
+            const msgArray = Array.isArray(messages) ? messages : (messages as any).array || [];
+
+            const toDelete = msgArray.filter((msg: any) => {
+                const msgParticipant = msg.key.participant || msg.key.remoteJid;
+                const msgTime = Number(msg.messageTimestamp);
+                return msgParticipant === participant && (now - msgTime) <= seconds;
+            });
+
+            for (const msg of toDelete) {
+                try {
+                    if (excludeId && msg.key.id === excludeId) continue;
+                    await this.sock.sendMessage(jid, { delete: msg.key });
+                    await delay(100);
+                } catch (e) { }
+            }
+        } catch (e: any) {
+            this.logger.error(`❌ Erro ao deletar msgs recentes: ${e.message}`);
         }
     }
 
