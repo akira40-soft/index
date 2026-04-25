@@ -45,21 +45,20 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-import * as Baileys from '@whiskeysockets/baileys';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 const {
+    default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     delay,
     Browsers,
-    getContentType
-} = Baileys as any;
+    getContentType,
+    makeInMemoryStore
+} = require('@whiskeysockets/baileys');
 
-// @ts-ignore
-const makeWASocket = Baileys.default || (Baileys as any).makeWASocket;
-// @ts-ignore
-const makeInMemoryStore = (Baileys as any).makeInMemoryStore;
 
 import fs from 'fs';
 import path from 'path';
