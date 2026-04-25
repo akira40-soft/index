@@ -559,6 +559,38 @@ class BotCore {
             const replyInfo = await this.messageProcessor.extractReplyInfo(m);
             const temSticker = !!m.message?.stickerMessage;
             const textoFinal = texto || caption;
+
+            // ✅ MODERATION CHECKS (Prioridade Máxima em Grupos)
+            // Deve rodar antes de comandos e antes de qualquer decisão da IA para garantir segurança total
+            if (ehGrupo && this.moderationSystem) {
+                let isAdmin = false;
+                try {
+                    if (this.groupManagement) isAdmin = await this.groupManagement.isUserAdmin(remoteJid, participant);
+                } catch (e) { isAdmin = false; }
+
+                if (!isAdmin) {
+                    // 1. AntiLink
+                    if (textoFinal && this.moderationSystem.isAntiLinkActive(remoteJid)) {
+                        if (this.moderationSystem.checkLink(textoFinal, remoteJid, participant, isAdmin)) {
+                            await this.handleViolation(m, 'link');
+                            return;
+                        }
+                    }
+
+                    // 2. AntiSticker
+                    if (temSticker && this.moderationSystem.isAntiStickerActive(remoteJid)) {
+                        await this.handleViolation(m, 'sticker');
+                        return;
+                    }
+
+                    // 3. AntiImage
+                    if (temImagem && this.moderationSystem.isAntiImageActive(remoteJid)) {
+                        await this.handleViolation(m, 'imagem');
+                        return;
+                    }
+                }
+            }
+
             const isCommand = this.messageProcessor.isCommand(textoFinal);
 
             // ═══ FILTRO DE ÁUDIO EM GRUPO ═══
@@ -646,28 +678,8 @@ class BotCore {
                 }
             }
 
-            if (ehGrupo && (texto || caption) && this.moderationSystem) {
-                let isAdmin = false;
-                try {
-                    if (this.groupManagement) isAdmin = await this.groupManagement.isUserAdmin(remoteJid, participant);
-                } catch (e) { isAdmin = false; }
-
-                if (!isAdmin && this.moderationSystem.checkLink(texto || caption, remoteJid, participant, isAdmin)) {
-                    await this.handleViolation(m, 'link');
-                    return;
-                }
-            }
-
-            if (temSticker && ehGrupo && this.moderationSystem?.isAntiStickerActive(remoteJid)) {
-                await this.handleViolation(m, 'sticker');
-                return;
-            }
 
             if (temImagem) {
-                if (ehGrupo && this.moderationSystem?.isAntiImageActive(remoteJid)) {
-                    await this.handleViolation(m, 'imagem');
-                    return;
-                }
                 await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
             } else if (temAudio) {
                 // ═══ LÓGICA DE ÁUDIO ═══
@@ -1462,7 +1474,7 @@ class BotCore {
             if (cleanJid.includes('@lid')) {
                 this.logger.debug(`🔍 [RESOLVING] Tentando Metadados (PFP) para LID: ${cleanJid}...`);
                 await this.sock.profilePictureUrl(jid).catch(() => null);
-                
+
                 // Após a chamada acima, o Baileys emite um evento 'lid-mapping.update' 
                 // se o servidor retornar o mapeamento. Verificamos o mapa local novamente.
                 if (this.moderationSystem) {
