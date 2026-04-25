@@ -45,20 +45,21 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+import * as Baileys from '@whiskeysockets/baileys';
 const {
-    default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     delay,
     Browsers,
-    getContentType,
-    makeInMemoryStore
-} = require('@whiskeysockets/baileys');
+    getContentType
+} = Baileys as any;
 
+// @ts-ignore
+const makeWASocket = (Baileys as any).default ?? (Baileys as any).makeWASocket;
+
+import { MessageStore } from './MessageStore.js';
 
 import fs from 'fs';
 import path from 'path';
@@ -155,16 +156,10 @@ class BotCore {
             }
         });
 
-        // Inicializa store de mensagens (ajuda com 'Bad MAC' e 'Waiting for message')
+        // Inicializa store de mensagens próprio (makeInMemoryStore foi removido do Baileys 6.7+)
         this.storePath = path.join(this.config.DATABASE_FOLDER, 'baileys_store.json');
-
-        if (typeof makeInMemoryStore === 'function') {
-            this.store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
-            this._loadStore();
-        } else {
-            this.logger.warn('⚠️ [BotCore] makeInMemoryStore não disponível no pacote Baileys. Store desativado.');
-            this.store = null;
-        }
+        this.store = new MessageStore();
+        this._loadStore();
         this.sock = null;
     }
 
