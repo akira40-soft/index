@@ -396,7 +396,7 @@ class GroupManagement {
             case 'antipalavrao':
             case 'antipalavras':
             case 'antibadwords':
-                return await this.toggleSetting(m, 'antipalavrao', args[0]);
+                return await this.handleAntiBadwordsCommand(m, args);
             case 'leveling':
             case 'levelup':
                 return await this.toggleSetting(m, 'leveling', args[0]);
@@ -458,6 +458,94 @@ class GroupManagement {
         const statusStr = state ? 'ATIVADO' : 'DESATIVADO';
         if (this._checkSocket()) {
             await this.sock.sendMessage(groupJid, { text: `✅ *${setting.toUpperCase()}* agora está *${statusStr}* para este grupo.` }, { quoted: m });
+        }
+        return true;
+    }
+
+    /**
+     * Gerencia o Anti-Palavrão (Ativar/Desativar, Listar, Adicionar, Remover)
+     */
+    async handleAntiBadwordsCommand(m: any, args: string[]) {
+        const groupJid = m.key.remoteJid;
+        const subCmd = args[0]?.toLowerCase();
+
+        if (!subCmd) {
+            if (this._checkSocket()) {
+                await this.sock.sendMessage(groupJid, {
+                    text: `🤬 *Gerenciamento de Anti-Palavrões*\n\n` +
+                        `Use: *#antipalavrao [comando]*\n\n` +
+                        `Comandos disponíveis:\n` +
+                        `• *on* - Ativa o filtro no grupo\n` +
+                        `• *off* - Desativa o filtro no grupo\n` +
+                        `• *list* - Lista todas as palavras proibidas\n` +
+                        `• *add [palavra]* - Adiciona uma palavra à lista\n` +
+                        `• *remove [palavra]* - Remove uma palavra da lista\n` +
+                        `• *status* - Vê se está ativo no grupo`
+                }, { quoted: m });
+            }
+            return true;
+        }
+
+        if (subCmd === 'on' || subCmd === 'off') {
+            return await this.toggleSetting(m, 'antipalavrao', subCmd);
+        }
+
+        if (subCmd === 'status') {
+            const isActive = this.moderationSystem?.isAntiBadwordsActive(groupJid);
+            if (this._checkSocket()) {
+                await this.sock.sendMessage(groupJid, {
+                    text: `ℹ️ O Anti-Palavrão está *${isActive ? 'ATIVADO ✅' : 'DESATIVADO ❌'}* neste grupo.`
+                }, { quoted: m });
+            }
+            return true;
+        }
+
+        if (subCmd === 'list') {
+            const words = this.moderationSystem?.getBadwords() || [];
+            if (this._checkSocket()) {
+                const wText = words.length > 0 ? words.join(', ') : 'A lista está vazia.';
+                await this.sock.sendMessage(groupJid, {
+                    text: `📜 *Lista de Palavras Proibidas (${words.length})*\n\n${wText}`
+                }, { quoted: m });
+            }
+            return true;
+        }
+
+        const wordParam = args.slice(1).join(' ').trim();
+
+        if (!wordParam && (subCmd === 'add' || subCmd === 'remove' || subCmd === 'rem' || subCmd === 'del')) {
+            if (this._checkSocket()) {
+                await this.sock.sendMessage(groupJid, { text: `❌ Você precisa especificar a palavra. Ex: *#antipalavrao ${subCmd} palavrão*` }, { quoted: m });
+            }
+            return true;
+        }
+
+        if (subCmd === 'add') {
+            const added = this.moderationSystem?.addBadword(wordParam);
+            if (this._checkSocket()) {
+                if (added) {
+                    await this.sock.sendMessage(groupJid, { text: `✅ Palavra *"${wordParam}"* adicionada à lista de censura global.` }, { quoted: m });
+                } else {
+                    await this.sock.sendMessage(groupJid, { text: `⚠️ A palavra *"${wordParam}"* já está na lista ou é inválida.` }, { quoted: m });
+                }
+            }
+            return true;
+        }
+
+        if (subCmd === 'remove' || subCmd === 'rem' || subCmd === 'del') {
+            const removed = this.moderationSystem?.removeBadword(wordParam);
+            if (this._checkSocket()) {
+                if (removed) {
+                    await this.sock.sendMessage(groupJid, { text: `🗑️ Palavra *"${wordParam}"* removida da lista de censura global.` }, { quoted: m });
+                } else {
+                    await this.sock.sendMessage(groupJid, { text: `⚠️ A palavra *"${wordParam}"* não foi encontrada na lista.` }, { quoted: m });
+                }
+            }
+            return true;
+        }
+
+        if (this._checkSocket()) {
+            await this.sock.sendMessage(groupJid, { text: `❌ Comando desconhecido. Use *#antipalavrao* para ver a ajuda.` }, { quoted: m });
         }
         return true;
     }

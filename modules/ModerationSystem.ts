@@ -46,24 +46,9 @@ class ModerationSystem {
     private antiLinkExceptionsPath: string;
     private antiSpamPath: string;
     private antiBadwordsPath: string;
-    private badwordsList: string[] = [
-        // RACISMO / XENOFOBIA
-        'negão', 'preto de merda', 'negro de merda', 'negona', 'estrangeiro de merda', '',
-        'chimp', 'nigga', 'senzala', '', 'nazismo', 'nazista', 'hitler', 'suástica',
+    private badwordsListPath: string;
+    private badwordsList: string[] = [];
 
-        // SEXISMO / MISOGINIA / MISANDRIA
-        'feminazi', 'machista', 'vou te estrupar', 'puta', 'vagabunda', 'vadia', 'piranha', 'cadela',
-        'chupa meu pinto', 'seu cão', 'vagabunda', 'vagabundo',
-
-        // PALAVRÕES GERAIS (PT/BR/AO)
-        'caralho', 'porra', 'foda-se', 'merda', 'filho da puta', 'fdp', 'cu', 'bunda', 'buceta', 'pica',
-        'rola', 'caralhão', 'puta que pariu', 'cona da tua mãe', 'foder', 'fodase', 'cuzão', 'cona', 'chupa minhas bola',
-        'cdtm', 'chupa minhas rolas', 'cuzona', 'chupaminhas bolas', 'arrombado', 'arrombada', 'cabrão', 'gozei', 'gema meu nome', 'geme meu nome',
-
-        // HUMOR NEGRO / DISCURSO DE ÓDIO
-        'morte aos', 'matar todos', 'vou te esbagaçar', 'vou bombardear', 'vou te matar', 'morra', 'cortar os pulsos',
-        'doente mental', 'Ⓜ️ LIBERAÇÃO DE SALDO Ⓜ️', '', 'aleijado'
-    ];
     private SPAM_THRESHOLD: number;
     private SPAM_WINDOW_MS: number;
     private FLOOD_THRESHOLD: number = 2; // 2 mensagens
@@ -92,6 +77,7 @@ class ModerationSystem {
         this.antiLinkPath = path.join(basePath, 'data', 'antilink.json');
         this.antiSpamPath = path.join(basePath, 'data', 'antispam.json');
         this.antiBadwordsPath = path.join(basePath, 'data', 'antipalavrao.json');
+        this.badwordsListPath = path.join(basePath, 'data', 'badwords_list.json');
 
         this.muteCounts = new Map(); // {groupId_userId} -> {count, lastMuteDate}
         this.bannedUsers = new Map(); // {userId} -> {reason, bannedAt, expiresAt}
@@ -764,6 +750,7 @@ class ModerationSystem {
         this._loadSettingsSet(this.antiBadwordsPath, this.antiBadwordsGroups);
         this._loadSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._loadSettingsMap(this.warningsPath, this.warnings);
+        this._loadBadwordsList();
     }
 
     private _saveAllSettings(): void {
@@ -906,32 +893,101 @@ class ModerationSystem {
         return enable;
     }
 
+    public addBadword(word: string): boolean {
+        const w = word.trim().toLowerCase();
+        if (!w || this.badwordsList.includes(w)) return false;
+        this.badwordsList.push(w);
+        this._saveBadwordsList();
+        return true;
+    }
+
+    public removeBadword(word: string): boolean {
+        const w = word.trim().toLowerCase();
+        const initialLen = this.badwordsList.length;
+        this.badwordsList = this.badwordsList.filter(x => x !== w);
+        if (this.badwordsList.length !== initialLen) {
+            this._saveBadwordsList();
+            return true;
+        }
+        return false;
+    }
+
+    public getBadwords(): string[] {
+        return this.badwordsList;
+    }
+
+    private _loadBadwordsList(): void {
+        try {
+            if (fs.existsSync(this.badwordsListPath)) {
+                const data = fs.readFileSync(this.badwordsListPath, 'utf8');
+                this.badwordsList = JSON.parse(data);
+            } else {
+                // Lista padrão inicial
+                this.badwordsList = [
+                    'negão', 'preto de merda', 'negro de merda', 'negona', 'estrangeiro de merda',
+                    'chimp', 'nigga', 'senzala', 'nazismo', 'nazista', 'hitler', 'suástica',
+                    'feminazi', 'machista', 'vou te estrupar', 'puta', 'vagabunda', 'vadia', 'piranha', 'cadela',
+                    'chupa meu pinto', 'seu cão', 'vagabundo',
+                    'caralho', 'porra', 'foda-se', 'merda', 'filho da puta', 'fdp', 'cu', 'bunda', 'buceta', 'pica',
+                    'rola', 'caralhão', 'puta que pariu', 'cona da tua mãe', 'foder', 'fodase', 'cuzão', 'cona', 'chupa minhas bola',
+                    'cdtm', 'chupa minhas rolas', 'cuzona', 'chupaminhas bolas', 'arrombado', 'arrombada', 'cabrão', 'gozei',
+                    'morte aos', 'matar todos', 'vou te esbagaçar', 'vou bombardear', 'vou te matar', 'morra', 'cortar os pulsos',
+                    'doente mental', 'aleijado'
+                ];
+                this._saveBadwordsList();
+            }
+        } catch (e: any) {
+            this.logger.warn(`⚠️ Erro ao carregar badwords: ${e.message}`);
+        }
+    }
+
+    private _saveBadwordsList(): void {
+        try {
+            const dir = path.dirname(this.badwordsListPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(this.badwordsListPath, JSON.stringify(this.badwordsList, null, 2));
+        } catch (e: any) {
+            this.logger.error(`❌ Erro ao salvar badwords: ${e.message}`);
+        }
+    }
+
+
     public isAntiBadwordsActive(groupId: string): boolean {
         return this.antiBadwordsGroups.has(groupId);
     }
 
-    public checkBadwords(text: string, groupId: string, userId: string): { action: 'none' | 'warning' | 'kick', warnings: number, word: string } {
-        if (!this.isAntiBadwordsActive(groupId)) return { action: 'none', warnings: 0, word: '' };
+    public checkBadwords(text: string, groupId: string, userId: string): {
+        action: 'none' | 'mute' | 'kick';
+        word: string;
+        muteMinutes: number;
+        muteCount: number;
+    } {
+        if (!this.isAntiBadwordsActive(groupId)) return { action: 'none', word: '', muteMinutes: 0, muteCount: 0 };
 
+        // Ignora palavras vazias na lista (entradas em branco)
         const textLower = text.toLowerCase();
-
-        // Verifica se alguma palavra proibida está no texto
         const foundWord = this.badwordsList.find(word => {
-            // Usa regex para encontrar a palavra exata, evitando falsos positivos (ex: "caralho" em "caralhão" ok, mas "cu" em "curso" não)
-            const regex = new RegExp(`\\b${word}\\b`, 'i');
-            return regex.test(textLower) || textLower.includes(word);
+            if (!word || word.trim().length === 0) return false;
+            try {
+                const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+                return regex.test(textLower) || textLower.includes(word.toLowerCase());
+            } catch (_) {
+                return textLower.includes(word.toLowerCase());
+            }
         });
 
-        if (foundWord) {
-            const warnings = this.addWarning(groupId, userId, `Uso de palavra proibida: ${foundWord}`);
+        if (!foundWord) return { action: 'none', word: '', muteMinutes: 0, muteCount: 0 };
 
-            if (warnings > 3) {
-                return { action: 'kick', warnings, word: foundWord };
-            }
-            return { action: 'warning', warnings, word: foundWord };
+        // Aplica mute progressivo (usa o mesmo sistema do #mute manual)
+        const muteInfo = this.muteUser(groupId, userId, 5); // Base: 5 min, dobra a cada infração no dia
+        const maxMutes = (this.config?.AUTO_BAN_AFTER_MINUTES ?? 3);
+
+        if (muteInfo.muteCount > maxMutes) {
+            return { action: 'kick', word: foundWord, muteMinutes: muteInfo.muteMinutes, muteCount: muteInfo.muteCount };
         }
 
-        return { action: 'none', warnings: 0, word: '' };
+        return { action: 'mute', word: foundWord, muteMinutes: muteInfo.muteMinutes, muteCount: muteInfo.muteCount };
     }
 
     public clearSpamCache(): void {

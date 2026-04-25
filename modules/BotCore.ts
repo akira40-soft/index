@@ -708,6 +708,12 @@ class BotCore {
                 } catch (e) { isAdmin = false; }
 
                 if (!isAdmin) {
+                    // -1. Verifica se usuário está mutado (Silenciado = Apaga TUDO)
+                    if (this.moderationSystem.isMuted(remoteJid, participant)) {
+                        await this.sock.sendMessage(remoteJid, { delete: m.key });
+                        return;
+                    }
+
                     // 0. AntiFlood / AntiSpam
                     if (this.moderationSystem.isAntiSpamActive(remoteJid)) {
                         const floodStatus = this.moderationSystem.checkFlood(remoteJid, participant);
@@ -742,6 +748,8 @@ class BotCore {
                         const bwStatus = this.moderationSystem.checkBadwords(textoFinal, remoteJid, participant);
                         if (bwStatus.action !== 'none') {
                             await this.handleViolation(m, `badword_${bwStatus.action}`, bwStatus);
+                            // Apaga as mensagens recentes independente da ação
+                            await this._deleteRecentMessages(remoteJid, participant, 5, m.key.id);
                             return;
                         }
                     }
@@ -1409,15 +1417,16 @@ class BotCore {
                     mentions: [participant]
                 });
                 await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
-            } else if (tipo === 'badword_warning') {
-                const warnings = limitStatus?.warnings || 0;
+            } else if (tipo === 'badword_mute') {
+                const muteMin = limitStatus?.muteMinutes || 5;
+                const muteCount = limitStatus?.muteCount || 1;
                 await this.sock.sendMessage(jid, {
-                    text: `⚠️ *AVISO DE PALAVRÃO* ⚠️\n\n@${numeroReal}, não é permitido o uso de palavras ofensivas/palavrões neste grupo.\n\nPalavra detectada: *${limitStatus?.word || '***'}*\nVocê tem *${warnings}/3* avisos. No próximo você será removido.`,
+                    text: `🔇 *SILENCIADO POR PALAVRÃO* 🔇\n\n@${numeroReal}, uso de linguagem ofensiva não é tolerado!\n\nPalavra: *${limitStatus?.word || '???'}*\n⏱️ *Silenciado por:* ${muteMin} minuto(s)\n📊 Esta é sua infração #${muteCount} hoje.\n\n_A cada infração o tempo de silenciamento dobra._`,
                     mentions: [participant]
                 });
             } else if (tipo === 'badword_kick') {
                 await this.sock.sendMessage(jid, {
-                    text: `🚫 *REMOVIDO POR PALAVRÃO* 🚫\n\n@${numeroReal} foi removido por uso excessivo de palavras ofensivas.`,
+                    text: `🚫 *BANIDO POR PALAVRÃO REINCIDENTE* 🚫\n\n@${numeroReal} foi removido do grupo por ignorar os avisos de linguagem ofensiva.`,
                     mentions: [participant]
                 });
                 await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
