@@ -1442,13 +1442,13 @@ class BotCore {
         // MÉTODO 2: Busca Ativa no Servidor (onWhatsApp)
         try {
             if (cleanJid.includes('@lid')) {
-                this.logger.debug(`🔍 [RESOLVING] Tentando descobrir JID para LID: ${cleanJid}...`);
+                this.logger.debug(`🔍 [RESOLVING] Tentando onWhatsApp para LID: ${cleanJid}...`);
                 const [result] = await this.sock.onWhatsApp(cleanJid);
                 if (result && result.exists && result.jid.includes('@s.whatsapp.net')) {
                     if (this.moderationSystem) {
                         this.moderationSystem.updateLidMapping(cleanJid, result.jid);
                     }
-                    this.logger.debug(`✅ [ID RESOLVED] onWhatsApp: ${cleanJid} -> ${result.jid}`);
+                    this.logger.info(`✅ [ID RESOLVED] onWhatsApp: ${cleanJid} -> ${result.jid}`);
                     return result.jid;
                 }
             }
@@ -1456,7 +1456,28 @@ class BotCore {
             this.logger.debug(`⚠️ Falha ao resolver JID via onWhatsApp: ${e.message}`);
         }
 
-        // MÉTODO 3: Fallback para o JID/LID atual
+        // MÉTODO 3: Truque de Metadados (profilePictureUrl)
+        // Pedir a foto de perfil de um LID muitas vezes força o servidor a retornar o JID real nos headers
+        try {
+            if (cleanJid.includes('@lid')) {
+                this.logger.debug(`🔍 [RESOLVING] Tentando Metadados (PFP) para LID: ${cleanJid}...`);
+                await this.sock.profilePictureUrl(jid).catch(() => null);
+                
+                // Após a chamada acima, o Baileys emite um evento 'lid-mapping.update' 
+                // se o servidor retornar o mapeamento. Verificamos o mapa local novamente.
+                if (this.moderationSystem) {
+                    const resolved = this.moderationSystem.resolveRealJid(cleanJid);
+                    if (resolved && resolved.includes('@s.whatsapp.net')) {
+                        this.logger.info(`✅ [ID RESOLVED] Metadados PFP: ${cleanJid} -> ${resolved}`);
+                        return resolved;
+                    }
+                }
+            }
+        } catch (e: any) {
+            this.logger.debug(`⚠️ Falha ao resolver JID via PFP metadata: ${e.message}`);
+        }
+
+        // MÉTODO 4: Fallback para o JID/LID atual
         return jid;
     }
 }
