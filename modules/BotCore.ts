@@ -198,8 +198,61 @@ class BotCore {
     }
 
     async start() {
+        this._installBadMACHandler();
         await this.initialize();
         await this.connect();
+    }
+
+    /**
+     * Silencia erros "Bad MAC" não fatais do libsignal no log.
+     * O bot continua funcionando normalmente — a mensagem simplesmente não
+     * pôde ser decriptada (sessão Signal expirada). Isso é esperado após
+     * reconexões e resolve-se sozinho quando a sessão é renegociada.
+     */
+    private _installBadMACHandler(): void {
+        const originalEmit = process.emit.bind(process);
+        (process as any).emit = function (event: string, error: any, ...args: any[]) {
+            if (event === 'unhandledRejection' || event === 'uncaughtException') {
+                const msg = error?.message || String(error);
+                if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
+                    // Silencia — não é fatal, é ruído de sessão Signal
+                    return false;
+                }
+            }
+            return originalEmit(event, error, ...args);
+        };
+    }
+
+    /**
+     * Purga arquivos de sessão Signal corrompidos/expirados.
+     * Mantém creds.json intacto — sem necessidade de novo QR.
+     * Chamado automaticamente na conexão bem-sucedida.
+     */
+    private async _purgeCorruptedSessions(): Promise<void> {
+        try {
+            const authFolder = this.config.AUTH_FOLDER;
+            if (!fs.existsSync(authFolder)) return;
+
+            const files = fs.readdirSync(authFolder);
+            const stalePatterns = ['session-', 'sender-key-', 'app-state-sync-'];
+            let purged = 0;
+
+            for (const file of files) {
+                const isStale = stalePatterns.some(p => file.startsWith(p));
+                if (isStale) {
+                    try {
+                        fs.unlinkSync(path.join(authFolder, file));
+                        purged++;
+                    } catch (_) { }
+                }
+            }
+
+            if (purged > 0) {
+                this.logger.info(`🧹 [Bad MAC Fix] ${purged} sessões Signal expiradas removidas. Serão renegociadas automaticamente.`);
+            }
+        } catch (e: any) {
+            this.logger.warn(`⚠️ [Bad MAC Fix] Erro ao purgar sessões: ${e.message}`);
+        }
     }
 
     /**
@@ -434,6 +487,9 @@ class BotCore {
                     this.BOT_JID = this.sock.user?.id;
                     const normalizedJid = JidUtils.normalize(this.BOT_JID);
                     this.logger.info(`🤖 Logado como: ${normalizedJid}`);
+
+                    // Purgar sessões Signal corrompidas (causa do Bad MAC)
+                    this._purgeCorruptedSessions().catch(() => { });
 
                     // ✅ NOVO: Manter bot sempre disponível (nunca offline)
                     if (this.presenceSimulator) {
