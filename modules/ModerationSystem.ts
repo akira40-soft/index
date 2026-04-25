@@ -47,6 +47,7 @@ class ModerationSystem {
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
     private lidMap: Map<string, string>; // {lid} -> {realJid}
+    private lidMapPath: string;
     public sock: any;
 
     constructor(logger: any = null) {
@@ -100,6 +101,59 @@ class ModerationSystem {
 
         // ═══ LOG DETALHADO ═══
         this.enableDetailedLogging = true;
+
+        // ═══ PERSISTÊNCIA DE LID MAP ═══
+        this.lidMapPath = path.join(basePath, 'data', 'lid_mapping.json');
+        this.loadLidMap();
+    }
+
+    private loadLidMap() {
+        try {
+            if (fs.existsSync(this.lidMapPath)) {
+                const data = JSON.parse(fs.readFileSync(this.lidMapPath, 'utf8'));
+                this.lidMap = new Map(Object.entries(data));
+            }
+        } catch (e: any) {
+            this.logger.error('❌ Erro ao carregar lid_mapping:', e.message);
+        }
+    }
+
+    private saveLidMap() {
+        try {
+            const dir = path.dirname(this.lidMapPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            const data = Object.fromEntries(this.lidMap);
+            fs.writeFileSync(this.lidMapPath, JSON.stringify(data, null, 2));
+        } catch (e: any) {
+            this.logger.error('❌ Erro ao salvar lid_mapping:', e.message);
+        }
+    }
+
+    public updateLidMapping(lid: string, realJid: string) {
+        if (!lid || !realJid) return;
+        const cleanLid = lid.split(':')[0];
+        const cleanReal = realJid.split(':')[0];
+
+        if (this.lidMap.get(cleanLid) !== cleanReal) {
+            this.lidMap.set(cleanLid, cleanReal);
+            this.saveLidMap();
+            this.logger.debug(`📝 [LID MAP] ${cleanLid} -> ${cleanReal}`);
+        }
+    }
+
+    public resolveRealJid(jid: string): string {
+        if (!jid) return '';
+        const cleanJid = jid.split(':')[0];
+
+        // Se já for um JID de telefone, retorna ele mesmo
+        if (cleanJid.includes('@s.whatsapp.net')) return cleanJid;
+
+        // Se for um LID, tenta buscar no mapa
+        if (cleanJid.includes('@lid')) {
+            return this.lidMap.get(cleanJid) || cleanJid;
+        }
+
+        return cleanJid;
     }
 
     public setSocket(sock: any): void {
@@ -564,37 +618,6 @@ class ModerationSystem {
 
     public isAntiFakeActive(groupId: string): boolean {
         return this.antiFakeGroups.has(groupId);
-    }
-
-    /**
-     * Registra um mapeamento entre LID e JID real (Número de Telefone)
-     */
-    public updateLidMapping(lid: string, realJid: string): void {
-        if (!lid || !realJid) return;
-        const cleanLid = lid.split(':')[0];
-        const cleanReal = realJid.split(':')[0];
-        if (cleanLid.includes('@lid') && cleanReal.includes('@s.whatsapp.net')) {
-            this.lidMap.set(cleanLid, cleanReal);
-            this.logger.debug(`[ModerationSystem] Mapeamento atualizado: ${cleanLid} -> ${cleanReal}`);
-        }
-    }
-
-    /**
-     * Tenta resolver um JID (que pode ser um LID) para o seu número real (JID)
-     */
-    public resolveRealJid(jid: string): string {
-        if (!jid) return '';
-        const cleanJid = jid.split(':')[0];
-
-        // Se já for um JID de telefone, retorna ele mesmo
-        if (cleanJid.includes('@s.whatsapp.net')) return cleanJid;
-
-        // Se for um LID, tenta buscar no mapa
-        if (cleanJid.includes('@lid')) {
-            return this.lidMap.get(cleanJid) || cleanJid;
-        }
-
-        return cleanJid;
     }
 
     /**

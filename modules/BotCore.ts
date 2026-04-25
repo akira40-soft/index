@@ -385,6 +385,15 @@ class BotCore {
 
             this.sock.ev.on('creds.update', saveCreds);
 
+            // ✅ MAPEAMENTO DE LIDs (Linked IDs) - Novo padrão WhatsApp
+            this.sock.ev.on('lid-mapping.update', (mappings: any[]) => {
+                if (this.moderationSystem && Array.isArray(mappings)) {
+                    for (const { jid, pn } of mappings) {
+                        this.moderationSystem.updateLidMapping(jid, pn);
+                    }
+                }
+            });
+
             this.sock.ev.on('messages.upsert', async ({ messages, type }: any) => {
                 if (type !== 'notify') return;
                 for (const m of messages) await this.processMessage(m);
@@ -397,8 +406,11 @@ class BotCore {
                     // 1. Anti-Fake
                     if (this.moderationSystem?.isAntiFakeActive(id)) {
                         for (const participant of participants) {
-                            if (this.moderationSystem.isFakeNumber(participant, id)) {
-                                this.logger.warn(`🚫 [ANTI-FAKE] ${participant} - DDD não permitido no grupo ${id}`);
+                            // Tenta resolver a identidade real antes de verificar se é fake
+                            const resolvedJid = await this.resolveIdentity(participant);
+
+                            if (this.moderationSystem.isFakeNumber(resolvedJid, id)) {
+                                this.logger.warn(`🚫 [ANTI-FAKE] ${resolvedJid} (Original: ${participant}) - DDD não permitido no grupo ${id}`);
                                 await this.sock.sendMessage(id, { text: '⚠️ Número fake removido.' });
                                 await this.sock.groupParticipantsUpdate(id, [participant], 'remove');
                                 // Remove from the list so welcome isn't sent
@@ -501,7 +513,14 @@ class BotCore {
             if (!this.messageProcessor) throw new Error('messageProcessor não inicializado');
 
             // Extrair informações ANTES de qualquer processamento
-            const numero = await this.messageProcessor.extractUserNumber(m, this.sock);
+            let numero = await this.messageProcessor.extractUserNumber(m, this.sock);
+
+            // ✅ RESOLVER LID PARA PN (UNIFICAÇÃO DE IDENTIDADE)
+            if (numero && numero.includes('@lid')) {
+                const resolved = await this.resolveIdentity(numero);
+                if (resolved) numero = resolved;
+            }
+
             const conversationType = this.messageProcessor.getConversationType(m);
 
             // ✅ VALIDAÇÃO DUPLA: Também verificar se o numero é do bot
@@ -1399,6 +1418,46 @@ class BotCore {
         } catch (e: any) {
             // Ignorado silenciosamente para não interromper outros fluxos
         }
+    }
+    /**
+     * Tenta descobrir o número real (JID) por trás de uma identidade (pode ser um LID)
+     * Implementa 3 métodos de resolução em cascata
+     */
+    private async resolveIdentity(jid: string): Promise<string> {
+        if (!jid) return '';
+        const cleanJid = jid.split(':')[0];
+
+        // Se já for um número real, retorna direto
+        if (cleanJid.includes('@s.whatsapp.net')) return cleanJid;
+
+        // MÉTODO 1: Consulta o Mapa Local (Memória/Disco)
+        if (this.moderationSystem) {
+            const resolved = this.moderationSystem.resolveRealJid(cleanJid);
+            if (resolved && resolved.includes('@s.whatsapp.net')) {
+                this.logger.debug(`✅ [ID RESOLVED] Mapa Local: ${cleanJid} -> ${resolved}`);
+                return resolved;
+            }
+        }
+
+        // MÉTODO 2: Busca Ativa no Servidor (onWhatsApp)
+        try {
+            if (cleanJid.includes('@lid')) {
+                this.logger.debug(`🔍 [RESOLVING] Tentando descobrir JID para LID: ${cleanJid}...`);
+                const [result] = await this.sock.onWhatsApp(cleanJid);
+                if (result && result.exists && result.jid.includes('@s.whatsapp.net')) {
+                    if (this.moderationSystem) {
+                        this.moderationSystem.updateLidMapping(cleanJid, result.jid);
+                    }
+                    this.logger.debug(`✅ [ID RESOLVED] onWhatsApp: ${cleanJid} -> ${result.jid}`);
+                    return result.jid;
+                }
+            }
+        } catch (e: any) {
+            this.logger.debug(`⚠️ Falha ao resolver JID via onWhatsApp: ${e.message}`);
+        }
+
+        // MÉTODO 3: Fallback para o JID/LID atual
+        return jid;
     }
 }
 
