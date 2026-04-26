@@ -1099,33 +1099,48 @@ class CommandHandler {
 
         // ── Menu principal (sem argumento) ──
         if (!sub) {
-            const menuText =
-                `✨ *AKIRA OMNI-BOT V21* ✨
-💎 *PREMIUM EDITION*
+            const sections = [
+                {
+                    title: "👤 PESSOAL & ECONOMIA",
+                    rows: [
+                        { title: "Perfil & Conta", rowId: `${P}menu conta`, description: "Nível, XP, Rank e Banco" },
+                        { title: "Premium", rowId: `${P}menu premium`, description: "Status VIP e Planos" }
+                    ]
+                },
+                {
+                    title: "🎨 MÍDIA & CRIAÇÃO",
+                    rows: [
+                        { title: "Mídia & Downloads", rowId: `${P}menu media`, description: "Stickers, Músicas, Vídeos e Pinterest" },
+                        { title: "Efeitos de Áudio", rowId: `${P}menu audio`, description: "Efeitos de voz e TTS" },
+                        { title: "Efeitos de Imagem", rowId: `${P}menu imagem`, description: "HD, RemoveBG e Filtros" }
+                    ]
+                },
+                {
+                    title: "🛡️ ADMINISTRAÇÃO & SEGURANÇA",
+                    rows: [
+                        { title: "Gestão de Grupos", rowId: `${P}menu grupos`, description: "Moderação e Admin" },
+                        { title: "Cybersecurity", rowId: `${P}menu cyber`, description: "Ferramentas Pentest (Owner/VIP)" },
+                        { title: "OSINT", rowId: `${P}menu osint`, description: "Inteligência de Fontes Abertas" }
+                    ]
+                },
+                {
+                    title: "🎮 ENTRETENIMENTO",
+                    rows: [
+                        { title: "Diversão & Jogos", rowId: `${P}menu diversao`, description: "TTT, RPS, Grid, Cassino e mais" },
+                        { title: "Informações", rowId: `${P}menu info`, description: "Status do bot e Contato" }
+                    ]
+                }
+            ];
 
-┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃      📂 *CATEGORIAS* 
-┗━━━━━━━━━━━━━━━━━━━━━━┛
+            const listMessage = {
+                text: `✨ *AKIRA OMNI-BOT V21* ✨\n💎 *PREMIUM EDITION*\n\nSeja bem-vindo ao painel de controle. Selecione uma categoria abaixo para explorar minhas funcionalidades.`,
+                footer: "© 2026 Isaac Quarenta • Enterprise Edition",
+                title: "📂 MENU DE COMANDOS",
+                buttonText: "LISTAR CATEGORIAS",
+                sections
+            };
 
-🔹 *Use:* \`${P}menu [categoria]\`
-
-1️⃣  ⚡ \`${P}menu info\`
-2️⃣  👤 \`${P}menu conta\`
-3️⃣  🎬 \`${P}menu media\`
-4️⃣  🎤 \`${P}menu audio\`
-5️⃣  🖼️ \`${P}menu imagem\`
-6️⃣  👥 \`${P}menu grupos\`
-7️⃣  🎮 \`${P}menu diversao\`
-8️⃣  🛡️ \`${P}menu cyber\`
-9️⃣  🌐 \`${P}menu osint\`
-🔟  💎 \`${P}menu premium\`
-
-────────────────────────
-🔑 *Legenda:* 🔒 Registo • 👑 Admin
-────────────────────────
-_© 2026 Isaac Quarenta_`;
-
-            await this._reply(m, menuText);
+            await this.sock.sendMessage(m.key.remoteJid, listMessage, { quoted: m });
 
             // Adiciona seção dinâmica com comandos detectados mas não mostrados no menu
             try {
@@ -1386,9 +1401,25 @@ ${P}menu osint — Comandos OSINT avançados`,
         const content = menus[key];
 
         if (content) {
-            await this._reply(m, content);
+            // Se for um submenu, envia com botões de retorno ao menu principal
+            const buttons = [
+                { buttonId: `${P}menu`, buttonText: { displayText: '📂 Menu Principal' }, type: 1 },
+                { buttonId: `${P}ping`, buttonText: { displayText: '⚡ Status/Ping' }, type: 1 }
+            ];
+
+            const buttonMessage = {
+                text: content,
+                footer: "Akira Bot V21 • Selecione uma opção abaixo",
+                buttons: buttons,
+                headerType: 1
+            };
+
+            await this.sock.sendMessage(m.key.remoteJid, buttonMessage, { quoted: m });
         } else {
-            await this._reply(m, `⚠️ Categoria *"${sub}"* não encontrada.\nUse *${P}menu* para ver todas as categorias.`);
+            await this.sock.sendMessage(m.key.remoteJid, {
+                text: `⚠️ Categoria *"${sub}"* não encontrada.\nUse o botão abaixo para ver todas as categorias.`,
+                buttons: [{ buttonId: `${P}menu`, buttonText: { displayText: '📂 Abrir Menu' }, type: 1 }]
+            }, { quoted: m });
         }
 
         if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m);

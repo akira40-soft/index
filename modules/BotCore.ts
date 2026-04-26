@@ -234,21 +234,36 @@ class BotCore {
             if (!fs.existsSync(authFolder)) return;
 
             const files = fs.readdirSync(authFolder);
-            const stalePatterns = ['session-', 'sender-key-', 'app-state-sync-'];
+            // Padrões que costumam causar "Bad MAC" quando dessincronizados
+            const stalePatterns = ['session-', 'sender-key-', 'app-state-sync-', 'pre-key-'];
             let purged = 0;
 
             for (const file of files) {
+                // Se o arquivo for muito antigo ou corresponder aos padrões de sessão
                 const isStale = stalePatterns.some(p => file.startsWith(p));
                 if (isStale) {
                     try {
-                        fs.unlinkSync(path.join(authFolder, file));
-                        purged++;
+                        const filePath = path.join(authFolder, file);
+                        const stats = fs.statSync(filePath);
+                        const ageMs = Date.now() - stats.mtimeMs;
+
+                        // Purgar agressivamente sessões e chaves de remetente (causa principal do Bad MAC)
+                        // Pre-keys apenas se tiverem mais de 24h
+                        if (file.startsWith('pre-key-')) {
+                            if (ageMs > 24 * 60 * 60 * 1000) {
+                                fs.unlinkSync(filePath);
+                                purged++;
+                            }
+                        } else {
+                            fs.unlinkSync(filePath);
+                            purged++;
+                        }
                     } catch (_) { }
                 }
             }
 
             if (purged > 0) {
-                this.logger.info(`🧹 [Bad MAC Fix] ${purged} sessões Signal expiradas removidas. Serão renegociadas automaticamente.`);
+                this.logger.info(`🧹 [Bad MAC Fix] ${purged} arquivos de sinal/sessão obsoletos removidos.`);
             }
         } catch (e: any) {
             this.logger.warn(`⚠️ [Bad MAC Fix] Erro ao purgar sessões: ${e.message}`);
@@ -487,6 +502,14 @@ class BotCore {
                     this.BOT_JID = this.sock.user?.id;
                     const normalizedJid = JidUtils.normalize(this.BOT_JID);
                     this.logger.info(`🤖 Logado como: ${normalizedJid}`);
+
+                    // ✅ DINAMISMO: Atualiza o número real do bot no ConfigManager baseado no login atual
+                    // Isso resolve erros de permissão admin quando o BOT_NUMERO no .env está errado
+                    const actualNumber = JidUtils.getNumber(normalizedJid);
+                    if (actualNumber && actualNumber !== this.config.BOT_NUMERO_REAL) {
+                        this.logger.info(`🔄 [Config] Atualizando BOT_NUMERO_REAL: ${this.config.BOT_NUMERO_REAL} -> ${actualNumber}`);
+                        this.config.BOT_NUMERO_REAL = actualNumber;
+                    }
 
                     // Purgar sessões Signal corrompidas (causa do Bad MAC)
                     this._purgeCorruptedSessions().catch(() => { });

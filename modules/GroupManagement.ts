@@ -1045,11 +1045,10 @@ class GroupManagement {
 
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
-        // ✅ Usar BOT_NUMERO_REAL formatado como @lid (padrão WhatsApp multi-device)
-        const botNumero = String(this.config.BOT_NUMERO_REAL).replace(/\D/g, '');
-        const botId = `${botNumero}@lid`;
+        // ✅ Usar o JID normalizado do próprio socket para evitar erros de identificação
+        const botId = JidUtils.normalize(this.sock.user?.id);
 
-        console.log(`🔍 [GroupManagement] Bot ID (BOT_NUMERO_REAL): ${botId}`);
+        console.log(`🔍 [GroupManagement] Bot ID (Socket): ${botId}`);
         console.log(`🔍 [GroupManagement] Admins (normalizados): ${admins.join(', ')}`);
         console.log(`🔍 [GroupManagement] Targets: ${targets.join(', ')}`);
 
@@ -1502,7 +1501,7 @@ class GroupManagement {
 
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
-        const botId = this.sock.user.id.split(':')[0] + '@s.whatsapp.net';
+        const botId = JidUtils.normalize(this.sock.user?.id);
         if (!admins.includes(botId)) {
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para alterar a descrição do grupo.' }, { quoted: m });
             return true;
@@ -1538,7 +1537,7 @@ class GroupManagement {
 
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
-        const botId = this.sock.user.id.split(':')[0] + '@s.whatsapp.net';
+        const botId = JidUtils.normalize(this.sock.user?.id);
         if (!admins.includes(botId)) {
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para alterar a foto do grupo.' }, { quoted: m });
             return true;
