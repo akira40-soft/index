@@ -83,23 +83,27 @@ export class JidUtils {
     }
 
     /**
-     * Alias adicional: Normaliza um ID de usuário/participante para número puro.
-     * Remove prefixo 'lid_', sufixo '@lid', '@s.whatsapp.net', ':device'
-     * Exemplo: "lid_202391978787009" -> "202391978787009"
-     * Exemplo: "202391978787009:1@s.whatsapp.net" -> "202391978787009"
-     * This is the SAFEST way to normalize ANY user ID format
+     * Normaliza um ID de usuário respeitando identidades LID e números reais.
+     * ✅ Se for um LID, mantém a estrutura (ou apenas remove o sufixo de dispositivo)
+     * ✅ Se for um JID, mantém o número base
+     * ═══════════════════════════════════════════════════════════════════════
      */
     public static normalizeUserNumber(input: string | null | undefined): string {
         if (!input) return "";
 
-        // First, remove prefixes like 'lid_'
-        let normalized = String(input);
+        const jid = String(input).trim();
+
+        // 1. Remove sufixo de dispositivo (:1, :2...) mas mantém o domínio (@lid ou @s.whatsapp.net)
+        const baseJid = jid.split(':')[0].split('@')[0];
+
+        // 2. Remove prefixos de sistema se existirem (como 'lid_')
+        let normalized = baseJid;
         if (normalized.startsWith('lid_')) {
             normalized = normalized.substring(4);
         }
 
-        // Then extract only digits (removes any @, :, etc suffixes)
-        return normalized.replace(/\D/g, '');
+        // Retorna a identidade base (seja número puro ou LID alfa-numérico)
+        return normalized;
     }
 }
 

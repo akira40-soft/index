@@ -280,20 +280,32 @@ class ConfigManager {
     }
 
     /**
-    * Valida se um usuário é dono do bot
+    * Valida se um usuário é dono do bot respeitando LIDs e JIDs
     */
     isDono(numero: string | number, nomeBot: string = ''): boolean {
         try {
-            const numeroBase = String(numero).split(':')[0];
-            const numeroLimpo = numeroBase.replace(/\D/g, '').trim();
+            // Normaliza o ID usando a lógica que preserva a identidade (LID ou JID)
+            const idEntrada = String(numero).split(':')[0].split('@')[0].trim();
+            if (idEntrada.startsWith('lid_')) return this.isDono(idEntrada.substring(4), nomeBot);
 
-            // 1. Verifica pelo número
-            const porNumero = this.DONO_USERS?.some(
-                dono => String(dono.numero).replace(/\D/g, '') === numeroLimpo
-            );
-            if (porNumero) return true;
+            // 1. Verifica pela lista de números/LIDs permitidos
+            const porId = this.DONO_USERS?.some(dono => {
+                const donoId = String(dono.numero).split(':')[0].split('@')[0].trim();
+                return donoId === idEntrada;
+            });
+            if (porId) return true;
 
-            // 2. Se não for por número, tenta pelo nome especial configurado (pushName)
+            // 2. Fallback para comparação de dígitos (caso o .env tenha sido preenchido com formatação)
+            const digitsEntrada = idEntrada.replace(/\D/g, '');
+            if (digitsEntrada.length > 5) {
+                const porDigitos = this.DONO_USERS?.some(dono => {
+                    const donoDigits = String(dono.numero).replace(/\D/g, '');
+                    return donoDigits === digitsEntrada;
+                });
+                if (porDigitos) return true;
+            }
+
+            // 3. Se não for por ID, tenta pelo nome especial configurado (pushName)
             if (typeof nomeBot === 'string') {
                 const n = nomeBot.toLowerCase();
                 if (this.DONO_APELIDOS.some(alias => n.includes(alias))) return true;

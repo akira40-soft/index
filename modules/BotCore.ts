@@ -520,13 +520,6 @@ class BotCore {
                     const normalizedJid = JidUtils.normalize(this.BOT_JID);
                     this.logger.info(`🤖 Logado como: ${normalizedJid}`);
 
-                    // ✅ DINAMISMO: Atualiza o número real do bot no ConfigManager baseado no login atual
-                    const actualNumber = JidUtils.getNumber(normalizedJid);
-                    if (actualNumber && actualNumber !== this.config.BOT_NUMERO_REAL) {
-                        this.logger.info(`🔄 [Config] Atualizando BOT_NUMERO_REAL: ${this.config.BOT_NUMERO_REAL} -> ${actualNumber}`);
-                        this.config.BOT_NUMERO_REAL = actualNumber;
-                    }
-
                     // ✅ NOVO: Manter bot sempre disponível (nunca offline)
                     if (this.presenceSimulator) {
                         await this.presenceSimulator.maintainAvailablePresence();
