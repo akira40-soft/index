@@ -1048,6 +1048,13 @@ class CommandHandler {
     // MÉTODOS AUXILIARES DE COMANDO
     // ═══════════════════════════════════════════════════════════════════════
 
+    /**
+     * Cria uma seção visual padronizada para os menus
+     */
+    private createMenuSection(emoji: string, title: string): string {
+        return `\n${emoji} *${title}*\n────────────────────────────`;
+    }
+
     public async _reply(m: any, text: string, options: any = {}): Promise<any> {
         const jid = m.key?.remoteJid;
         const errorPrefix = `🔴 [_REPLY] Para ${jid}:`;
@@ -2015,27 +2022,49 @@ ${P}menu osint — Comandos OSINT avançados`,
     public async _handlePaymentCommand(m: any, args: string[]): Promise<boolean> {
         // Se usuario quer ver info
         if (args.length === 0) {
-            const plans = this.bot.paymentManager.getPlans();
-            let msg = `💎 *SEJA PREMIUM NO AKIRA BOT*\n\n`;
-            msg += `Desbloqueie recursos exclusivos, remova limites e suporte o projeto!\n\n`;
+            const plans = this.bot.paymentManager?.getPlans() || {};
+
+            let msg = `✨ *AKIRA PREMIUM & APOIO* ✨\n`;
+            msg += `_Sua contribuição mantém o bot online e evoluindo!_\n`;
+
+            msg += this.createMenuSection('🎁', 'VALORES SUGERIDOS (VIP)');
 
             for (const [key, plan] of Object.entries(plans) as [string, any][]) {
-                msg += `🏷️ *${plan.name}*\n`;
-                msg += `💰 Valor: R$ ${plan.price.toFixed(2)}\n`;
+                msg += `\n🏷️ *${plan.name}*\n`;
+                msg += `💰 Valor: *R$ ${plan.price.toFixed(2)}*\n`;
                 msg += `📅 Duração: ${plan.days} dias\n`;
-                msg += `👉 Use: *${this.config.PREFIXO}buy ${key}*\n\n`;
+                msg += `👉 Comprar: *${this.config.PREFIXO}buy ${key}*\n`;
             }
 
-            msg += `💡 *Vantagens:*\n`;
-            msg += `✅ Acesso a ferramentas de Cybersecurity\n`;
-            msg += `✅ Comandos de OSINT avançados\n`;
-            msg += `✅ Prioridade no processamento\n`;
-            msg += `✅ Suporte VIP\n\n`;
+            msg += this.createMenuSection('🎉', 'BENEFÍCIOS DO APOIADOR');
+            msg += `\n✨ Badge especial *"Apoiador"* no perfil\n`;
+            msg += `✨ Acesso a ferramentas de *Cybersecurity & OSINT*\n`;
+            msg += `✨ Remoção de limites de uso (Rate Limit)\n`;
+            msg += `✨ Prioridade máxima no processamento\n`;
+            msg += `✨ Suporte técnico direto via WhatsApp\n`;
+            msg += `✨ Acesso antecipado a novas features\n`;
 
-            if (this.bot.paymentManager.payConfig.kofiPage) {
-                msg += `☕ *Apoie no Ko-fi:*\nhttps://ko-fi.com/${this.bot.paymentManager.payConfig.kofiPage}\n`;
-                msg += `⚠️ *IMPORTANTE:* Ao doar, escreva seu número de WhatsApp na mensagem para ativar o VIP automaticamente!`;
+            msg += this.createMenuSection('📊', 'IMPACTO DA SUA DOAÇÃO');
+            msg += `\n💵 *R$ 5* = 1 dia de servidor online\n`;
+            msg += `💵 *R$ 20* = 1 semana de operação contínua\n`;
+            msg += `💵 *R$ 50* = 1 mês de infraestrutura estável\n`;
+            msg += `💵 *R$ 100+* = 3 meses + desenvolvimento de 1 nova feature\n`;
+
+            msg += this.createMenuSection('💳', 'MÉTODOS DE PAGAMENTO');
+            msg += `\n*🔑 PIX (INSTANTÂNEO)*\nE-mail: _softedgecorporation@gmail.com_\n`;
+
+            if (this.bot.paymentManager?.payConfig?.kofiPage) {
+                msg += `\n*☕ KO-FI (INTERNACIONAL)*\nhttps://ko-fi.com/${this.bot.paymentManager.payConfig.kofiPage}\n`;
             }
+
+            msg += `\n*💳 PAYPAL*\nhttps://paypal.me/isaacquarenta\n`;
+
+            msg += this.createMenuSection('📲', 'CONTATO & SUPORTE');
+            msg += `\nWhatsApp: *+244 937 035 662*\n`;
+            msg += `Email: _isaac.quarenta@akira.bot_\n`;
+
+            msg += `\n*Obrigado por apoiar um projeto feito com ❤️ paixão!*\n`;
+            msg += `_Cada real faz diferença no futuro do Akira Bot_`;
 
             await this._reply(m, msg);
             return true;
