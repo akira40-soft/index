@@ -38,21 +38,27 @@ class PermissionManager {
         // Proprietários - acesso total
         this.owners = [
             {
+                numero: '244952786417',
+                nome: 'Isaac Quarenta',
+                descricao: 'Desenvolvedor Principal (Bot 1)',
+                nivel: 'ROOT'
+            },
+            {
+                numero: '244956464620',
+                nome: 'Isaac Quarenta',
+                descricao: 'Desenvolvedor Principal (Bot 2)',
+                nivel: 'ROOT'
+            },
+            {
                 numero: '244937035662',
                 nome: 'Isaac Quarenta',
-                descricao: 'Desenvolvedor Principal',
+                descricao: 'Número Alternativo',
                 nivel: 'ROOT'
             },
             {
                 numero: '244978787009',
                 nome: 'Isaac Quarenta',
-                descricao: 'Segundo Proprietário',
-                nivel: 'ROOT'
-            },
-            {
-                numero: '202391978787009',
-                nome: 'Isaac Quarenta',
-                descricao: 'Proprietário Principal',
+                descricao: 'Número Alternativo 2',
                 nivel: 'ROOT'
             }
         ];
@@ -643,15 +649,16 @@ class PermissionManager {
      * @param {string} groupJid - JID do grupo (se aplicável)
      * @returns {Object} { allowed: boolean, reason: string }
      */
-    canExecuteCommand(comando: string, userId: string, userName: string, isGroup: boolean = false, groupJid: string | null = null) {
+    canExecuteCommand(comando: string, userId: string, userName: string, isGroup: boolean = false, groupJid: string | null = null, isGroupAdmin: boolean = false) {
         const permConfig = this.commandPermissions[comando];
 
         if (!permConfig) {
-            return { allowed: false, reason: 'Comando não encontrado.' };
+            // Comando desconhecido — deixa o CommandHandler decidir (pode ser handled)
+            return { allowed: true, reason: 'Unknown command — defer to handler' };
         }
 
         // REGRA 1: Dono SEMPRE pode tudo
-        const userNumber = userId.split('@')[0];
+        const userNumber = userId.split('@')[0].replace(/\D/g, '');
         if (this.isOwner(userNumber, userName)) {
             return { allowed: true, reason: 'Owner access' };
         }
@@ -672,11 +679,19 @@ class PermissionManager {
             };
         }
 
-        // REGRA 4: Comandos de dono (owner level)
+        // REGRA 4: Comandos de dono (owner level) — apenas proprietários do bot
         if (permConfig.nivel === 'owner') {
             return {
                 allowed: false,
                 reason: '🔒 Este comando é restrito ao proprietário do bot.'
+            };
+        }
+
+        // REGRA 4b: Comandos de admin — admin do grupo pode usar
+        if (permConfig.nivel === 'admin' && isGroup && !isGroupAdmin) {
+            return {
+                allowed: false,
+                reason: '🔒 Este comando é restrito a administradores do grupo.'
             };
         }
 

@@ -343,7 +343,8 @@ class CommandHandler {
                 userId,
                 nome,
                 ehGrupo,
-                groupJid
+                groupJid,
+                isAdminUsers
             );
 
             if (!permissionCheck.allowed) {
@@ -842,8 +843,8 @@ class CommandHandler {
                 case 'descricao':
                 case 'setfoto':
                 case 'fotodogrupo': {
-                    if (!isOwner) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                    if (!isOwner && !isAdminUsers) {
+                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas admins ou o proprietário do bot podem usar este comando.');
                         return true;
                     }
 
@@ -872,9 +873,9 @@ class CommandHandler {
                     return await this._reply(m, mlReport);
 
                 case 'antispam':
-                    // SEGURANÇA: Apenas o DONO pode usar comandos de moderação
-                    if (!isOwner) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode usar este comando.');
+                    // SEGURANÇA: Apenas o DONO ou ADMINS podem usar comandos de moderação
+                    if (!isOwner && !isAdminUsers) {
+                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas admins ou o proprietário do bot podem usar este comando.');
                         return true;
                     }
                     if (!this.groupManagement) {
@@ -1018,8 +1019,8 @@ class CommandHandler {
 
                 case 'except':
                 case 'excep':
-                    if (!isOwner) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas o proprietário do bot pode gerenciar a lista de exceções.');
+                    if (!isOwner && !isAdminUsers) {
+                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas admins ou o proprietário do bot podem gerenciar a lista de exceções.');
                         return true;
                     }
                     return await this._handleExceptCommand(m, args);
@@ -1115,30 +1116,30 @@ class CommandHandler {
         // ── Menu principal (sem argumento) ──
         if (!sub) {
             const menuText =
-                `╔════════════════════════════════════════╗
-║      🤖 *AKIRA BOT V21* 🤖           ║
-║      *Enterprise Edition*            ║
-╚════════════════════════════════════════╝
+                `✨ *AKIRA OMNI-BOT V21* ✨
+💎 *PREMIUM EDITION*
 
-📱 *Prefixo:* ${P}
+┏━━━━━━━━━━━━━━━━━━━━━━┓
+┃      📂 *CATEGORIAS* 
+┗━━━━━━━━━━━━━━━━━━━━━━┛
 
-📂 *CATEGORIAS — use ${P}menu [categoria]*
+🔹 *Use:* \`${P}menu [categoria]\`
 
-  1️⃣  ${P}menu info       — Informações gerais
-  2️⃣  ${P}menu conta      — Registo, nível, economia
-  3️⃣  ${P}menu media      — Música, vídeo, stickers
-  4️⃣  ${P}menu audio      — Efeitos de áudio & TTS
-  5️⃣  ${P}menu imagem     — Efeitos de imagem
-  6️⃣  ${P}menu grupos     — Administração de grupos
-  7️⃣  ${P}menu diversao   — Jogos e diversaões
-  8️⃣  ${P}menu cyber      — Cybersecurity (dono)
-  9️⃣  ${P}menu osint      — OSINT & Inteligência
-  🔟  ${P}menu premium    — Planos VIP
-    1️⃣1️⃣ ${P}menu extras     — Comandos adicionais detectados
+1️⃣  ⚡ \`${P}menu info\`
+2️⃣  👤 \`${P}menu conta\`
+3️⃣  🎬 \`${P}menu media\`
+4️⃣  🎤 \`${P}menu audio\`
+5️⃣  🖼️ \`${P}menu imagem\`
+6️⃣  👥 \`${P}menu grupos\`
+7️⃣  🎮 \`${P}menu diversao\`
+8️⃣  🛡️ \`${P}menu cyber\`
+9️⃣  🌐 \`${P}menu osint\`
+🔟  💎 \`${P}menu premium\`
 
-🔑 *Legenda:* 🔒 Requer registo • 👑 Admin/Dono
-
-_Akira V21 — Desenvolvido por Isaac Quarenta_`;
+────────────────────────
+🔑 *Legenda:* 🔒 Registo • 👑 Admin
+────────────────────────
+_© 2026 Isaac Quarenta_`;
 
             await this._reply(m, menuText);
 
@@ -1170,80 +1171,85 @@ _Akira V21 — Desenvolvido por Isaac Quarenta_`;
         // ── Submenus por categoria ──
         const menus: Record<string, string> = {
             conta:
-                `👤 *CONTA & PERFIL*
+                `👤 *CONTA & PERFIL* 👤
 ────────────────────────────
-• ${P}registrar Nome|Idade — Cadastrar-se
-• ${P}perfil — Ver seus dados
-• ${P}level 🔒 — Nível e progresso
-• ${P}rank 🔒 — Top 10 do grupo
+✨ *IDENTIDADE*
+• ${P}registrar Nome|Idade 
+• ${P}perfil — Seus dados
+• ${P}level 🔒 — Nível/XP
+• ${P}rank 🔒 — Top 10
 
 💰 *ECONOMIA*
-• ${P}daily 🔒 — Recompensa diária
-• ${P}atm 🔒 — Ver saldo
-• ${P}transfer @user valor 🔒 — Transferir
-• ${P}deposit [valor|all] 🔒 — Depositar no banco
-• ${P}withdraw [valor|all] 🔒 — Sacar do banco
-• ${P}transactions | ${P}transacoes 🔒 — Ver histórico`,
+• ${P}daily 🔒 — Diário
+• ${P}atm 🔒 — Saldo
+• ${P}transfer @user 🔒
+• ${P}deposit [valor] 🔒
+• ${P}withdraw [valor] 🔒
+• ${P}transacoes 🔒`,
 
             media:
-                `🎨 *MÍDIA & CRIAÇÃO*
+                `🎨 *MÍDIA & CRIAÇÃO* 🎨
 ────────────────────────────
-• ${P}sticker | ${P}s — Criar figurinha
-• ${P}take — Roubar figurinha
-• ${P}toimg — Sticker → imagem
-• ${P}play [nome] 🔒 — Baixar música
-• ${P}video [nome] 🔒 — Baixar vídeo
+✨ *STIKERS*
+• ${P}sticker | ${P}s
+• ${P}take — Roubar fig.
+• ${P}toimg — Fig → Img
+
+🎵 *DOWNLOADS*
+• ${P}play [nome] 🔒 — Música
+• ${P}video [nome] 🔒 — Vídeo
 • ${P}tomp3 — Vídeo → MP3
-• ${P}pinterest [busca] 🔒 — Buscar imagens`,
+• ${P}pinterest [busca] 🔒`,
 
             audio:
-                `🔊 *ÁUDIO & EFEITOS*
+                `🎤 *EFEITOS DE ÁUDIO* 🎤
 ────────────────────────────
-• ${P}tts [idioma] texto 🔒 — Texto p/ voz
-• ${P}nightcore — Rápido + agudo
-• ${P}slow — Lento + grave
-• ${P}bass | ${P}bassboost — Graves
-• ${P}deep — Voz profunda
-• ${P}robot — Robótico
-• ${P}reverse — Reverso
-• ${P}squirrel — Voz de esquilo
-• ${P}echo — Eco
-• ${P}8d — Áudio 8D`,
+• ${P}nightcore • ${P}slow
+• ${P}bass • ${P}deep
+• ${P}robot • ${P}reverse
+• ${P}squirrel • ${P}echo • ${P}8d
+
+🗣️ *TTS (VOZ)*
+• ${P}tts [texto] — Google
+• ${P}tiktok [texto] — TikTok
+• ${P}belmira [texto] — Especial`,
 
             imagem:
-                `🖼️ *EFEITOS DE IMAGEM*
+                `🖼️ *EFEITOS DE IMAGEM* 🖼️
 ────────────────────────────
-• ${P}hd | ${P}upscale — Melhorar qualidade
-• ${P}removebg — Remover fundo
-• ${P}wasted — Efeito GTA
-• ${P}jail | ${P}triggered | ${P}gay
-• ${P}communism | ${P}sepia | ${P}grey
-• ${P}invert | ${P}mission | ${P}angola`,
+✨ *MELHORIA*
+• ${P}hd | ${P}upscale — Alta def.
+• ${P}removebg — Tirar fundo
+
+🎭 *FILTROS*
+• ${P}wasted • ${P}jail
+• ${P}triggered • ${P}gay
+• ${P}sepia • ${P}grey • ${P}invert
+• ${P}angola • ${P}communism`,
 
             grupos:
-                `👥 *GRUPOS (ADMIN/DONO)*
+                `👥 *ADMINISTRAÇÃO DE GRUPOS* 👥
 ────────────────────────────
-• ${P}groupinfo 🔒 — Info do grupo
-• ${P}admins 🔒 — Listar admins
-• ${P}listar 👑 — Listar membros
-• ${P}mute @user [min] 👑 — Silenciar
-• ${P}desmute @user 👑 — Des-silenciar
-• ${P}fechar | ${P}abrir 👑 — Fechar/Abrir grupo
-• ${P}kick | ${P}ban @user 👑 — Remover
-• ${P}add [número] 👑 — Adicionar
-• ${P}promote | ${P}demote @user 👑
-• ${P}tagall [msg] 👑 — Mencionar todos
-• ${P}sortear 👑 — Sortear membros
-• ${P}enquete Perg|A|B 🔒 — Criar poll
-• ${P}link | ${P}revlink 👑
-• ${P}setdesc | ${P}setfoto 👑
-• ${P}welcome on/off 👑
+🛡️ *SEGURANÇA*
 • ${P}antilink on/off 👑
-• ${P}except add/remove/list 👑 — Usuários confiáveis
 • ${P}antispam on/off 👑
-• ${P}blacklist 👑 — Relatório de banidos
-• ${P}mutelist | ${P}silenciados 👑
-• ${P}warn | ${P}unwarn @user 👑`,
+• ${P}antifake on/off 👑
+• ${P}antiimage on/off 👑
+• ${P}antisticker on/off 👑
+• ${P}antipalavrao on/off 👑
+
+🔧 *GERENCIAMENTO*
+• ${P}add @user 👑
+• ${P}kick @user 👑
+• ${P}promote @user 👑
+• ${P}demote @user 👑
+• ${P}mute/unmute 👑
+• ${P}tagall — Marcar todos
+• ${P}hidetag — Tag invisível
+• ${P}link — Link do grupo
+• ${P}revlink — Revogar link
+• ${P}setdesc — Descrição 👑
+• ${P}setfoto — Foto 👑`,
 
             diversao:
                 `🎮 *DIVERSAÕES*

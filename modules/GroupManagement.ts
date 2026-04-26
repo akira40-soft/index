@@ -84,7 +84,35 @@ class GroupManagement {
         this.groupSettings = this.loadGroupSettings();
         this.scheduledActions = this.loadScheduledActions();
 
+        // ✅ Sincroniza configurações carregadas com o ModerationSystem
+        this._syncAllSettingsWithModeration();
+
         this.startScheduledActionsChecker();
+    }
+
+    /**
+     * Sincroniza todas as configurações de grupo com o sistema de moderação
+     */
+    private _syncAllSettingsWithModeration(): void {
+        if (!this.moderationSystem || !this.groupSettings) return;
+
+        this.logger.info(`🔄 [GroupManagement] Sincronizando configurações de ${Object.keys(this.groupSettings).length} grupos...`);
+
+        for (const groupJid in this.groupSettings) {
+            const settings = this.groupSettings[groupJid];
+            if (!settings) continue;
+
+            try {
+                if (settings.antilink !== undefined) this.moderationSystem.toggleAntiLink(groupJid, !!settings.antilink);
+                if (settings.antispam !== undefined) this.moderationSystem.toggleAntiSpam(groupJid, !!settings.antispam);
+                if (settings.antipalavrao !== undefined) this.moderationSystem.toggleAntiBadwords(groupJid, !!settings.antipalavrao);
+                if (settings.antifake !== undefined) this.moderationSystem.toggleAntiFake(groupJid, !!settings.antifake);
+                if (settings.antiimage !== undefined) this.moderationSystem.toggleAntiImage(groupJid, !!settings.antiimage);
+                if (settings.antisticker !== undefined) this.moderationSystem.toggleAntiSticker(groupJid, !!settings.antisticker);
+            } catch (e: any) {
+                this.logger.error(`❌ Erro ao sincronizar grupo ${groupJid}: ${e.message}`);
+            }
+        }
     }
 
     /**
