@@ -1133,10 +1133,20 @@ class CommandHandler {
             ];
 
             const listMessage = {
-                text: `✨ *AKIRA OMNI-BOT V21* ✨\n💎 *PREMIUM EDITION*\n\nSeja bem-vindo ao painel de controle. Selecione uma categoria abaixo para explorar minhas funcionalidades.`,
+                text: `✨ *AKIRA OMNI-BOT V21* ✨\n💎 *PREMIUM EDITION*\n\nSeja bem-vindo ao painel de controle. Selecione uma categoria abaixo para explorar minhas funcionalidades.\n\n` +
+                    `📂 *CATEGORIAS DISPONÍVEIS:*\n` +
+                    `1️⃣ 👤 *#menu conta* — Perfil & Economia\n` +
+                    `2️⃣ 🎨 *#menu media* — Downloads & Stickers\n` +
+                    `3️⃣ 🎤 *#menu audio* — Efeitos & TTS\n` +
+                    `4️⃣ 🖼️ *#menu imagem* — HD & Filtros\n` +
+                    `5️⃣ 👥 *#menu grupos* — Gestão & Admin\n` +
+                    `6️⃣ 🛡️ *#menu cyber* — Pentest & OSINT\n` +
+                    `7️⃣ 🎮 *#menu diversao* — Jogos & Lazer\n` +
+                    `8️⃣ ℹ️ *#menu info* — Status & Contato\n\n` +
+                    `💡 _Dica: Clique no botão abaixo ou digite o comando desejado._`,
                 footer: "© 2026 Isaac Quarenta • Enterprise Edition",
                 title: "📂 MENU DE COMANDOS",
-                buttonText: "LISTAR CATEGORIAS",
+                buttonText: "ABRIR LISTA DE CATEGORIAS",
                 sections
             };
 
@@ -1408,8 +1418,8 @@ ${P}menu osint — Comandos OSINT avançados`,
             ];
 
             const buttonMessage = {
-                text: content,
-                footer: "Akira Bot V21 • Selecione uma opção abaixo",
+                text: content + `\n\n────────────────────────\n💡 _Dica: Use os botões abaixo para navegar ou digite *${P}menu* para voltar._`,
+                footer: "Akira Bot V21 • Enterprise Edition",
                 buttons: buttons,
                 headerType: 1
             };
@@ -1417,7 +1427,7 @@ ${P}menu osint — Comandos OSINT avançados`,
             await this.sock.sendMessage(m.key.remoteJid, buttonMessage, { quoted: m });
         } else {
             await this.sock.sendMessage(m.key.remoteJid, {
-                text: `⚠️ Categoria *"${sub}"* não encontrada.\nUse o botão abaixo para ver todas as categorias.`,
+                text: `⚠️ Categoria *"${sub}"* não encontrada.\n\nUse o comando *${P}menu* para ver todas as categorias disponíveis.`,
                 buttons: [{ buttonId: `${P}menu`, buttonText: { displayText: '📂 Abrir Menu' }, type: 1 }]
             }, { quoted: m });
         }
