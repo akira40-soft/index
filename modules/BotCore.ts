@@ -210,16 +210,26 @@ class BotCore {
      * reconexões e resolve-se sozinho quando a sessão é renegociada.
      */
     private _installBadMACHandler(): void {
+        // 1. Silenciar unhandledRejection (prevenir logs de sistema)
         const originalEmit = process.emit.bind(process);
         (process as any).emit = function (event: string, error: any, ...args: any[]) {
             if (event === 'unhandledRejection' || event === 'uncaughtException') {
                 const msg = error?.message || String(error);
-                if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
-                    // Silencia — não é fatal, é ruído de sessão Signal
+                if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt') || msg.includes('known session')) {
                     return false;
                 }
             }
             return originalEmit(event, error, ...args);
+        };
+
+        // 2. Silenciar console.error (prevenir ruído visual no terminal)
+        const originalError = console.error;
+        console.error = (...args: any[]) => {
+            const msg = args.join(' ');
+            if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt') || msg.includes('known session')) {
+                return;
+            }
+            originalError.apply(console, args);
         };
     }
 
@@ -401,6 +411,13 @@ class BotCore {
     }
 
     async connect(): Promise<void> {
+        // ✅ [CRÍTICO] Purgar sessões corrompidas ANTES de carregar o estado
+        // Isso previne que o Baileys carregue arquivos "Bad MAC" na memória
+        await this._purgeCorruptedSessions().catch(() => { });
+
+        // ✅ Instalar silenciador de ruído Signal (Bad MAC)
+        this._installBadMACHandler();
+
         try {
             const { state, saveCreds } = await useMultiFileAuthState(this.config.AUTH_FOLDER);
             const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -504,15 +521,11 @@ class BotCore {
                     this.logger.info(`🤖 Logado como: ${normalizedJid}`);
 
                     // ✅ DINAMISMO: Atualiza o número real do bot no ConfigManager baseado no login atual
-                    // Isso resolve erros de permissão admin quando o BOT_NUMERO no .env está errado
                     const actualNumber = JidUtils.getNumber(normalizedJid);
                     if (actualNumber && actualNumber !== this.config.BOT_NUMERO_REAL) {
                         this.logger.info(`🔄 [Config] Atualizando BOT_NUMERO_REAL: ${this.config.BOT_NUMERO_REAL} -> ${actualNumber}`);
                         this.config.BOT_NUMERO_REAL = actualNumber;
                     }
-
-                    // Purgar sessões Signal corrompidas (causa do Bad MAC)
-                    this._purgeCorruptedSessions().catch(() => { });
 
                     // ✅ NOVO: Manter bot sempre disponível (nunca offline)
                     if (this.presenceSimulator) {
