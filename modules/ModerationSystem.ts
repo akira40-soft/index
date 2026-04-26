@@ -51,8 +51,8 @@ class ModerationSystem {
 
     private SPAM_THRESHOLD: number;
     private SPAM_WINDOW_MS: number;
-    private FLOOD_THRESHOLD: number = 2; // 2 mensagens
-    private FLOOD_WINDOW_MS: number = 1000; // em 1 segundo
+    private FLOOD_THRESHOLD: number = 3; // 3 mensagens
+    private FLOOD_WINDOW_MS: number = 3000; // em 3 segundos
     private MAX_FLOOD_WARNINGS: number = 3;
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
@@ -1004,10 +1004,15 @@ class ModerationSystem {
         const now = Date.now();
         const userData = this.spamCache?.get(key) || [];
 
-        // Filtra mensagens nos últimos 1000ms
+        // Filtra mensagens nos últimos 3000ms
         const recentMessages = userData.filter(t => (now - t) < this.FLOOD_WINDOW_MS);
         recentMessages.push(now);
         this.spamCache?.set(key, recentMessages);
+
+        // Log de depuração para monitoramento (opcional, útil para o dono)
+        if (recentMessages.length > 1) {
+            console.log(`[AntiSpam] ${userId} mandou ${recentMessages.length} msgs em ${this.FLOOD_WINDOW_MS}ms`);
+        }
 
         // Se mandou 2 ou mais mensagens em 1 segundo
         if (recentMessages.length >= this.FLOOD_THRESHOLD) {

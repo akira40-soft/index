@@ -752,7 +752,9 @@ class BotCore {
 
                     // 0. AntiFlood / AntiSpam
                     if (this.moderationSystem.isAntiSpamActive(remoteJid)) {
-                        const floodStatus = this.moderationSystem.checkFlood(remoteJid, participant);
+                        // Normaliza o participant para evitar erros com multi-device (:suffix)
+                        const normalizedParticipant = JidUtils.normalize(participant);
+                        const floodStatus = this.moderationSystem.checkFlood(remoteJid, normalizedParticipant);
                         if (floodStatus.action !== 'none') {
                             await this.handleViolation(m, `flood_${floodStatus.action}`, floodStatus);
                             return;
