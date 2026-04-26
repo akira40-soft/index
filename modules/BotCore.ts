@@ -408,8 +408,8 @@ class BotCore {
                     }
                     return undefined;
                 },
-                connectTimeoutMs: 60000,
-                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 120000,
+                defaultQueryTimeoutMs: 120000,
                 keepAliveIntervalMs: 10000,
                 emitOwnEvents: false,
                 retryRequestDelayMs: 250
@@ -1049,7 +1049,7 @@ class BotCore {
             // ✅ BUG FIX #1: isDono deve receber o NOME (pushName) do usuário, NÃO o texto da mensagem.
             // O texto da mensagem nunca contém 'morema', o NOME sim.
             const isOwner = typeof this.config?.isDono === 'function'
-                ? this.config.isDono(numeroReal, nome)
+                ? this.config.isDono(JidUtils.normalizeUserNumber(numeroReal), nome)
                 : false;
 
             if (!isOwner && this.moderationSystem?.checkAndLimitHourlyMessages) {
@@ -1391,14 +1391,14 @@ class BotCore {
                 let mensagem = '';
 
                 if (violations === 1) {
-                    // 1ª AVISO: Educado (ainda)
-                    mensagem = `⏳ *LIMITE DE MENSAGENS EXCEDIDO* ⏳\n\n@${numeroReal}, você excedeu o limite de mensagens por hora.\n\n⏱️ *Tempo restante:* ${waitTime}\n🕐 *Poderá enviar novamente às:* ${resetAt}\n\nAguarde esse tempo para continuar usando a Akira.`;
+                    // 1ª AVISO: Educado
+                    mensagem = `⏳ *LIMITE DE MENSAGENS EXCEDIDO* ⏳\n\n@${numeroReal}, você atingiu o limite de mensagens por hora para usuários gratuitos.\n\n⏱️ *Tempo restante:* ${waitTime}\n🕐 *Acesso liberado às:* ${resetAt}\n\n_Para remover este limite, considere tornar-se Premium._`;
                 } else if (violations === 2) {
-                    // 2ª AVISO: AGRESSIVO
-                    mensagem = `⚠️ *PARE DE INCOMODAR!* ⚠️\n\n@${numeroReal}, você já foi avisado!\n\n*Para de incomodar e espera caralho!*\n\n🕐 *Acesso liberado às:* ${resetAt}\n\nMais uma tentativa e você será bloqueado PERMANENTEMENTE.`;
+                    // 2ª AVISO: Firme
+                    mensagem = `⚠️ *AVISO DE SISTEMA* ⚠️\n\n@${numeroReal}, você está ignorando o tempo de espera.\n\nA Akira não responderá até o reset do seu limite para evitar spam.\n\n🕐 *Acesso liberado às:* ${resetAt}\n\n_Evite insistir para não ser bloqueado._`;
                 } else if (violations >= 3) {
-                    // 3ª AVISO: MUITO AGRESSIVO + BLOQUEIO
-                    mensagem = `🚫 *VOCÊ É UMA MERDA!* 🚫\n\n@${numeroReal}, você é uma merda mesmo... é por isso que a namorada dele terminou com você!\n\n*BLOQUEADO PERMANENTEMENTE!*\n\nSe tentar mandar mensagem de novo, será ignorado pela Akira PARA SEMPRE.`;
+                    // 3ª AVISO: Bloqueio (sem ofensas)
+                    mensagem = `🚫 *USUÁRIO BLOQUEADO* 🚫\n\n@${numeroReal}, devido às múltiplas violações de rate limit, seu acesso foi temporariamente suspenso.\n\n*STATUS:* Blacklist Automática\n\n_Contate o suporte se considerar isto um erro._`;
                 }
 
                 await this.sock.sendMessage(jid, {

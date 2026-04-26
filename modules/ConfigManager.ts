@@ -287,17 +287,19 @@ class ConfigManager {
             const numeroBase = String(numero).split(':')[0];
             const numeroLimpo = numeroBase.replace(/\D/g, '').trim();
 
+            // 1. Verifica pelo número
             const porNumero = this.DONO_USERS?.some(
                 dono => String(dono.numero).replace(/\D/g, '') === numeroLimpo
             );
+            if (porNumero) return true;
 
-            // Se não for por número, tenta pelo nome especial configurado via .env
-            if (!porNumero && typeof nomeBot === 'string') {
+            // 2. Se não for por número, tenta pelo nome especial configurado (pushName)
+            if (typeof nomeBot === 'string') {
                 const n = nomeBot.toLowerCase();
                 if (this.DONO_APELIDOS.some(alias => n.includes(alias))) return true;
             }
 
-            return porNumero;
+            return false;
         } catch (e) {
             return false;
         }

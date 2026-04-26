@@ -107,16 +107,19 @@ class RateLimiter {
     }
 
     public check(userId: string, isOwner: boolean = false, isPremium: boolean = false, tipoConversa: string = 'pv'): { allowed: boolean, reason?: string, wait?: string, remaining?: number, violations?: number, resetAt?: string } {
+        // ✅ NORMALIZAÇÃO: Unifica LID e PN
+        const normId = userId.replace(/\D/g, '');
+
         // ✅ IMUNIDADE TOTAL: Owner e Premium não têm limite
         if (isOwner) return { allowed: true }; // Dono sem limite
         if (isPremium) return { allowed: true }; // Premium sem limite
-        if (this.blacklist.has(userId)) return { allowed: false, reason: 'BLACKLISTED', violations: 999 };
+        if (this.blacklist.has(normId)) return { allowed: false, reason: 'BLACKLISTED', violations: 999 };
 
         // ✅ CORREÇÃO: Grupos têm limite de 100 msgs/hora (apenas mensagens direcionadas contam)
         // As mensagens genéricas já são filtradas por shouldRespondToAI() em BotCore
         // Usando HOURLY_LIMIT (padrão 100) para grupos também
         const now = Date.now();
-        const usageKey = `${userId}:${tipoConversa}`; // Contexto separado por tipo
+        const usageKey = `${normId}:${tipoConversa}`; // Contexto separado por tipo
 
         // Inicializa registro do usuário
         if (!this.usage.has(usageKey)) {
@@ -212,12 +215,15 @@ class RateLimiter {
      *    - Free: TEM LIMITE (usuarios normais)
      */
     public checkPremium(userId: string, isPremium: boolean = false, tipoConversa: string = 'pv'): { allowed: boolean; reason?: string; resetAt?: string } {
+        // ✅ NORMALIZAÇÃO: Unifica LID e PN
+        const normId = userId.replace(/\D/g, '');
+
         // ✅ Premium e Owner têm imunidade total
         if (isPremium) {
             return { allowed: true }; // Premium user - sem limite
         }
 
-        if (this.blacklist.has(userId)) {
+        if (this.blacklist.has(normId)) {
             return { allowed: false, reason: 'BLACKLISTED' };
         }
 
@@ -225,7 +231,7 @@ class RateLimiter {
         // PV: 50 msgs/hora
         // Grupo: 100 msgs/hora (apenas msgs direcionadas)
         const now = Date.now();
-        const usageKey = `${userId}:${tipoConversa}`; // Contexto separado
+        const usageKey = `${normId}:${tipoConversa}`; // Contexto separado
         if (!this.usage.has(usageKey)) {
             this.usage.set(usageKey, { count: 0, startTime: now });
         }
