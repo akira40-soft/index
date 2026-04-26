@@ -704,7 +704,7 @@ class BotCore {
             if (ehGrupo && this.moderationSystem) {
                 let isAdmin = false;
                 try {
-                    if (this.groupManagement) isAdmin = await this.groupManagement.isUserAdmin(remoteJid, participant);
+                    if (this.groupManagement) isAdmin = await this.groupManagement.isGroupAdmin(remoteJid, participant);
                 } catch (e) { isAdmin = false; }
 
                 if (!isAdmin) {
