@@ -2029,9 +2029,14 @@ ${P}menu osint — Comandos OSINT avançados`,
 
             msg += this.createMenuSection('🎁', 'VALORES SUGERIDOS (VIP)');
 
+            // Nova conversão baseada em USD (1 USD = 915 Kz | 1 USD = 5.50 BRL)
+            // Assumindo que o valor 'price' no plano agora representa USD
+            const convertToKz = (usd: number) => Math.round(usd * 915).toLocaleString('pt-AO');
+            const convertToBrl = (usd: number) => (usd * 5.50).toFixed(2);
+
             for (const [key, plan] of Object.entries(plans) as [string, any][]) {
                 msg += `\n🏷️ *${plan.name}*\n`;
-                msg += `💰 Valor: *R$ ${plan.price.toFixed(2)}*\n`;
+                msg += `💰 Valor: *${convertToKz(plan.price)} Kz* (R$ ${convertToBrl(plan.price)})\n`;
                 msg += `📅 Duração: ${plan.days} dias\n`;
                 msg += `👉 Comprar: *${this.config.PREFIXO}buy ${key}*\n`;
             }
@@ -2045,23 +2050,19 @@ ${P}menu osint — Comandos OSINT avançados`,
             msg += `✨ Acesso antecipado a novas features\n`;
 
             msg += this.createMenuSection('📊', 'IMPACTO DA SUA DOAÇÃO');
-            msg += `\n💵 *R$ 5* = 1 dia de servidor online\n`;
-            msg += `💵 *R$ 20* = 1 semana de operação contínua\n`;
-            msg += `💵 *R$ 50* = 1 mês de infraestrutura estável\n`;
-            msg += `💵 *R$ 100+* = 3 meses + desenvolvimento de 1 nova feature\n`;
+            msg += `\n💵 *4.575 Kz* (R$ 27,50) = 1 dia online [5 USD]\n`;
+            msg += `\n💵 *18.300 Kz* (R$ 110,00) = 1 semana online [20 USD]\n`;
+            msg += `\n💵 *45.750 Kz* (R$ 275,00) = 1 mês online [50 USD]\n`;
+            msg += `\n💵 *91.500 Kz+* (R$ 550,00+) = 3 meses + feature nova [100 USD]\n`;
 
             msg += this.createMenuSection('💳', 'MÉTODOS DE PAGAMENTO');
-            msg += `\n*🔑 PIX (INSTANTÂNEO)*\nE-mail: _softedgecorporation@gmail.com_\n`;
-
-            if (this.bot.paymentManager?.payConfig?.kofiPage) {
-                msg += `\n*☕ KO-FI (INTERNACIONAL)*\nhttps://ko-fi.com/${this.bot.paymentManager.payConfig.kofiPage}\n`;
-            }
-
+            msg += `\n*☕ KO-FI (INTERNACIONAL)*\nhttps://ko-fi.com/isaacquarenta\n`;
             msg += `\n*💳 PAYPAL*\nhttps://paypal.me/isaacquarenta\n`;
+            msg += `\n*✉️ EMAIL PARA CONTATO*\n_softedgecorporation@gmail.com_\n`;
 
             msg += this.createMenuSection('📲', 'CONTATO & SUPORTE');
             msg += `\nWhatsApp: *+244 937 035 662*\n`;
-            msg += `Email: _isaac.quarenta@akira.bot_\n`;
+            msg += `Email: _softedgecorporation@gmail.com_\n`;
 
             msg += `\n*Obrigado por apoiar um projeto feito com ❤️ paixão!*\n`;
             msg += `_Cada real faz diferença no futuro do Akira Bot_`;
