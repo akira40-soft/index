@@ -35,33 +35,8 @@ class PermissionManager {
         // Configurações de registro por grupo
         this.groupRegistrationConfig = this.loadGroupRegistrationConfig();
 
-        // Proprietários - acesso total
-        this.owners = [
-            {
-                numero: '244952786417',
-                nome: 'Isaac Quarenta',
-                descricao: 'Desenvolvedor Principal (Bot 1)',
-                nivel: 'ROOT'
-            },
-            {
-                numero: '244956464620',
-                nome: 'Isaac Quarenta',
-                descricao: 'Desenvolvedor Principal (Bot 2)',
-                nivel: 'ROOT'
-            },
-            {
-                numero: '244937035662',
-                nome: 'Isaac Quarenta',
-                descricao: 'Número Alternativo',
-                nivel: 'ROOT'
-            },
-            {
-                numero: '244978787009',
-                nome: 'Isaac Quarenta',
-                descricao: 'Número Alternativo 2',
-                nivel: 'ROOT'
-            }
-        ];
+        // Proprietários - Sincronizado com ConfigManager
+        this.owners = this.config.DONO_USERS;
 
         // Permissões por comando
         this.commandPermissions = {
@@ -431,24 +406,7 @@ class PermissionManager {
     * Verifica se usuário é proprietário
     */
     isOwner(numero: string, nome: string = '') {
-        try {
-            // Remove sufixos de dispositivo (:1, :2, etc) que o Baileys costuma incluir
-            const numeroBase = String(numero).split(':')[0];
-            const numeroLimpo = numeroBase.replace(/\D/g, '').trim();
-
-            // Prioridade absoluta: número na lista de owners
-            const matchByNumber = this.owners?.some(owner =>
-                String(owner.numero).replace(/\D/g, '') === numeroLimpo
-            );
-
-            if (matchByNumber) return true;
-
-            // Fallback (menos confiável): nome exato (removido para evitar spoofing, mas mantido se numero bater)
-            // Por segurança, exigimos que o numero SEJA o identificador principal
-            return false;
-        } catch (e: any) {
-            return false;
-        }
+        return this.config.isDono(numero, nome);
     }
 
     /**
@@ -658,8 +616,7 @@ class PermissionManager {
         }
 
         // REGRA 1: Dono SEMPRE pode tudo
-        const userNumber = userId.split('@')[0].replace(/\D/g, '');
-        if (this.isOwner(userNumber, userName)) {
+        if (this.isOwner(userId, userName)) {
             return { allowed: true, reason: 'Owner access' };
         }
 
