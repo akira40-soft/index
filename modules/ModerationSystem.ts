@@ -999,7 +999,7 @@ class ModerationSystem {
      * Verifica se o usuário está mandando mensagens rápido demais.
      * Lógica: 2 msgs em 1s = Warning. 3 Warnings = Kick/Ban.
      */
-    public checkFlood(groupId: string, userId: string): { action: 'none' | 'warning' | 'kick', warnings: number } {
+    public checkFlood(groupId: string, userId: string): { action: 'none' | 'warning' | 'kick' | 'mute', warnings: number, muteCount?: number, muteMinutes?: number } {
         const key = `${groupId}_${userId}`;
         const now = Date.now();
         const userData = this.spamCache?.get(key) || [];
@@ -1013,10 +1013,22 @@ class ModerationSystem {
         if (recentMessages.length >= this.FLOOD_THRESHOLD) {
             const warnings = this.addWarning(groupId, userId, 'Flood de mensagens');
 
+            // Pega dados de reincidência de mute
+            const muteKey = `${groupId}_${userId}`;
+            const muteData = this.muteCounts.get(muteKey) || { count: 0 };
+
             if (warnings > this.MAX_FLOOD_WARNINGS) {
-                return { action: 'kick', warnings };
+                return { action: 'kick', warnings, muteCount: muteData.count };
             }
-            return { action: 'warning', warnings };
+
+            // Muta o usuário internamente
+            const muteResult = this.muteUser(groupId, userId, 5); // 5 minutos padrão
+            return {
+                action: 'mute',
+                warnings,
+                muteCount: muteResult.muteCount,
+                muteMinutes: muteResult.minutes
+            };
         }
 
         // Limpeza periódica do Map para não estourar memória

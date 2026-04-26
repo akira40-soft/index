@@ -872,23 +872,6 @@ class CommandHandler {
                     const mlReport = this.moderationSystem.getMutedReport(chatJid);
                     return await this._reply(m, mlReport);
 
-                case 'antispam':
-                    // SEGURANÇA: Apenas o DONO ou ADMINS podem usar comandos de moderação
-                    if (!isOwner && !isAdminUsers) {
-                        await this.bot.reply(m, '🚫 *COMANDO RESTRITO!*\n\nApenas admins ou o proprietário do bot podem usar este comando.');
-                        return true;
-                    }
-                    if (!this.groupManagement) {
-                        console.error('[CommandHandler] GroupManagement não inicializado');
-                        await this._reply(m, '❌ Sistema não disponível.');
-                        return true;
-                    }
-                    try {
-                        return await this.groupManagement.handleCommand(m, 'antispam', args);
-                    } catch (e: any) {
-                        console.error(`[CommandHandler] Erro no comando antispam:`, e.message);
-                        return true;
-                    }
 
                 // INFO DO GRUPO — QUALQUER MEMBRO REGISTRADO
                 case 'groupinfo':
@@ -982,6 +965,7 @@ class CommandHandler {
                     return await this._handleGetProfileAdmin(m, args);
 
                 case 'antilink':
+                case 'antispam':
                 case 'antifake':
                 case 'antiimage':
                 case 'antisticker':
@@ -999,7 +983,7 @@ class CommandHandler {
                         return true;
                     }
                     try {
-                        if (['welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'antipalavrao', 'antipalavras', 'antibadwords'].includes(command)) {
+                        if (['welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'antipalavrao', 'antipalavras', 'antibadwords', 'antispam'].includes(command)) {
                             return await this.groupManagement.handleCommand(m, command, args);
                         }
                         return await this._handleToggleModeration(m, command, args);

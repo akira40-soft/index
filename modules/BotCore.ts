@@ -1405,15 +1405,17 @@ class BotCore {
                     text: mensagem,
                     mentions: [participant]
                 });
-            } else if (tipo === 'flood_warning') {
+            } else if (tipo === 'flood_mute') {
                 const warnings = limitStatus?.warnings || 0;
+                const muteMin = limitStatus?.muteMinutes || 5;
+                const muteCount = limitStatus?.muteCount || 1;
                 await this.sock.sendMessage(jid, {
-                    text: `⚠️ *AVISO DE FLOOD* ⚠️\n\n@${numeroReal}, pare de enviar mensagens tão rápido! O limite é de 1 mensagem por segundo.\n\nVocê tem *${warnings}/3* avisos. No próximo você será removido.`,
+                    text: `🔇 *SILENCIADO POR FLOOD* 🔇\n\n@${numeroReal}, pare de enviar mensagens tão rápido! O limite é de 2 mensagens por segundo.\n\n⏱️ *Tempo:* ${muteMin} minuto(s)\n⚠️ Aviso: *${warnings}/3*\n📊 Infração #${muteCount} hoje.\n\n_As mensagens infratoras foram apagadas._`,
                     mentions: [participant]
                 });
             } else if (tipo === 'flood_kick') {
                 await this.sock.sendMessage(jid, {
-                    text: `🚫 *REMOVIDO POR FLOOD* 🚫\n\n@${numeroReal} foi removido por ignorar os avisos de flood.`,
+                    text: `🚫 *REMOVIDO POR FLOOD* 🚫\n\n@${numeroReal} foi removido por ignorar os avisos de flood e atingir o limite de avisos.`,
                     mentions: [participant]
                 });
                 await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');

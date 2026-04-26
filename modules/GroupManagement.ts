@@ -1099,19 +1099,27 @@ class GroupManagement {
     async addUser(m: any, args: any[]): Promise<boolean> {
         if (!this._checkSocket()) return true;
         const groupJid = m.key.remoteJid;
-        let targets = args.map(a => a.replace(/\D/g, '') + '@s.whatsapp.net');
+        // Verificar se bot é admin usando o JID real do socket
+        const botJid = JidUtils.normalize(this.sock.user?.id);
+        const admins = await this._getGroupAdmins(groupJid);
 
-        if (targets.length === 0) {
-            await this.sock.sendMessage(groupJid, { text: '❌ Informe o número do usuário.\nExemplo: #add 244937...' }, { quoted: m });
+        if (!admins.includes(botJid)) {
+            await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para adicionar membros.' }, { quoted: m });
             return true;
         }
 
-        // Verificar se bot é admin
-        const admins = await this._getGroupAdmins(groupJid);
-        const botNumero = String(this.config.BOT_NUMERO_REAL).replace(/\D/g, '');
-        const botId = `${botNumero}@lid`;
-        if (!admins.includes(botId)) {
-            await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para adicionar membros.' }, { quoted: m });
+        // Construção dos JIDs alvos com tratamento de DDI
+        let targets = args.map(a => {
+            let num = a.replace(/\D/g, '');
+            // Se o número for curto (ex: 9 dígitos de Angola), assume DDI 244
+            if (num.length === 9 && (num.startsWith('9') || num.startsWith('2'))) {
+                num = '244' + num;
+            }
+            return num + '@s.whatsapp.net';
+        });
+
+        if (targets.length === 0) {
+            await this.sock.sendMessage(groupJid, { text: '❌ Informe o número do usuário.\nExemplo: #add 956464620' }, { quoted: m });
             return true;
         }
 
