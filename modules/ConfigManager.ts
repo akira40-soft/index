@@ -280,49 +280,25 @@ class ConfigManager {
     }
 
     /**
-    * Valida se um usuário é dono do bot respeitando LIDs e JIDs
-    */
-    isDono(numero: string | number, nomeBot: string = ''): boolean {
+     * Verifica se JID/Número é do dono (SILENCIOSO para não-donos)
+     */
+    isDono(numero: string, nome: string = ''): boolean {
         try {
-            // Normaliza o ID de entrada de forma agressiva mas preservando identidades LID
-            const idEntrada = String(numero).split('@')[0].split(':')[0].trim().replace('lid_', '');
+            // Importação dinâmica para evitar dependência circular se necessário, 
+            // mas JidUtils é utilitário puro, então importamos no topo.
+            // Nota: Se houver erro de circularidade, usaríamos id.split('@')[0] aqui.
+            const normalized = String(numero).split('@')[0].split(':')[0].replace('lid_', '');
 
-            // Log de auditoria para depuração (visível no terminal do Railway)
-            console.log(`[Dono Check] ID Recebido: "${idEntrada}" | Nome: "${nomeBot}"`);
-
-            // 1. Verifica pela lista de números/LIDs permitidos
-            const porId = this.DONO_USERS?.some(dono => {
-                const donoId = String(dono.numero).split('@')[0].split(':')[0].trim().replace('lid_', '');
-                const match = donoId === idEntrada;
-                if (match) console.log(`✅ [Dono Check] Match encontrado por ID: ${donoId}`);
-                return match;
+            const match = this.DONO_USERS.some(u => {
+                const uId = String(u.numero).split('@')[0].split(':')[0].replace('lid_', '');
+                return uId === normalized;
             });
-            if (porId) return true;
 
-            // 2. Fallback para comparação de dígitos puros (apenas se for numérico longo)
-            const digitsEntrada = idEntrada.replace(/\D/g, '');
-            if (digitsEntrada.length > 5) {
-                const porDigitos = this.DONO_USERS?.some(dono => {
-                    const donoDigits = String(dono.numero).replace(/\D/g, '');
-                    const match = donoDigits === digitsEntrada;
-                    if (match) console.log(`✅ [Dono Check] Match encontrado por Dígitos: ${donoDigits}`);
-                    return match;
-                });
-                if (porDigitos) return true;
+            if (match) {
+                console.log(`👑 [Dono Check] ROOT identificado: ${normalized} (${nome})`);
             }
 
-            // 3. Verificação por Apelido/Nome (PushName)
-            if (typeof nomeBot === 'string') {
-                const n = nomeBot.toLowerCase();
-                const matchAlias = this.DONO_APELIDOS.some(alias => n.includes(alias));
-                if (matchAlias) {
-                    console.log(`✅ [Dono Check] Match encontrado por Apelido: ${nomeBot}`);
-                    return true;
-                }
-            }
-
-            console.warn(`❌ [Dono Check] Acesso Negado para: ${idEntrada}`);
-            return false;
+            return match;
         } catch (e) {
             return false;
         }

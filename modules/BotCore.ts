@@ -699,6 +699,19 @@ class BotCore {
                 return;
             }
 
+            // ── REGRA DE OURO: DESCARTAR SPAM/LIXO ANTES DE QUALQUER COISA ──
+            const text = this.messageProcessor.extractText(m);
+            let isCommand = text.startsWith(this.config.PREFIXO || '#');
+            const isMention = text.includes(`@${this.BOT_JID?.split('@')[0]}`);
+            const isReplyToMe = m.message?.extendedTextMessage?.contextInfo?.participant === this.BOT_JID;
+            const isPrivate = !ehGrupo;
+
+            // Se for grupo e NÃO for comando/menção/reply, ignora IMEDIATAMENTE (silencioso)
+            // Isso protege o bot contra floods massivos em grupos grandes
+            if (ehGrupo && !isCommand && !isMention && !isReplyToMe) {
+                return;
+            }
+
             // [NFA] Feedback Imediato: Marca como entregue (2 ticks cinzas) assim que entra na fila
             if (this.presenceSimulator) {
                 this.presenceSimulator.simulateTicks(m, false, ehGrupo).catch(() => { });
@@ -787,7 +800,7 @@ class BotCore {
                 }
             }
 
-            const isCommand = this.messageProcessor.isCommand(textoFinal);
+            isCommand = isCommand || this.messageProcessor.isCommand(textoFinal);
 
             // ═══ FILTRO DE ÁUDIO EM GRUPO ═══
             // Em grupos, áudios SEM reply ao bot são completamente ignorados:
