@@ -512,9 +512,10 @@ class BotCore {
                     this.connectionStartTime = Date.now();
 
                     this._updateComponentsSocket(this.sock);
-                    this.BOT_JID = this.sock.user?.id;
-                    const normalizedJid = JidUtils.normalize(this.BOT_JID);
-                    this.logger.info(`🤖 Logado como: ${normalizedJid}`);
+                    // ✅ CRÍTICO: Normalizar o JID do bot para remover o ID do dispositivo (ex: :15)
+                    // Sem isso, isReplyToMe e isMention falham miseravelmente em grupos.
+                    this.BOT_JID = JidUtils.normalize(this.sock.user?.id);
+                    this.logger.info(`🤖 Logado como: ${this.BOT_JID}`);
 
                     // ✅ NOVO: Manter bot sempre disponível (nunca offline)
                     if (this.presenceSimulator) {
@@ -522,7 +523,7 @@ class BotCore {
                         this.logger.info('🟢 Status de presença: SEMPRE DISPONÍVEL');
                     }
 
-                    if (this.eventListeners.onConnected) this.eventListeners.onConnected(normalizedJid);
+                    if (this.eventListeners.onConnected) this.eventListeners.onConnected(this.BOT_JID!);
                 }
             });
 
