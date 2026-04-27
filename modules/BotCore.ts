@@ -249,7 +249,6 @@ class BotCore {
             let purged = 0;
 
             for (const file of files) {
-                // Se o arquivo for muito antigo ou corresponder aos padrões de sessão
                 const isStale = stalePatterns.some(p => file.startsWith(p));
                 if (isStale) {
                     try {
@@ -258,13 +257,19 @@ class BotCore {
                         const ageMs = Date.now() - stats.mtimeMs;
 
                         // Purgar agressivamente sessões e chaves de remetente (causa principal do Bad MAC)
-                        // Pre-keys apenas se tiverem mais de 24h
+                        // Pre-keys agora limpamos se tiverem mais de 1 hora (em vez de 24h)
+                        // Isso força a regeneração se o Signal se perder
                         if (file.startsWith('pre-key-')) {
-                            if (ageMs > 24 * 60 * 60 * 1000) {
+                            if (ageMs > 1 * 60 * 60 * 1000) {
                                 fs.unlinkSync(filePath);
                                 purged++;
                             }
+                        } else if (file.startsWith('sender-key-')) {
+                            // Chaves de grupo são as mais problemáticas — limpa sempre que houver suspeita
+                            fs.unlinkSync(filePath);
+                            purged++;
                         } else {
+                            // Outros tipos de sessão (app-state, etc) limpa sempre
                             fs.unlinkSync(filePath);
                             purged++;
                         }
@@ -433,6 +438,9 @@ class BotCore {
                 },
                 browser: Browsers.macOS('Akira-Bot'),
                 generateHighQualityLinkPreview: true,
+                syncFullHistory: false, // ✅ MODERNO: Não carrega histórico antigo (evita corromper chaves)
+                markOnlineOnConnect: true,
+                maxMsgRetryCount: 15, // ✅ AGRESSIVO: Tenta 15 vezes decriptar antes de dar erro
                 getMessage: async (key: any) => {
                     if (this.store) {
                         const msg = await this.store.loadMessage(key.remoteJid, key.id);
@@ -440,11 +448,11 @@ class BotCore {
                     }
                     return undefined;
                 },
-                connectTimeoutMs: 120000,
-                defaultQueryTimeoutMs: 120000,
-                keepAliveIntervalMs: 10000,
+                connectTimeoutMs: 60000,
+                defaultQueryTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000,
                 emitOwnEvents: false,
-                retryRequestDelayMs: 250
+                retryRequestDelayMs: 500
             };
 
             const agent = HFCorrections.createHFAgent();
