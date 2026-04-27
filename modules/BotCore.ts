@@ -710,9 +710,12 @@ class BotCore {
             const replyParticipantNumber = replyParticipant ? JidUtils.getNumber(replyParticipant) : null;
             const isReplyToMe = replyParticipantNumber === connectedBotNumber || replyParticipantNumber === envBotNumber;
 
-            // ✅ Nova verificação: O usuário chamou o bot pelo nome?
+            // ✅ Nova verificação: O usuário chamou o bot pelo nome ou por um apelido?
             const botName = String(this.config.BOT_NAME).toLowerCase();
-            const isCallingBot = text.toLowerCase().includes(botName);
+            const apelidosBot = this.config.DONO_APELIDOS || [];
+
+            const textLower = text.toLowerCase();
+            const isCallingBot = textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido));
 
             // Log de diagnóstico
             if (isCommand || isCallingBot || isMention || !ehGrupo) {
