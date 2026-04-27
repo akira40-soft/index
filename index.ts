@@ -325,20 +325,47 @@ function initializeServer() {
     res.json({ bot: stats, timestamp: new Date().toISOString() });
   });
 
-  // ═══ Rota: Reset Auth ═══
-  app.post('/reset-auth', async (req: any, res: any) => {
+  // ═══ Rota: Reset Auth (O "Botão de Pânico") ═══
+  app.get('/reset-auth', async (req: any, res: any) => {
     if (!botCore) {
-      return res.status(503).json({ status: 'error', message: 'Bot não inicializado' });
+      return res.status(503).send('Bot ainda inicializando...');
     }
     try {
       const fs = await import('fs');
       const authPath = botCore.config.AUTH_FOLDER;
-      if (fs.existsSync(authPath)) {
-        fs.rmSync(authPath, { recursive: true, force: true });
+
+      console.log(`⚠️ [RESET-AUTH] Solicitado via Web. Limpando: ${authPath}`);
+
+      // Fecha o socket antes de apagar os arquivos
+      if (botCore.sock) {
+        try { botCore.sock.logout(); } catch (e) { }
+        try { botCore.sock.end(); } catch (e) { }
       }
-      res.json({ status: 'success', message: 'Credenciais resetadas' });
+
+      if (fs.existsSync(authPath)) {
+        // Apaga tudo para um fresh start
+        fs.rmSync(authPath, { recursive: true, force: true });
+        console.log('✅ [RESET-AUTH] Pasta de autenticação eliminada com sucesso.');
+      }
+
+      res.send(`
+        <html>
+        <head><meta http-equiv="refresh" content="3;url=/"></head>
+        <body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding:50px;">
+          <h1>✅ SESSÃO RESETADA COM SUCESSO</h1>
+          <p>Todos os arquivos de autenticação foram apagados.</p>
+          <p>O bot irá reiniciar agora. Redirecionando para o QR Code em 3 segundos...</p>
+        </body>
+        </html>
+      `);
+
+      // Força a reinicialização do processo para garantir que o Baileys recarregue do zero
+      setTimeout(() => {
+        process.exit(0); // Railway vai reiniciar o container automaticamente
+      }, 1000);
+
     } catch (error: any) {
-      res.status(500).json({ status: 'error', message: error.message });
+      res.status(500).send('Erro ao resetar: ' + error.message);
     }
   });
 
