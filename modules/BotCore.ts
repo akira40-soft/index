@@ -637,22 +637,28 @@ class BotCore {
             this.pipelineLogCounter++;
             const shouldLog = this.pipelineLogCounter % this.PIPELINE_LOG_INTERVAL === 1;
 
+            const textRaw = m.message?.conversation || m.message?.extendedTextMessage?.text || '[Sem texto]';
+            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${m.key.remoteJid} | fromMe: ${m.key.fromMe} | Txt: "${String(textRaw).substring(0, 15)}"`);
+
             if (shouldLog) this.logger.debug('🔹 [PIPELINE] Iniciando');
-            if (!m) { this.logger.debug('🔹 [PIPELINE] m null'); return; }
-            if (!m.message) { this.logger.debug('🔹 [PIPELINE] msg vazia'); return; }
+            if (!m) { console.log('❌ DROP: m null'); return; }
+            if (!m.message) { console.log('❌ DROP: msg vazia (provável falha de decrypt Baileys)'); return; }
 
             // ✅ VALIDAÇÃO RÍGIDA: Ignorar mensagens do próprio bot
             if (m.key.fromMe) {
-                if (shouldLog) this.logger.debug('⏭️ Mensagem é do bot (fromMe=true)');
+                console.log('❌ DROP: fromMe=true');
                 return;
             }
 
-            if (m.message.protocolMessage) return;
+            if (m.message.protocolMessage) {
+                console.log('❌ DROP: protocolMessage');
+                return;
+            }
 
             if (this.connectionStartTime && m.messageTimestamp) {
                 const messageTimeMs = Number(m.messageTimestamp) * 1000;
                 if (messageTimeMs < this.connectionStartTime - 5000) {
-                    if (shouldLog) this.logger.debug(`⏭️ Ignorado mensagem antiga (backlog): ${new Date(messageTimeMs).toISOString()}`);
+                    console.log(`❌ DROP: Mensagem antiga. Atual: ${this.connectionStartTime}, Msg: ${messageTimeMs}`);
                     return;
                 }
             }
