@@ -253,26 +253,12 @@ class BotCore {
                 if (isStale) {
                     try {
                         const filePath = path.join(authFolder, file);
-                        const stats = fs.statSync(filePath);
-                        const ageMs = Date.now() - stats.mtimeMs;
-
-                        // Purgar agressivamente sessões e chaves de remetente (causa principal do Bad MAC)
-                        // Pre-keys agora limpamos se tiverem mais de 1 hora (em vez de 24h)
-                        // Isso força a regeneração se o Signal se perder
-                        if (file.startsWith('pre-key-')) {
-                            if (ageMs > 1 * 60 * 60 * 1000) {
-                                fs.unlinkSync(filePath);
-                                purged++;
-                            }
-                        } else if (file.startsWith('sender-key-')) {
-                            // Chaves de grupo são as mais problemáticas — limpa sempre que houver suspeita
-                            fs.unlinkSync(filePath);
-                            purged++;
-                        } else {
-                            // Outros tipos de sessão (app-state, etc) limpa sempre
-                            fs.unlinkSync(filePath);
-                            purged++;
-                        }
+                        // 🔥 SOLUÇÃO DEFINITIVA (SILVER BULLET):
+                        // Apagar todas as chaves (exceto creds.json) SEMPRE que o bot iniciar.
+                        // Isso zera a criptografia local. O WhatsApp renegocia tudo no primeiro contato.
+                        // Fim do loop "Closing open session".
+                        fs.unlinkSync(filePath);
+                        purged++;
                     } catch (_) { }
                 }
             }
@@ -716,13 +702,17 @@ class BotCore {
             const isMention = text.includes(`@${this.BOT_JID?.split('@')[0]}`);
             const isReplyToMe = m.message?.extendedTextMessage?.contextInfo?.participant === this.BOT_JID;
 
-            // Log de diagnóstico para o dono
-            if (isCommand || !ehGrupo) {
-                console.log(`📩 [RECEBIDO] De: ${numero} | Texto: "${text.substring(0, 30)}" | Cmd: ${isCommand} | Grupo: ${ehGrupo}`);
+            // ✅ Nova verificação: O usuário chamou o bot pelo nome?
+            const botName = (this.config.BOT_NAME || 'akira').toLowerCase();
+            const isCallingBot = text.toLowerCase().includes(botName);
+
+            // Log de diagnóstico
+            if (isCommand || isCallingBot || isMention || !ehGrupo) {
+                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${text.substring(0, 20)}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
             }
 
-            // Se for grupo e NÃO for comando/menção/reply, ignora IMEDIATAMENTE (silencioso)
-            if (ehGrupo && !isCommand && !isMention && !isReplyToMe) {
+            // Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, ignora IMEDIATAMENTE
+            if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
                 return;
             }
 
