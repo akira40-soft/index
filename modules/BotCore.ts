@@ -434,13 +434,13 @@ class BotCore {
                 logger: pino({ level: 'silent' }),
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+                    keys: state.keys // ✅ CRÍTICO: Removido o CacheableSignalKeyStore. Acesso DIRETO ao disco evita o loop de dessincronização.
                 },
                 browser: Browsers.macOS('Akira-Bot'),
                 generateHighQualityLinkPreview: true,
-                syncFullHistory: false, // ✅ MODERNO: Não carrega histórico antigo (evita corromper chaves)
+                syncFullHistory: false,
                 markOnlineOnConnect: true,
-                maxMsgRetryCount: 15, // ✅ AGRESSIVO: Tenta 15 vezes decriptar antes de dar erro
+                maxMsgRetryCount: 15,
                 getMessage: async (key: any) => {
                     if (this.store) {
                         const msg = await this.store.loadMessage(key.remoteJid, key.id);
@@ -448,11 +448,13 @@ class BotCore {
                     }
                     return undefined;
                 },
+                // ✅ AJUSTES PARA AMBIENTES DE CONTAINER (RAILWAY)
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
                 keepAliveIntervalMs: 30000,
                 emitOwnEvents: false,
-                retryRequestDelayMs: 500
+                retryRequestDelayMs: 500,
+                transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 100 } // ✅ Evita arquivos corrompidos no disco
             };
 
             const agent = HFCorrections.createHFAgent();
