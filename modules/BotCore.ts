@@ -700,11 +700,18 @@ class BotCore {
             const text = (this.messageProcessor.extractText(m) || '').trim();
             const prefixo = this.config.PREFIXO || '#';
             let isCommand = text.startsWith(prefixo);
-            const isMention = text.includes(`@${this.BOT_JID?.split('@')[0]}`);
-            const isReplyToMe = m.message?.extendedTextMessage?.contextInfo?.participant === this.BOT_JID;
+            // 🌟 COMPARAÇÃO À PROVA DE BALAS (Usa a variável do Railway E o Socket Atual)
+            const connectedBotNumber = JidUtils.getNumber(this.BOT_JID || '');
+            const envBotNumber = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
+
+            const isMention = text.includes(`@${connectedBotNumber}`) || text.includes(`@${envBotNumber}`);
+
+            const replyParticipant = m.message?.extendedTextMessage?.contextInfo?.participant;
+            const replyParticipantNumber = replyParticipant ? JidUtils.getNumber(replyParticipant) : null;
+            const isReplyToMe = replyParticipantNumber === connectedBotNumber || replyParticipantNumber === envBotNumber;
 
             // ✅ Nova verificação: O usuário chamou o bot pelo nome?
-            const botName = (this.config.BOT_NAME || 'akira').toLowerCase();
+            const botName = String(this.config.BOT_NAME).toLowerCase();
             const isCallingBot = text.toLowerCase().includes(botName);
 
             // Log de diagnóstico
