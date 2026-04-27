@@ -700,14 +700,18 @@ class BotCore {
             }
 
             // ── REGRA DE OURO: DESCARTAR SPAM/LIXO ANTES DE QUALQUER COISA ──
-            const text = this.messageProcessor.extractText(m);
-            let isCommand = text.startsWith(this.config.PREFIXO || '#');
+            const text = (this.messageProcessor.extractText(m) || '').trim();
+            const prefixo = this.config.PREFIXO || '#';
+            let isCommand = text.startsWith(prefixo);
             const isMention = text.includes(`@${this.BOT_JID?.split('@')[0]}`);
             const isReplyToMe = m.message?.extendedTextMessage?.contextInfo?.participant === this.BOT_JID;
-            const isPrivate = !ehGrupo;
+
+            // Log de diagnóstico para o dono
+            if (isCommand || !ehGrupo) {
+                console.log(`📩 [RECEBIDO] De: ${numero} | Texto: "${text.substring(0, 30)}" | Cmd: ${isCommand} | Grupo: ${ehGrupo}`);
+            }
 
             // Se for grupo e NÃO for comando/menção/reply, ignora IMEDIATAMENTE (silencioso)
-            // Isso protege o bot contra floods massivos em grupos grandes
             if (ehGrupo && !isCommand && !isMention && !isReplyToMe) {
                 return;
             }
