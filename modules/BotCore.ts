@@ -198,78 +198,13 @@ class BotCore {
     }
 
     async start() {
-        this._installBadMACHandler();
         await this.initialize();
         await this.connect();
     }
 
-    /**
-     * Silencia erros "Bad MAC" não fatais do libsignal no log.
-     * O bot continua funcionando normalmente — a mensagem simplesmente não
-     * pôde ser decriptada (sessão Signal expirada). Isso é esperado após
-     * reconexões e resolve-se sozinho quando a sessão é renegociada.
-     */
-    private _installBadMACHandler(): void {
-        // 1. Silenciar unhandledRejection (prevenir logs de sistema)
-        const originalEmit = process.emit.bind(process);
-        (process as any).emit = function (event: string, error: any, ...args: any[]) {
-            if (event === 'unhandledRejection' || event === 'uncaughtException') {
-                const msg = error?.message || String(error);
-                if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt') || msg.includes('known session')) {
-                    return false;
-                }
-            }
-            return originalEmit(event, error, ...args);
-        };
 
-        // 2. Silenciar console.error (prevenir ruído visual no terminal)
-        const originalError = console.error;
-        console.error = (...args: any[]) => {
-            const msg = args.join(' ');
-            if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt') || msg.includes('known session')) {
-                return;
-            }
-            originalError.apply(console, args);
-        };
-    }
 
-    /**
-     * Purga arquivos de sessão Signal corrompidos/expirados.
-     * Mantém creds.json intacto — sem necessidade de novo QR.
-     * Chamado automaticamente na conexão bem-sucedida.
-     */
-    private async _purgeCorruptedSessions(): Promise<void> {
-        try {
-            const authFolder = this.config.AUTH_FOLDER;
-            if (!fs.existsSync(authFolder)) return;
 
-            const files = fs.readdirSync(authFolder);
-            // Padrões que costumam causar "Bad MAC" quando dessincronizados
-            const stalePatterns = ['session-', 'sender-key-', 'app-state-sync-', 'pre-key-'];
-            let purged = 0;
-
-            for (const file of files) {
-                const isStale = stalePatterns.some(p => file.startsWith(p));
-                if (isStale) {
-                    try {
-                        const filePath = path.join(authFolder, file);
-                        // 🔥 SOLUÇÃO DEFINITIVA (SILVER BULLET):
-                        // Apagar todas as chaves (exceto creds.json) SEMPRE que o bot iniciar.
-                        // Isso zera a criptografia local. O WhatsApp renegocia tudo no primeiro contato.
-                        // Fim do loop "Closing open session".
-                        fs.unlinkSync(filePath);
-                        purged++;
-                    } catch (_) { }
-                }
-            }
-
-            if (purged > 0) {
-                this.logger.info(`🧹 [Bad MAC Fix] ${purged} arquivos de sinal/sessão obsoletos removidos.`);
-            }
-        } catch (e: any) {
-            this.logger.warn(`⚠️ [Bad MAC Fix] Erro ao purgar sessões: ${e.message}`);
-        }
-    }
 
     /**
      * Auto-atualiza o yt-dlp em background para garantir downloads funcionando
@@ -402,13 +337,6 @@ class BotCore {
     }
 
     async connect(): Promise<void> {
-        // ✅ [CRÍTICO] Purgar sessões corrompidas ANTES de carregar o estado
-        // Isso previne que o Baileys carregue arquivos "Bad MAC" na memória
-        await this._purgeCorruptedSessions().catch(() => { });
-
-        // ✅ Instalar silenciador de ruído Signal (Bad MAC)
-        this._installBadMACHandler();
-
         try {
             const { state, saveCreds } = await useMultiFileAuthState(this.config.AUTH_FOLDER);
             const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -420,7 +348,7 @@ class BotCore {
                 logger: pino({ level: 'silent' }),
                 auth: {
                     creds: state.creds,
-                    keys: state.keys // ✅ CRÍTICO: Removido o CacheableSignalKeyStore. Acesso DIRETO ao disco evita o loop de dessincronização.
+                    keys: makeCacheableSignalKeyStore(state.keys, this.logger)
                 },
                 browser: Browsers.macOS('Akira-Bot'),
                 generateHighQualityLinkPreview: true,
@@ -437,10 +365,7 @@ class BotCore {
                 // ✅ AJUSTES PARA AMBIENTES DE CONTAINER (RAILWAY)
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
-                keepAliveIntervalMs: 30000,
-                emitOwnEvents: false,
-                retryRequestDelayMs: 500,
-                transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 100 } // ✅ Evita arquivos corrompidos no disco
+                transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 10 }
             };
 
             const agent = HFCorrections.createHFAgent();
