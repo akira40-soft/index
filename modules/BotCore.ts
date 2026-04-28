@@ -648,14 +648,28 @@ class BotCore {
             const textLower = text.toLowerCase();
             const isCallingBot = textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido));
 
-            // Log de diagnóstico
-            if (isCommand || isCallingBot || isMention || !ehGrupo) {
-                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${text.substring(0, 20)}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
+            const nome = await this._resolveUserName(m, numero, remoteJid);
+            const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
+
+            // Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, escuta passivamente e ignora
+            if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
+                if (text && text.length > 0) {
+                    const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
+                    this.apiClient.listenMessage({
+                        usuario: nome,
+                        numero: numeroReal,
+                        mensagem: text,
+                        tipo_conversa: 'grupo',
+                        grupo_id: remoteJid,
+                        grupo_nome: grupoNome
+                    }).catch(() => { });
+                }
+                return;
             }
 
-            // Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, ignora IMEDIATAMENTE
-            if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
-                return;
+            // Log de diagnóstico para mensagens que serão processadas
+            if (isCommand || isCallingBot || isMention || !ehGrupo) {
+                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${text.substring(0, 20)}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
             }
 
             // [NFA] Feedback Imediato: Marca como entregue (2 ticks cinzas) assim que entra na fila
@@ -663,10 +677,6 @@ class BotCore {
                 this.presenceSimulator.simulateTicks(m, false, ehGrupo).catch(() => { });
             }
 
-            const nome = await this._resolveUserName(m, numero, remoteJid);
-            // 🔧 CRITICAL FIX: Normalize number to pure digits, removing 'lid_' prefix or any other suffix
-            // Garante que numeroReal é sempre apenas dígitos puros, sem prefixos ou sufixos
-            const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
             const conversaType = conversationType;
 
             if (shouldLog) {
@@ -794,20 +804,16 @@ class BotCore {
             }
 
             if (!deveResponder) {
-                if (ehGrupo) {
-                    this.logger.debug(`⏭️ [ESCUTA GRUPO] ${nome}: "${textoFinal.substring(0, 50)}"`);
-                    const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
-                    this.apiClient.listenMessage({
-                        usuario: nome,
-                        numero: numeroReal,
-                        mensagem: textoFinal,
-                        tipo_conversa: 'grupo',
-                        grupo_id: remoteJid,
-                        grupo_nome: grupoNome
-                    }).catch(() => { });
-                } else {
-                    this.logger.debug(`⏭️ [IGNORADO] ${nome}: "${textoFinal.substring(0, 50)}" (genérico${ehGrupo ? ' em grupo' : ''})`);
-                }
+                this.logger.debug(`⏭️ [ESCUTA PASSIVA] ${nome}: "${textoFinal.substring(0, 50)}"`);
+                const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
+                this.apiClient.listenMessage({
+                    usuario: nome,
+                    numero: numeroReal,
+                    mensagem: textoFinal,
+                    tipo_conversa: ehGrupo ? 'grupo' : 'pv',
+                    grupo_id: ehGrupo ? remoteJid : null,
+                    grupo_nome: grupoNome
+                }).catch(() => { });
                 return;
             }
 
