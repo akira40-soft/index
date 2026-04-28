@@ -77,19 +77,19 @@ class APIClient {
         };
 
         // Adiciona contexto de reply se existir
-        if (mensagem_citada) {
-            // ✅ CORREÇÃO: Também garantir que quoted_author_numero é sempre apenas dígitos
-            const quotedAuthorNumerolimpo = JidUtils.cleanPhoneNumber(reply_metadata.quoted_author_numero) || 'desconhecido';
+        // Enriquecer com metadados de reply (se existirem)
+        if (mensagem_citada || (reply_metadata && reply_metadata.is_reply)) {
+            const quotedAuthorNumerolimpo = JidUtils.cleanPhoneNumber(reply_metadata?.quoted_author_numero) || 'desconhecido';
 
-            payload.mensagem_citada = String(mensagem_citada).substring(0, 3000);
+            payload.mensagem_citada = String(mensagem_citada || reply_metadata?.quoted_text_original || '').substring(0, 1000);
             payload.reply_metadata = {
                 is_reply: true,
-                reply_to_bot: Boolean(reply_metadata.reply_to_bot),
-                quoted_author_name: String(reply_metadata.quoted_author_name || 'desconhecido').substring(0, 50),
+                reply_to_bot: Boolean(reply_metadata?.reply_to_bot),
+                quoted_author_name: String(reply_metadata?.quoted_author_name || 'desconhecido').substring(0, 200),
                 quoted_author_numero: quotedAuthorNumerolimpo,
-                quoted_type: String(reply_metadata.quoted_type || 'texto'),
-                quoted_text_original: String(reply_metadata.quoted_text_original || '').substring(0, 200),
-                context_hint: String(reply_metadata.context_hint || '')
+                quoted_type: String(reply_metadata?.quoted_type || 'texto'),
+                quoted_text_original: String(reply_metadata?.quoted_text_original || '').substring(0, 1000),
+                context_hint: String(reply_metadata?.contextHint || reply_metadata?.context_hint || 'contexto_geral')
             };
         } else {
             payload.reply_metadata = {

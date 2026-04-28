@@ -648,6 +648,12 @@ class BotCore {
             const textLower = text.toLowerCase();
             const isCallingBot = textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido));
 
+            const replyInfo = await this.messageProcessor.extractReplyInfo(m);
+            // Se for reply, vamos tentar resolver o nome do autor citado para enriquecer o contexto
+            if (replyInfo && replyInfo.isReply && replyInfo.participantJidCitado) {
+                replyInfo.quoted_author_name = await this.resolveAuthorName(replyInfo.participantJidCitado, remoteJid);
+            }
+
             const nome = await this._resolveUserName(m, numero, remoteJid);
             const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
 
@@ -661,7 +667,17 @@ class BotCore {
                         mensagem: text,
                         tipo_conversa: 'grupo',
                         grupo_id: remoteJid,
-                        grupo_nome: grupoNome
+                        grupo_nome: grupoNome,
+                        mensagem_citada: replyInfo?.textoMensagemCitada,
+                        reply_metadata: {
+                            is_reply: !!replyInfo,
+                            reply_to_bot: !!replyInfo?.ehRespostaAoBot,
+                            quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
+                            quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
+                            quoted_type: replyInfo?.quotedType || 'texto',
+                            quoted_text_original: replyInfo?.quotedTextOriginal || '',
+                            context_hint: replyInfo?.contextHint || 'contexto_geral'
+                        }
                     }).catch(() => { });
                 }
                 return;
@@ -693,7 +709,6 @@ class BotCore {
             const temAudio = this.messageProcessor.hasAudio(m);
             const caption = this.messageProcessor.extractText(m) || '';
             const participant = m.key.participant || m.key.remoteJid;
-            const replyInfo = await this.messageProcessor.extractReplyInfo(m);
             const temSticker = !!m.message?.stickerMessage;
             const textoFinal = texto || caption;
 
@@ -812,7 +827,17 @@ class BotCore {
                     mensagem: textoFinal,
                     tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                     grupo_id: ehGrupo ? remoteJid : null,
-                    grupo_nome: grupoNome
+                    grupo_nome: grupoNome,
+                    mensagem_citada: replyInfo?.textoMensagemCitada,
+                    reply_metadata: {
+                        is_reply: !!replyInfo,
+                        reply_to_bot: !!replyInfo?.ehRespostaAoBot,
+                        quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
+                        quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
+                        quoted_type: replyInfo?.quotedType || 'texto',
+                        quoted_text_original: replyInfo?.quotedTextOriginal || '',
+                        context_hint: replyInfo?.contextHint || 'contexto_geral'
+                    }
                 }).catch(() => { });
                 return;
             }
