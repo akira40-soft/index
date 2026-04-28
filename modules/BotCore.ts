@@ -628,14 +628,22 @@ class BotCore {
             }
 
             // ── REGRA DE OURO: DESCARTAR SPAM/LIXO ANTES DE QUALQUER COISA ──
-            const text = (this.messageProcessor.extractText(m) || '').trim();
+            // ✅ EXTRAÇÃO DE CONTEÚDO (Necessário para Moderation e IA)
+            const texto = this.messageProcessor.extractText(m);
+            const temImagem = this.messageProcessor.hasImage(m);
+            const temAudio = this.messageProcessor.hasAudio(m);
+            const caption = this.messageProcessor.extractText(m) || '';
+            const participant = m.key.participant || m.key.remoteJid;
+            const temSticker = !!m.message?.stickerMessage;
+            const textoFinal = (texto || caption).trim();
+
             const prefixo = this.config.PREFIXO || '#';
-            let isCommand = text.startsWith(prefixo);
+            let isCommand = textoFinal.startsWith(prefixo);
             // 🌟 COMPARAÇÃO À PROVA DE BALAS (Usa a variável do Railway E o Socket Atual)
             const connectedBotNumber = JidUtils.getNumber(this.BOT_JID || '');
             const envBotNumber = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
-            const isMention = text.includes(`@${connectedBotNumber}`) || text.includes(`@${envBotNumber}`);
+            const isMention = textoFinal.includes(`@${connectedBotNumber}`) || textoFinal.includes(`@${envBotNumber}`);
 
             const replyParticipant = m.message?.extendedTextMessage?.contextInfo?.participant;
             const replyParticipantNumber = replyParticipant ? JidUtils.getNumber(replyParticipant) : null;
@@ -645,7 +653,7 @@ class BotCore {
             const botName = String(this.config.BOT_NAME).toLowerCase();
             const apelidosBot = this.config.DONO_APELIDOS || [];
 
-            const textLower = text.toLowerCase();
+            const textLower = textoFinal.toLowerCase();
             const isCallingBot = textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido));
 
             const replyInfo = await this.messageProcessor.extractReplyInfo(m);
@@ -657,63 +665,14 @@ class BotCore {
             const nome = await this._resolveUserName(m, numero, remoteJid);
             const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
 
-            // Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, escuta passivamente e ignora
-            if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
-                if (text && text.length > 0) {
-                    const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
-                    this.apiClient.listenMessage({
-                        usuario: nome,
-                        numero: numeroReal,
-                        mensagem: text,
-                        tipo_conversa: 'grupo',
-                        grupo_id: remoteJid,
-                        grupo_nome: grupoNome,
-                        mensagem_citada: replyInfo?.textoMensagemCitada,
-                        reply_metadata: {
-                            is_reply: !!replyInfo,
-                            reply_to_bot: !!replyInfo?.ehRespostaAoBot,
-                            quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
-                            quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
-                            quoted_type: replyInfo?.quotedType || 'texto',
-                            quoted_text_original: replyInfo?.quotedTextOriginal || '',
-                            context_hint: replyInfo?.contextHint || 'contexto_geral'
-                        }
-                    }).catch(() => { });
-                }
-                return;
-            }
-
-            // Log de diagnóstico para mensagens que serão processadas
-            if (isCommand || isCallingBot || isMention || !ehGrupo) {
-                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${text.substring(0, 20)}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
-            }
-
-            // [NFA] Feedback Imediato: Marca como entregue (2 ticks cinzas) assim que entra na fila
-            if (this.presenceSimulator) {
-                this.presenceSimulator.simulateTicks(m, false, ehGrupo).catch(() => { });
-            }
-
-            const conversaType = conversationType;
-
-            if (shouldLog) {
-                this.logger.debug(`🔹 [PIPELINE] ${numeroReal} (${conversaType}) remoteJid=${remoteJid.substring(0, 20)} ehGrupo=${ehGrupo}`);
-            }
-
+            // 0. VERIFICAÇÃO DE BLACKLIST
             if (this.moderationSystem?.isBlacklisted(numeroReal)) {
                 this.logger.debug(`🚫 Banido: ${nome}`);
                 return;
             }
 
-            const texto = this.messageProcessor.extractText(m);
-            const temImagem = this.messageProcessor.hasImage(m);
-            const temAudio = this.messageProcessor.hasAudio(m);
-            const caption = this.messageProcessor.extractText(m) || '';
-            const participant = m.key.participant || m.key.remoteJid;
-            const temSticker = !!m.message?.stickerMessage;
-            const textoFinal = texto || caption;
-
             // ✅ MODERATION CHECKS (Prioridade Máxima em Grupos)
-            // Deve rodar antes de comandos e antes de qualquer decisão da IA para garantir segurança total
+            // Deve rodar para TODA mensagem, mesmo as que não são direcionadas ao bot
             if (ehGrupo && this.moderationSystem) {
                 let isAdmin = false;
                 try {
@@ -721,7 +680,7 @@ class BotCore {
                 } catch (e) { isAdmin = false; }
 
                 if (!isAdmin) {
-                    // -1. Verifica se usuário está mutado (Silenciado = Apaga TUDO)
+                    // -1. Verifica se usuário está mutado
                     if (this.moderationSystem.isMuted(remoteJid, participant)) {
                         await this.sock.sendMessage(remoteJid, { delete: m.key });
                         return;
@@ -729,7 +688,6 @@ class BotCore {
 
                     // 0. AntiFlood / AntiSpam
                     if (this.moderationSystem.isAntiSpamActive(remoteJid)) {
-                        // Normaliza o participant para evitar erros com multi-device (:suffix)
                         const normalizedParticipant = JidUtils.normalize(participant);
                         const floodStatus = this.moderationSystem.checkFlood(remoteJid, normalizedParticipant);
                         if (floodStatus.action !== 'none') {
@@ -763,12 +721,68 @@ class BotCore {
                         const bwStatus = this.moderationSystem.checkBadwords(textoFinal, remoteJid, participant);
                         if (bwStatus.action !== 'none') {
                             await this.handleViolation(m, `badword_${bwStatus.action}`, bwStatus);
-                            // Apaga as mensagens recentes independente da ação
                             await this._deleteRecentMessages(remoteJid, participant, 5, m.key.id);
                             return;
                         }
                     }
                 }
+            }
+
+            // ✅ XP para TODA mensagem em grupo (incluindo as não direcionadas ao bot)
+            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
+                this.groupManagement?.groupSettings[remoteJid]?.leveling) {
+                const numeroLimpoXP = JidUtils.cleanPhoneNumber(numeroReal) || numeroReal;
+                const xpResult = this.levelSystem.awardXp(remoteJid, numeroLimpoXP, 10);
+                if (xpResult?.leveled) {
+                    this.logger.info(`🎉 [LEVEL UP] ${nome} você foi elevado ao nível ${xpResult.rec?.level}!`);
+                    this.sock.sendMessage(remoteJid, {
+                        text: `🎉 *@${numeroReal}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
+                        mentions: [m.key.participant || remoteJid]
+                    }).catch(() => { });
+                }
+            }
+
+            // Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, escuta passivamente e ignora
+            if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
+                if (textoFinal && textoFinal.length > 0) {
+                    const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
+                    this.apiClient.listenMessage({
+                        usuario: nome,
+                        numero: numeroReal,
+                        mensagem: textoFinal,
+                        tipo_conversa: 'grupo',
+                        grupo_id: remoteJid,
+                        grupo_nome: grupoNome,
+                        is_group: true,
+                        mensagem_citada: replyInfo?.textoMensagemCitada,
+                        reply_metadata: {
+                            is_reply: !!replyInfo,
+                            reply_to_bot: !!replyInfo?.ehRespostaAoBot,
+                            quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
+                            quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
+                            quoted_type: replyInfo?.quotedType || 'texto',
+                            quoted_text_original: replyInfo?.quotedTextOriginal || '',
+                            context_hint: replyInfo?.contextHint || 'contexto_geral'
+                        }
+                    }).catch(() => { });
+                }
+                return;
+            }
+
+            // Log de diagnóstico para mensagens que serão processadas
+            if (isCommand || isCallingBot || isMention || !ehGrupo) {
+                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${textoFinal.substring(0, 20)}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
+            }
+
+            // [NFA] Feedback Imediato: Marca como entregue (2 ticks cinzas) assim que entra na fila
+            if (this.presenceSimulator) {
+                this.presenceSimulator.simulateTicks(m, false, ehGrupo).catch(() => { });
+            }
+
+            const conversaType = conversationType;
+
+            if (shouldLog) {
+                this.logger.debug(`🔹 [PIPELINE] ${numeroReal} (${conversaType}) remoteJid=${remoteJid.substring(0, 20)} ehGrupo=${ehGrupo}`);
             }
 
             isCommand = isCommand || this.messageProcessor.isCommand(textoFinal);
@@ -801,23 +815,6 @@ class BotCore {
             // 3. Decisão de resposta da IA
             const deveResponder = this.shouldRespondToAI(m, textoFinal, ehGrupo, replyInfo, nome, numeroReal);
 
-            // ✅ XP para TODA mensagem em grupo ANTES do return ou processamento da IA
-            if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem &&
-                this.groupManagement?.groupSettings[remoteJid]?.leveling) {
-                // 🔧 Garantir que numeroReal é limpo sem 'lid_' prefix
-                const numeroLimpoXP = JidUtils.cleanPhoneNumber(numeroReal) || numeroReal;
-                const xpResult = this.levelSystem.awardXp(remoteJid, numeroLimpoXP, 10);
-                if (xpResult?.leveled) {
-                    this.logger.info(`🎉 [LEVEL UP] ${nome} → Nível ${xpResult.rec?.level}!`);
-                    this.sock.sendMessage(remoteJid, {
-                        text: `🎉 *@${numeroLimpoXP}* subiu para o *Nível ${xpResult.rec?.level}*! 🏆`,
-                        mentions: [m.key.participant || remoteJid]
-                    }).catch(() => { });
-                } else {
-                    this.logger.debug(`📈 [LEVEL] ${nome} +10 XP | total: ${xpResult?.rec?.xp}`);
-                }
-            }
-
             if (!deveResponder) {
                 this.logger.debug(`⏭️ [ESCUTA PASSIVA] ${nome}: "${textoFinal.substring(0, 50)}"`);
                 const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
@@ -828,6 +825,7 @@ class BotCore {
                     tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                     grupo_id: ehGrupo ? remoteJid : null,
                     grupo_nome: grupoNome,
+                    is_group: ehGrupo,
                     mensagem_citada: replyInfo?.textoMensagemCitada,
                     reply_metadata: {
                         is_reply: !!replyInfo,
