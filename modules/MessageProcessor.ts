@@ -173,12 +173,15 @@ class MessageProcessor {
                     return '[figurinha]';
                 case 'documentMessage':
                     return (msg.documentMessage && msg.documentMessage.caption) || '[documento]';
+                case 'reactionMessage':
+                    return `[reação: ${msg.reactionMessage.text}]`;
                 case 'pollCreationMessageV3':
                 case 'pollCreationMessage':
                     return `[enquete: ${msg[tipo].name}]`;
                 default:
                     return '';
             }
+
         } catch (e: any) {
             return '';
         }

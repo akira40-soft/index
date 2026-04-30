@@ -557,28 +557,44 @@ class BotCore {
 
     async processMessage(m: any): Promise<void> {
         try {
-            if (this.isMessageProcessed(m.key)) return;
-
             this.pipelineLogCounter++;
             const shouldLog = this.pipelineLogCounter % this.PIPELINE_LOG_INTERVAL === 1;
 
             const textRaw = m.message?.conversation || m.message?.extendedTextMessage?.text || '[Sem texto]';
-            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${m.key.remoteJid} | fromMe: ${m.key.fromMe} | Txt: "${String(textRaw).substring(0, 15)}"`);
 
             if (shouldLog) this.logger.debug('🔹 [PIPELINE] Iniciando');
-            if (!m) { console.log('❌ DROP: m null'); return; }
-            if (!m.message) { console.log('❌ DROP: msg vazia (provável falha de decrypt Baileys)'); return; }
+            if (!m) return;
+
+            // ✅ CORREÇÃO CRÍTICA: Se a mensagem falhou ao descriptografar (m.message nulo),
+            // NÃO a marquemos como processada e NÃO prossigamos. 
+            // O Baileys tentará descriptografar novamente quando receber as chaves (retry).
+            if (!m.message) {
+                const jid = m.key.remoteJid;
+                this.logger.debug(`⚠️ Falha de decrypt (Bad MAC?) para ${jid}. Aguardando retry...`);
+
+                // Se for o dono, tentamos "cutucar" a conexão enviando uma msg reativa
+                // Isso força o WhatsApp do usuário a negociar novas chaves (Signal Session Reset)
+                const isOwner = this.config?.isDono && this.config.isDono(jid);
+                if (isOwner) {
+                    this.logger.warn(`🔧 [REPAIR] Tentando reparar sessão com o dono: ${jid}`);
+                    // Enviamos um aviso silencioso ou uma reação (se suportado) ou apenas uma msg
+                    this.sock.sendMessage(jid, { text: '⚠️ _Akira: Erro de sincronização detectado. Se eu não responder em 10 segundos, envie "AKIRA" novamente._' }).catch(() => { });
+                }
+                return;
+            }
+
+
+
+            // Agora sim verificamos se já processamos este ID com sucesso
+            if (this.isMessageProcessed(m.key)) return;
+
+            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${m.key.remoteJid} | fromMe: ${m.key.fromMe} | Txt: "${String(textRaw).substring(0, 15)}"`);
 
             // ✅ VALIDAÇÃO RÍGIDA: Ignorar mensagens do próprio bot
-            if (m.key.fromMe) {
-                console.log('❌ DROP: fromMe=true');
-                return;
-            }
+            if (m.key.fromMe) return;
 
-            if (m.message.protocolMessage) {
-                console.log('❌ DROP: protocolMessage');
-                return;
-            }
+            if (m.message.protocolMessage) return;
+
 
             if (this.connectionStartTime && m.messageTimestamp) {
                 const messageTimeMs = Number(m.messageTimestamp) * 1000;
@@ -635,7 +651,19 @@ class BotCore {
             const caption = this.messageProcessor.extractText(m) || '';
             const participant = m.key.participant || m.key.remoteJid;
             const temSticker = !!m.message?.stickerMessage;
-            const textoFinal = (texto || caption).trim();
+            let textoFinal = (texto || caption).trim();
+
+            // ✅ IDENTIFICAÇÃO DE MÍDIA SEM TEXTO (Para IA responder a qualquer tipo de msg)
+            if (!textoFinal) {
+                if (temSticker) textoFinal = '[FIGURINHA]';
+                else if (temImagem) textoFinal = '[IMAGEM SEM LEGENDA]';
+                else if (temAudio) textoFinal = '[ÁUDIO]';
+                else if (m.message?.videoMessage) textoFinal = '[VÍDEO]';
+                else if (m.message?.documentMessage) textoFinal = '[DOCUMENTO]';
+                else if (m.message?.contactMessage) textoFinal = '[CONTATO]';
+                else if (m.message?.locationMessage) textoFinal = '[LOCALIZAÇÃO]';
+            }
+
 
             const prefixo = this.config.PREFIXO || '#';
             let isCommand = textoFinal.startsWith(prefixo);
@@ -872,7 +900,8 @@ class BotCore {
                 await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo, true);
             } else {
                 // Se for texto ou qualquer outra msg com texto (sticker com legenda, etc)
-                await this.handleTextMessage(m, nome, numeroReal, texto || caption, replyInfo, ehGrupo);
+                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo);
+
             }
         } catch (error: any) {
             const errMsg = error?.message || String(error) || 'erro desconhecido';
@@ -1008,6 +1037,11 @@ class BotCore {
 
             await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
             await this.presenceSimulator.simulateTicks(m, true, ehGrupo);
+
+            // 🛠️ AGENTIC UPGRADE: Processa ações remotas solicitadas pela IA
+            if (resultado && resultado.remote_actions) {
+                await this.handleRemoteActions(resultado.remote_actions, m);
+            }
         } catch (error: any) {
             this.logger.error('❌ Erro imagem:', error.message);
         }
@@ -1259,6 +1293,12 @@ class BotCore {
                 }
 
                 await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+
+                // 🛠️ AGENTIC UPGRADE: Processa ações remotas solicitadas pela IA
+                if (resultado && resultado.remote_actions) {
+                    await this.handleRemoteActions(resultado.remote_actions, m);
+                }
+
                 this.logger.info(`✅ [DISPATCH OK]`);
 
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
@@ -1499,11 +1539,11 @@ class BotCore {
      */
     shouldRespondToAI(m: any, texto: string, ehGrupo: boolean, replyInfo: any, nomeRemetente: string = '', numeroRemetente: string = ''): boolean {
         // ✅ PV: SEMPRE responde (é conversa direcionada por definição)
-        // Grupo: Só responde a mencoes, replies, nome do bot, owner exclusivo
         if (!ehGrupo) {
-            // ✅ Em PV, toda mensagem é direcionada a Akira
+            this.logger.debug(`📩 [PV] Mensagem de ${nomeRemetente} identificada. Respondendo automaticamente.`);
             return true;
         }
+
 
         // ═══ LÓGICA PARA GRUPOS ═══
         const textoLower = (texto || '').toLowerCase();
@@ -1753,6 +1793,181 @@ class BotCore {
 
         // MÉTODO 4: Fallback para o JID/LID atual
         return jid;
+    }
+
+    /**
+     * 🛠️ AGENTIC SKILLS: Executa ações reais no WhatsApp solicitadas pela IA
+     */
+    async handleRemoteActions(remoteActions: any[], m: any): Promise<void> {
+        if (!remoteActions || !Array.isArray(remoteActions)) return;
+
+        for (const actionData of remoteActions) {
+            const { action, params, reason } = actionData;
+            const jid = m.key.remoteJid;
+            const userId = m.key.participant || m.key.remoteJid;
+
+            // Resolve o alvo da ação (se fornecido)
+            let target = params?.target || params?.target_user_id || '';
+            if (target && !target.includes('@')) {
+                target = `${target}@s.whatsapp.net`;
+            }
+
+            // Fallback para quem enviou a mensagem original
+            const targetJid = target || userId;
+
+            this.logger.info(`🚀 [AGENT ACTION] Executando: ${action} | Params: ${JSON.stringify(params)}`);
+
+            try {
+                switch (action) {
+                    case 'media_download': {
+                        const { query, format } = params;
+                        if (!query) break;
+
+                        await this.sock.sendMessage(jid, { text: `⏳ *Akira SoftEdge:* Processando seu download de ${format}...` }, { quoted: m });
+
+                        if (format === 'audio') {
+                            const res = await this.mediaProcessor.downloadYouTubeAudio(query);
+                            if (res.sucesso) {
+                                await this.sock.sendMessage(jid, {
+                                    audio: res.buffer,
+                                    mimetype: 'audio/mp4',
+                                    fileName: `${res.metadata?.titulo || 'audio'}.mp3`
+                                }, { quoted: m });
+                            } else {
+                                await this.sock.sendMessage(jid, { text: `❌ Erro no download: ${res.error}` }, { quoted: m });
+                            }
+                        } else {
+                            const res = await this.mediaProcessor.downloadYouTubeVideo(query);
+                            if (res.sucesso) {
+                                await this.sock.sendMessage(jid, {
+                                    video: res.buffer,
+                                    caption: `✅ *${res.metadata?.titulo}*\n\nProcessado por Akira SoftEdge`,
+                                    fileName: `${res.metadata?.titulo || 'video'}.mp4`
+                                }, { quoted: m });
+                            } else {
+                                await this.sock.sendMessage(jid, { text: `❌ Erro no download: ${res.error}` }, { quoted: m });
+                            }
+                        }
+                        break;
+                    }
+
+                    case 'image_effect': {
+                        const { effect, color } = params;
+                        const quoted = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+                        const targetMsg = quoted || m.message;
+
+                        // Verifica se há imagem
+                        if (!targetMsg?.imageMessage && !targetMsg?.stickerMessage) {
+                            await this.sock.sendMessage(jid, { text: '❌ Por favor, responda a uma imagem ou figurinha para aplicar o efeito.' }, { quoted: m });
+                            break;
+                        }
+
+                        await this.sock.sendMessage(jid, { text: `🎨 *Akira SoftEdge:* Aplicando efeito ${effect}...` }, { quoted: m });
+
+                        const mediaRes = await this.mediaProcessor.downloadMedia(targetMsg, targetMsg.imageMessage ? 'image' : 'sticker');
+                        if (mediaRes?.buffer) {
+                            const result = await this.imageEffects.processImage(mediaRes.buffer, effect, { color });
+                            if (result.success) {
+                                // Se for 'hd' ou 'remove_bg', manda como imagem. Se for efeito engraçado, manda como figurinha
+                                if (['hd', 'remove_bg'].includes(effect)) {
+                                    await this.sock.sendMessage(jid, { image: result.buffer, caption: `✅ Efeito ${effect} aplicado!` }, { quoted: m });
+                                } else {
+                                    const sticker = await this.imageEffects.convertToSticker(result.buffer);
+                                    await this.sock.sendMessage(jid, { sticker: sticker.buffer }, { quoted: m });
+                                }
+                            } else {
+                                await this.sock.sendMessage(jid, { text: `❌ Erro no efeito: ${result.error}` }, { quoted: m });
+                            }
+                        }
+                        break;
+                    }
+
+                    case 'economy': {
+                        const { op, amount, target: targetUser } = params;
+                        let responseText = '';
+
+                        switch (op) {
+                            case 'balance':
+                                const bal = this.economySystem.getBalance(targetJid);
+                                responseText = `💰 *SALDO DE AKIRACOINS*\n\n👤 Usuário: @${targetJid.split('@')[0]}\n👛 Carteira: ${bal.wallet}\n🏦 Banco: ${bal.bank}\n✨ Total: ${bal.total}`;
+                                break;
+                            case 'daily':
+                                const d = this.economySystem.daily(userId);
+                                responseText = d.success ? `✅ Você coletou seu daily de *${d.amount}* moedas!` : `❌ ${d.error}`;
+                                break;
+                            case 'transfer':
+                                if (!targetUser || !amount) {
+                                    responseText = '❌ Operação inválida.';
+                                } else {
+                                    const t = this.economySystem.transfer(userId, target, amount);
+                                    responseText = t.success ? `✅ Transferência de *${amount}* para @${target.split('@')[0]} realizada!` : `❌ ${t.error}`;
+                                }
+                                break;
+                            case 'work':
+                                const gain = Math.floor(Math.random() * 200) + 50;
+                                this.economySystem.addMoney(userId, gain);
+                                responseText = `💼 Você trabalhou duro e ganhou *${gain}* AkiraCoins!`;
+                                break;
+                        }
+
+                        if (responseText) await this.sock.sendMessage(jid, { text: responseText, mentions: [targetJid, userId] }, { quoted: m });
+                        break;
+                    }
+
+                    case 'moderation': {
+                        const { type, target: modTarget, reason: modReason } = params;
+                        if (!modTarget) break;
+
+                        // Verifica permissões (só o dono pode disparar via Agente por enquanto)
+                        const isOwner = this.config.OWNER_NUMBERS.includes(userId.split('@')[0]);
+                        if (!isOwner) {
+                            await this.sock.sendMessage(jid, { text: '⚠️ Ações de moderação via IA estão restritas ao proprietário.' }, { quoted: m });
+                            break;
+                        }
+
+                        switch (type) {
+                            case 'kick':
+                                await this.sock.groupParticipantsUpdate(jid, [modTarget], 'remove');
+                                break;
+                            case 'ban':
+                                await this.moderationSystem.banUser(modTarget, modReason);
+                                await this.sock.groupParticipantsUpdate(jid, [modTarget], 'remove');
+                                break;
+                            case 'mute':
+                                await this.moderationSystem.muteUser(jid, modTarget, 60); // 60 min default
+                                break;
+                            case 'clear':
+                                // Clear logic if available
+                                break;
+                        }
+                        await this.sock.sendMessage(jid, { text: `🛡️ *MODERAÇÃO AKIRA:* Ação \`${type}\` executada em @${modTarget.split('@')[0]}\nMotivo: ${modReason}`, mentions: [modTarget] }, { quoted: m });
+                        break;
+                    }
+
+                    case 'group_management': {
+                        const { req, val } = params;
+                        switch (req) {
+                            case 'get_invite_link':
+                                const code = await this.sock.groupInviteCode(jid);
+                                await this.sock.sendMessage(jid, { text: `🔗 *Link do Grupo:* https://chat.whatsapp.com/${code}` }, { quoted: m });
+                                break;
+                            case 'get_admins':
+                                const metadata = await this.sock.groupMetadata(jid);
+                                const admins = metadata.participants.filter((p: any) => p.admin).map((p: any) => `@${p.id.split('@')[0]}`);
+                                await this.sock.sendMessage(jid, { text: `👮 *Admins:* ${admins.join(', ')}`, mentions: metadata.participants.filter((p: any) => p.admin).map((p: any) => p.id) }, { quoted: m });
+                                break;
+                        }
+                        break;
+                    }
+
+                    default:
+                        this.logger.warn(`⚠️ [AGENT] Ação desconhecida: ${action}`);
+                }
+            } catch (err: any) {
+                this.logger.error(`❌ [AGENT] Erro ao executar ${action}: ${err.message}`);
+                await this.sock.sendMessage(jid, { text: `❌ Erro ao processar a ação \`${action}\`: ${err.message}` }, { quoted: m });
+            }
+        }
     }
 }
 
