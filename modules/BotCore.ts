@@ -1268,14 +1268,12 @@ class BotCore {
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
             } else {
                 // ✅ NOVO FLUXO: Digitação Realista pós-processamento (APENAS PARA TEXTO)
-                if (this.presenceSimulator) {
+                const isOwner = this.config.isDono(numeroReal);
+
+                if (this.presenceSimulator && !isOwner) { // 🚀 Dono recebe resposta instantânea (bypass typing para testes/velocidade)
                     const typingDuration = this.presenceSimulator.calculateTypingDuration(resposta);
                     this.logger.info(`✍️ [TYPING] Resposta pronta. Simulando digitação (${Math.round(typingDuration / 1000)}s)...`);
-
-                    // Inicia status visual no WhatsApp
                     await this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid);
-
-                    // Espera o tempo humano
                     await delay(typingDuration);
 
                     // Finaliza status
