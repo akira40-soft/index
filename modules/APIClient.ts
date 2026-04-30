@@ -252,6 +252,7 @@ class APIClient {
                     resposta: (result.data && result.data.resposta) || 'Sem resposta',
                     tipo_mensagem: (result.data && result.data.tipo_mensagem) || 'texto',
                     pesquisa_feita: (result.data && result.data.pesquisa_feita) || false,
+                    remote_actions: (result.data && Array.isArray(result.data.remote_actions) ? result.data.remote_actions : []),
                     metadata: result.data
                 };
             } else {

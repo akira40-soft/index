@@ -67,6 +67,7 @@ import pino from 'pino';
 import { exec } from 'child_process';
 import util from 'util';
 const _execAsync = util.promisify(exec);
+import axios from 'axios';
 
 import ConfigManager from './ConfigManager.js';
 import APIClient from './APIClient.js';
@@ -598,7 +599,8 @@ class BotCore {
 
             if (this.connectionStartTime && m.messageTimestamp) {
                 const messageTimeMs = Number(m.messageTimestamp) * 1000;
-                if (messageTimeMs < this.connectionStartTime - 5000) {
+                if (messageTimeMs < this.connectionStartTime - 30000) { // Tolerância de 30s para clock drift
+
                     console.log(`❌ DROP: Mensagem antiga. Atual: ${this.connectionStartTime}, Msg: ${messageTimeMs}`);
                     return;
                 }
@@ -1105,6 +1107,15 @@ class BotCore {
                 ? this.config.isDono(JidUtils.normalizeUserNumber(numeroReal), nome)
                 : false;
 
+            // ✅ SINCRONIZAÇÃO FORÇADA: Reação instantânea para o dono no PV
+            // Isso ajuda a "acordar" a sessão Signal se estiver desincronizada
+            if (isOwner && !ehGrupo) {
+                try {
+                    await this.sock.sendMessage(m.key.remoteJid, { react: { text: '⚡', key: m.key } });
+                } catch (e) { }
+            }
+
+
             if (!isOwner && this.moderationSystem?.checkAndLimitHourlyMessages) {
                 const res = this.moderationSystem.checkAndLimitHourlyMessages(numeroReal, nome, numeroReal, texto, null, isOwner);
                 if (!res?.allowed) {
@@ -1280,26 +1291,28 @@ class BotCore {
                     await this.presenceSimulator.stop(m.key.remoteJid);
                 }
 
-                // ✅ LÓGICA DE REPLY CONDICIONAL (MESMO DO IMAGEMESSAGE):
+                // ✅ LÓGICA DE REPLY CONDICIONAL:
                 // - PV: responde em reply APENAS se usuario mandou em reply
                 // - Grupo: SEMPRE em reply (para manter contexto)
+                // - DONO NO PV: SEMPRE SEM REPLY (para evitar bugs de contextInfo em sessões instáveis)
                 const opcoes: any = {};
                 if (ehGrupo) {
                     opcoes.quoted = m; // Grupo: sempre reply
-                } else if (replyInfo?.isReply) {
-                    opcoes.quoted = m; // PV: reply apenas se user mandou em reply
+                } else if (replyInfo?.isReply && !isOwner) {
+                    opcoes.quoted = m; // PV: reply apenas se user mandou em reply (exceto dono)
                 }
 
-                await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-
-                // 🛠️ AGENTIC UPGRADE: Processa ações remotas solicitadas pela IA
-                if (resultado && resultado.remote_actions) {
-                    await this.handleRemoteActions(resultado.remote_actions, m);
-                }
-
-                this.logger.info(`✅ [DISPATCH OK]`);
+                const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+                this.logger.info(`✅ [DISPATCH OK] ID: ${sentMsg?.key?.id}`);
 
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
+            }
+
+            // 🛠️ AGENTIC UPGRADE: Processa ações remotas solicitadas pela IA
+            // Executa SEMPRE (texto OU áudio), após a resposta principal ser enviada
+            if (resultado && Array.isArray(resultado.remote_actions) && resultado.remote_actions.length > 0) {
+                this.logger.info(`🚀 [AGENT] ${resultado.remote_actions.length} ação(ões) remota(s) a executar`);
+                await this.handleRemoteActions(resultado.remote_actions, m);
             }
 
             this.logger.info(`✅ [RESPONDIDO] ${resposta.substring(0, 80)}`);
@@ -1880,6 +1893,130 @@ class BotCore {
                         break;
                     }
 
+                    case 'generate_image': {
+                        const { prompt, model: imgModel = 'flux', width = 1024, height = 1024 } = params;
+                        if (!prompt) break;
+
+                        await this.sock.sendMessage(jid, { text: `🎨 *Akira SoftEdge:* Gerando imagem...` }, { quoted: m });
+
+                        try {
+                            const encodedPrompt = encodeURIComponent(prompt);
+                            const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
+
+                            // Download the image buffer
+                            const imgRes = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 60000 });
+                            const imgBuffer = Buffer.from(imgRes.data);
+
+                            await this.sock.sendMessage(jid, {
+                                image: imgBuffer,
+                                caption: `✨ *${prompt.substring(0, 80)}*\n\n🤖 _Gerado por Akira SoftEdge × Pollinations AI_`
+                            }, { quoted: m });
+                        } catch (imgErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao gerar imagem: ${imgErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'send_sticker': {
+                        const { image_url } = params;
+                        // Try to use quoted image first, then URL
+                        const quotedImg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
+
+                        try {
+                            let stickerBuffer: Buffer | null = null;
+
+                            if (quotedImg && this.mediaProcessor) {
+                                const dl = await this.mediaProcessor.downloadMedia(
+                                    m.message.extendedTextMessage.contextInfo.quotedMessage, 'image'
+                                );
+                                stickerBuffer = dl?.buffer || null;
+                            } else if (image_url) {
+                                const r = await axios.get(image_url, { responseType: 'arraybuffer', timeout: 20000 });
+                                stickerBuffer = Buffer.from(r.data);
+                            }
+
+                            if (stickerBuffer && this.imageEffects) {
+                                const sticker = await this.imageEffects.convertToSticker(stickerBuffer);
+                                await this.sock.sendMessage(jid, { sticker: sticker.buffer }, { quoted: m });
+                            } else {
+                                await this.sock.sendMessage(jid, { text: '❌ Responde a uma imagem para criar a figurinha!' }, { quoted: m });
+                            }
+                        } catch (sErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao criar sticker: ${sErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'tag_everyone': {
+                        const { message: tagMsg } = params;
+                        if (!ehGrupo) {
+                            await this.sock.sendMessage(jid, { text: '❌ Esta função é exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            const meta = await this.sock.groupMetadata(jid);
+                            const mentions = meta.participants.map((p: any) => p.id);
+                            const mentionText = mentions.map((id: string) => `@${id.split('@')[0]}`).join(' ');
+                            await this.sock.sendMessage(jid, {
+                                text: `📢 *${tagMsg}*\n\n${mentionText}`,
+                                mentions
+                            });
+                        } catch (tagErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao mencionar todos: ${tagErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'create_poll': {
+                        const { question: pollQ, options: pollOpts, multiselect: pollMulti = false } = params;
+                        if (!pollQ || !Array.isArray(pollOpts) || pollOpts.length < 2) {
+                            await this.sock.sendMessage(jid, { text: '❌ Enquete precisa de uma pergunta e pelo menos 2 opções.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            await this.sock.sendMessage(jid, {
+                                poll: {
+                                    name: pollQ,
+                                    values: pollOpts.slice(0, 12),
+                                    selectableCount: pollMulti ? pollOpts.length : 1
+                                }
+                            });
+                        } catch (pollErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao criar enquete: ${pollErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'send_location': {
+                        const { name: locName, latitude: lat, longitude: lng } = params;
+                        if (!lat || !lng) break;
+                        try {
+                            await this.sock.sendMessage(jid, {
+                                location: {
+                                    degreesLatitude: lat,
+                                    degreesLongitude: lng,
+                                    name: locName || 'Localização'
+                                }
+                            }, { quoted: m });
+                        } catch (locErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao enviar localização: ${locErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'add_reaction': {
+                        const { emoji: reactionEmoji } = params;
+                        if (!reactionEmoji) break;
+                        try {
+                            await this.sock.sendMessage(jid, {
+                                react: { text: reactionEmoji, key: m.key }
+                            });
+                        } catch (reactErr: any) {
+                            this.logger.debug(`Erro ao reagir: ${reactErr.message}`);
+                        }
+                        break;
+                    }
+
                     case 'economy': {
                         const { op, amount, target: targetUser } = params;
                         let responseText = '';
@@ -1944,16 +2081,51 @@ class BotCore {
 
                     case 'group_management': {
                         const { req, val } = params;
+                        if (!ehGrupo) {
+                            await this.sock.sendMessage(jid, { text: '❌ Função exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        const grpMeta = await this.sock.groupMetadata(jid);
                         switch (req) {
-                            case 'get_invite_link':
+                            case 'get_invite_link': {
                                 const code = await this.sock.groupInviteCode(jid);
                                 await this.sock.sendMessage(jid, { text: `🔗 *Link do Grupo:* https://chat.whatsapp.com/${code}` }, { quoted: m });
                                 break;
-                            case 'get_admins':
-                                const metadata = await this.sock.groupMetadata(jid);
-                                const admins = metadata.participants.filter((p: any) => p.admin).map((p: any) => `@${p.id.split('@')[0]}`);
-                                await this.sock.sendMessage(jid, { text: `👮 *Admins:* ${admins.join(', ')}`, mentions: metadata.participants.filter((p: any) => p.admin).map((p: any) => p.id) }, { quoted: m });
+                            }
+                            case 'get_admins': {
+                                const adminList = grpMeta.participants.filter((p: any) => p.admin);
+                                const adminMentions = adminList.map((p: any) => p.id);
+                                const adminNames = adminList.map((p: any) => `@${p.id.split('@')[0]}`).join(', ');
+                                await this.sock.sendMessage(jid, { text: `👮 *Admins:* ${adminNames}`, mentions: adminMentions }, { quoted: m });
                                 break;
+                            }
+                            case 'get_members': {
+                                const total = grpMeta.participants.length;
+                                const adminCount = grpMeta.participants.filter((p: any) => p.admin).length;
+                                await this.sock.sendMessage(jid, {
+                                    text: `👥 *Membros do Grupo*\n\n📊 Total: ${total}\n👮 Admins: ${adminCount}\n👤 Membros: ${total - adminCount}\n\n🏷️ Nome: ${grpMeta.subject}`
+                                }, { quoted: m });
+                                break;
+                            }
+                            case 'get_metadata': {
+                                const created = grpMeta.creation ? new Date(grpMeta.creation * 1000).toLocaleDateString('pt-PT') : 'Desconhecido';
+                                await this.sock.sendMessage(jid, {
+                                    text: `📋 *Info do Grupo*\n\n🏷️ Nome: ${grpMeta.subject}\n📅 Criado: ${created}\n👥 Membros: ${grpMeta.participants.length}\n📝 Descrição: ${grpMeta.desc || 'Sem descrição'}`
+                                }, { quoted: m });
+                                break;
+                            }
+                            case 'change_subject': {
+                                if (!val) break;
+                                await this.sock.groupUpdateSubject(jid, val);
+                                await this.sock.sendMessage(jid, { text: `✅ Nome do grupo alterado para: *${val}*` }, { quoted: m });
+                                break;
+                            }
+                            case 'change_description': {
+                                if (!val) break;
+                                await this.sock.groupUpdateDescription(jid, val);
+                                await this.sock.sendMessage(jid, { text: `✅ Descrição do grupo atualizada!` }, { quoted: m });
+                                break;
+                            }
                         }
                         break;
                     }
