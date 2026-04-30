@@ -1283,7 +1283,7 @@ class BotCore {
                 // ✅ NOVO FLUXO: Digitação Realista pós-processamento (APENAS PARA TEXTO)
                 const isOwner = this.config.isDono(numeroReal);
 
-                if (this.presenceSimulator && !isOwner) { // 🚀 Dono recebe resposta instantânea (bypass typing para testes/velocidade)
+                if (this.presenceSimulator) {
                     const typingDuration = this.presenceSimulator.calculateTypingDuration(resposta);
                     this.logger.info(`✍️ [TYPING] Resposta pronta. Simulando digitação (${Math.round(typingDuration / 1000)}s)...`);
                     await this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid);
