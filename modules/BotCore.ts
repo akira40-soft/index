@@ -1949,7 +1949,7 @@ class BotCore {
 
                     case 'tag_everyone': {
                         const { message: tagMsg } = params;
-                        if (!ehGrupo) {
+                        if (!jid.endsWith('@g.us')) {
                             await this.sock.sendMessage(jid, { text: '❌ Esta função é exclusiva de grupos.' }, { quoted: m });
                             break;
                         }
@@ -2081,7 +2081,7 @@ class BotCore {
 
                     case 'group_management': {
                         const { req, val } = params;
-                        if (!ehGrupo) {
+                        if (!jid.endsWith('@g.us')) {
                             await this.sock.sendMessage(jid, { text: '❌ Função exclusiva de grupos.' }, { quoted: m });
                             break;
                         }
