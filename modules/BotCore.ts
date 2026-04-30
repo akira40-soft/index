@@ -577,9 +577,11 @@ class BotCore {
                 // Isso força o WhatsApp do usuário a negociar novas chaves (Signal Session Reset)
                 const isOwner = this.config?.isDono && this.config.isDono(jid);
                 if (isOwner) {
-                    this.logger.warn(`🔧 [REPAIR] Tentando reparar sessão com o dono: ${jid}`);
-                    // Enviamos um aviso silencioso ou uma reação (se suportado) ou apenas uma msg
-                    this.sock.sendMessage(jid, { text: '⚠️ _Akira: Erro de sincronização detectado. Se eu não responder em 10 segundos, envie "AKIRA" novamente._' }).catch(() => { });
+                    this.logger.warn(`🔧 [REPAIR] Tentando reparar sessão com o dono silenciosamente: ${jid}`);
+                    // Silently attempt to repair by sending a read receipt which forces a key negotiation
+                    this.sock.readMessages([m.key]).catch(() => { });
+                    // Optionally, send a silent presence update
+                    this.sock.sendPresenceUpdate('available', jid).catch(() => { });
                 }
                 return;
             }
@@ -1278,34 +1280,38 @@ class BotCore {
                 }
                 if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
             } else {
-                // ✅ NOVO FLUXO: Digitação Realista pós-processamento (APENAS PARA TEXTO)
-                const isOwner = this.config.isDono(numeroReal);
+                if (!resposta || resposta.trim() === '') {
+                    this.logger.info(`🤫 Resposta em branco (provavelmente uma skill silenciosa). Pulando envio de texto.`);
+                } else {
+                    // ✅ NOVO FLUXO: Digitação Realista pós-processamento (APENAS PARA TEXTO)
+                    const isOwner = this.config.isDono(numeroReal);
 
-                if (this.presenceSimulator && !isOwner) { // 🚀 Dono recebe resposta instantânea (bypass typing para testes/velocidade)
-                    const typingDuration = this.presenceSimulator.calculateTypingDuration(resposta);
-                    this.logger.info(`✍️ [TYPING] Resposta pronta. Simulando digitação (${Math.round(typingDuration / 1000)}s)...`);
-                    await this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid);
-                    await delay(typingDuration);
+                    if (this.presenceSimulator) {
+                        const typingDuration = this.presenceSimulator.calculateTypingDuration(resposta);
+                        this.logger.info(`✍️ [TYPING] Resposta pronta. Simulando digitação (${Math.round(typingDuration / 1000)}s)...`);
+                        await this.presenceSimulator.safeSendPresenceUpdate('composing', m.key.remoteJid);
+                        await delay(typingDuration);
 
-                    // Finaliza status
-                    await this.presenceSimulator.stop(m.key.remoteJid);
+                        // Finaliza status
+                        await this.presenceSimulator.stop(m.key.remoteJid);
+                    }
+
+                    // ✅ LÓGICA DE REPLY CONDICIONAL:
+                    // - PV: responde em reply APENAS se usuario mandou em reply
+                    // - Grupo: SEMPRE em reply (para manter contexto)
+                    // - DONO NO PV: SEMPRE SEM REPLY (para evitar bugs de contextInfo em sessões instáveis)
+                    const opcoes: any = {};
+                    if (ehGrupo) {
+                        opcoes.quoted = m; // Grupo: sempre reply
+                    } else if (replyInfo?.isReply && !isOwner) {
+                        opcoes.quoted = m; // PV: reply apenas se user mandou em reply (exceto dono)
+                    }
+
+                    const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+                    this.logger.info(`✅ [DISPATCH OK] ID: ${sentMsg?.key?.id}`);
+
+                    if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
                 }
-
-                // ✅ LÓGICA DE REPLY CONDICIONAL:
-                // - PV: responde em reply APENAS se usuario mandou em reply
-                // - Grupo: SEMPRE em reply (para manter contexto)
-                // - DONO NO PV: SEMPRE SEM REPLY (para evitar bugs de contextInfo em sessões instáveis)
-                const opcoes: any = {};
-                if (ehGrupo) {
-                    opcoes.quoted = m; // Grupo: sempre reply
-                } else if (replyInfo?.isReply && !isOwner) {
-                    opcoes.quoted = m; // PV: reply apenas se user mandou em reply (exceto dono)
-                }
-
-                const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-                this.logger.info(`✅ [DISPATCH OK] ID: ${sentMsg?.key?.id}`);
-
-                if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
             }
 
             // 🛠️ AGENTIC UPGRADE: Processa ações remotas solicitadas pela IA
@@ -1834,8 +1840,6 @@ class BotCore {
                         const { query, format } = params;
                         if (!query) break;
 
-                        await this.sock.sendMessage(jid, { text: `⏳ *Akira SoftEdge:* Processando seu download de ${format}...` }, { quoted: m });
-
                         if (format === 'audio') {
                             const res = await this.mediaProcessor.downloadYouTubeAudio(query);
                             if (res.sucesso) {
@@ -1852,7 +1856,7 @@ class BotCore {
                             if (res.sucesso) {
                                 await this.sock.sendMessage(jid, {
                                     video: res.buffer,
-                                    caption: `✅ *${res.metadata?.titulo}*\n\nProcessado por Akira SoftEdge`,
+                                    caption: `Baixado por Akira`,
                                     fileName: `${res.metadata?.titulo || 'video'}.mp4`
                                 }, { quoted: m });
                             } else {
@@ -1897,8 +1901,6 @@ class BotCore {
                         const { prompt, model: imgModel = 'flux', width = 1024, height = 1024 } = params;
                         if (!prompt) break;
 
-                        await this.sock.sendMessage(jid, { text: `🎨 *Akira SoftEdge:* Gerando imagem...` }, { quoted: m });
-
                         try {
                             const encodedPrompt = encodeURIComponent(prompt);
                             const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
@@ -1909,7 +1911,7 @@ class BotCore {
 
                             await this.sock.sendMessage(jid, {
                                 image: imgBuffer,
-                                caption: `✨ *${prompt.substring(0, 80)}*\n\n🤖 _Gerado por Akira SoftEdge × Pollinations AI_`
+                                caption: `Gerado por Akira`
                             }, { quoted: m });
                         } catch (imgErr: any) {
                             await this.sock.sendMessage(jid, { text: `❌ Erro ao gerar imagem: ${imgErr.message}` }, { quoted: m });
