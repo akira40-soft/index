@@ -53,7 +53,7 @@ class APIClient {
         } = messageData;
 
         // ✅ CORREÇÃO: Garantir que numero é sempre apenas dígitos (sem @lid, @s.whatsapp.net, etc)
-        const numeroLimpo = JidUtils.cleanPhoneNumber(numero) || 'desconhecido';
+        const numeroLimpo = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
 
         // ✅ SINCRONIZAÇÃO: Detectar tipo_mensagem (inclui 'game' para comandos de jogo)
         const gameCommands = ['#play', '#game', '#grid', '#tactics', '#economy', '#level'];

@@ -74,11 +74,21 @@ export class JidUtils {
      * Exemplo: "lid_244956464620" -> "244956464620"
      * Exemplo: "lid_244956464620:1@s.whatsapp.net" -> "244956464620"
      */
+    /**
+     * Garante que um número de telefone seja apenas dígitos para contextos numéricos,
+     * mas preserva a identidade alfanumérica se for um LID.
+     */
     public static cleanPhoneNumber(input: string | null | undefined): string {
         if (!input) return "";
 
-        // Remove tudo exceto dígitos
-        let cleaned = String(input).replace(/\D/g, '');
+        const strInput = String(input);
+        // Se for um LID (identidade alfa-numérica), usamos normalizeUserNumber para preservar o ID real
+        if (strInput.includes('@lid') || strInput.startsWith('lid_')) {
+            return this.normalizeUserNumber(input);
+        }
+
+        // Caso contrário, remove tudo exceto dígitos (comportamento legado para números reais)
+        let cleaned = strInput.replace(/\D/g, '');
         return cleaned;
     }
 

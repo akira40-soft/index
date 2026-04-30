@@ -2029,10 +2029,9 @@ ${P}menu osint — Comandos OSINT avançados`,
 
             msg += this.createMenuSection('🎁', 'VALORES SUGERIDOS (VIP)');
 
-            // Nova conversão baseada em USD (1 USD = 915 Kz | 1 USD = 5.50 BRL)
-            // Assumindo que o valor 'price' no plano agora representa USD
-            const convertToKz = (usd: number) => Math.round(usd * 915).toLocaleString('pt-AO');
-            const convertToBrl = (usd: number) => (usd * 5.50).toFixed(2);
+            // Nova conversão baseada em USD (1 USD = 1.000 Kz | 1 USD = 5.00 BRL)
+            const convertToKz = (usd: number) => Math.round(usd * 1000).toLocaleString('pt-AO');
+            const convertToBrl = (usd: number) => (usd * 5.00).toFixed(2);
 
             for (const [key, plan] of Object.entries(plans) as [string, any][]) {
                 msg += `\n🏷️ *${plan.name}*\n`;
@@ -2050,10 +2049,10 @@ ${P}menu osint — Comandos OSINT avançados`,
             msg += `✨ Acesso antecipado a novas features\n`;
 
             msg += this.createMenuSection('📊', 'IMPACTO DA SUA DOAÇÃO');
-            msg += `\n💵 *4.575 Kz* (R$ 27,50) = 1 dia online [5 USD]\n`;
-            msg += `\n💵 *18.300 Kz* (R$ 110,00) = 1 semana online [20 USD]\n`;
-            msg += `\n💵 *45.750 Kz* (R$ 275,00) = 1 mês online [50 USD]\n`;
-            msg += `\n💵 *91.500 Kz+* (R$ 550,00+) = 3 meses + feature nova [100 USD]\n`;
+            msg += `\n💵 *5.000 Kz* (R$ 25,00) = 1 dia online [5 USD]\n`;
+            msg += `\n💵 *20.000 Kz* (R$ 100,00) = 1 semana online [20 USD]\n`;
+            msg += `\n💵 *50.000 Kz* (R$ 250,00) = 1 mês online [50 USD]\n`;
+            msg += `\n💵 *100.000 Kz+* (R$ 500,00+) = 3 meses + feature nova [100 USD]\n`;
 
             msg += this.createMenuSection('💳', 'MÉTODOS DE PAGAMENTO');
             msg += `\n*☕ KO-FI (INTERNACIONAL)*\nhttps://ko-fi.com/isaacquarenta\n`;

@@ -51,8 +51,8 @@ class ModerationSystem {
 
     private SPAM_THRESHOLD: number;
     private SPAM_WINDOW_MS: number;
-    private FLOOD_THRESHOLD: number = 3; // 3 mensagens
-    private FLOOD_WINDOW_MS: number = 3000; // em 3 segundos
+    private FLOOD_THRESHOLD: number = 2; // 2 mensagens
+    private FLOOD_WINDOW_MS: number = 1000; // em 1 segundo
     private MAX_FLOOD_WARNINGS: number = 3;
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
@@ -1056,12 +1056,17 @@ class ModerationSystem {
     */
     public isBlacklisted(userId: string): boolean {
         const numericId = JidUtils.getNumber(userId);
-        // Para LIDs como lid_123456 ou user@lid, extrai apenas dígitos
         const digitsOnly = userId.replace(/\D/g, '');
         const list = this.loadBlacklistDataSync();
         if (!Array.isArray(list)) return false;
 
-        const found = list.find(entry => entry && (entry.id === numericId || entry.id === userId || entry.id === digitsOnly));
+        // Se for LID, não comparamos por dígitos cruzados para evitar falsos-positivos (colisões)
+        const isLid = userId.includes('@lid') || userId.startsWith('lid_');
+        const found = list.find(entry => entry && (
+            entry.id === numericId ||
+            entry.id === userId ||
+            (!isLid && entry.id === digitsOnly)
+        ));
 
         if (found) {
             if (found.expiresAt && found.expiresAt !== 'PERMANENT') {
@@ -1086,9 +1091,14 @@ class ModerationSystem {
         const list = this.loadBlacklistDataSync();
         const arr = Array.isArray(list) ? list : [];
 
-        // Verifica duplicata por ID numérico, ID original e dígitos
+        // Verifica duplicata por ID numérico, ID original e dígitos (com cautela para LIDs)
         const digitsOnly = userId.replace(/\D/g, '');
-        if (arr.find(x => x && (x.id === numericId || x.id === userId || x.id === digitsOnly))) {
+        const isLid = userId.includes('@lid') || userId.startsWith('lid_');
+        if (arr.find(x => x && (
+            x.id === numericId ||
+            x.id === userId ||
+            (!isLid && x.id === digitsOnly)
+        ))) {
             return { success: false, message: 'Já estava na blacklist' };
         }
 
