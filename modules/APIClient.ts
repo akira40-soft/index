@@ -253,7 +253,7 @@ class APIClient {
                     // Só usa 'Sem resposta' se estiver estritamente nulo ou indefinido e não houver remote_actions.
                     resposta: (result.data && result.data.resposta !== undefined && result.data.resposta !== null)
                         ? result.data.resposta
-                        : ((result.data && result.data.remote_actions && result.data.remote_actions.length > 0) ? "" : 'Sem resposta'),
+                        : "",
                     tipo_mensagem: (result.data && result.data.tipo_mensagem) || 'texto',
                     pesquisa_feita: (result.data && result.data.pesquisa_feita) || false,
                     remote_actions: (result.data && Array.isArray(result.data.remote_actions) ? result.data.remote_actions : []),

@@ -573,11 +573,11 @@ class BotCore {
                 const jid = m.key.remoteJid;
                 this.logger.debug(`⚠️ Falha de decrypt (Bad MAC?) para ${jid}. Aguardando retry...`);
 
-                // Se for o dono, tentamos "cutucar" a conexão enviando uma msg reativa
-                // Isso força o WhatsApp do usuário a negociar novas chaves (Signal Session Reset)
-                const isOwner = this.config?.isDono && this.config.isDono(jid);
+                const numeroCheck = jid.split('@')[0];
+                const isOwner = this.config?.isDono && this.config.isDono(numeroCheck);
                 if (isOwner) {
-                    // Tenta reparar sessão silenciosamente sem poluir o log
+                    // Tenta reparar sessão silenciosamente
+                    this.logger.debug(`🔧 [REPAIR] Tentando recuperar sessão com o dono: ${jid}`);
                     this.sock.readMessages([m.key]).catch(() => { });
                     this.sock.sendPresenceUpdate('available', jid).catch(() => { });
                 }
@@ -897,8 +897,7 @@ class BotCore {
                 await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
             } else if (temAudio) {
                 // ═══ LÓGICA DE ÁUDIO ═══
-                // Grupo: chegou aqui = já passou pelo filtro acima (= reply ao bot) → sempre ativa áudio
-                // PV: qualquer áudio ativa STT + TTS
+                this.logger.info(`🎤 [ÁUDIO RECEBIDO] Processando voz de ${nome}...`);
                 await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo, true);
             } else {
                 // Se for texto ou qualquer outra msg com texto (sticker com legenda, etc)
@@ -1006,7 +1005,7 @@ class BotCore {
                 return;
             }
 
-            let resposta = resultado.resposta !== undefined && resultado.resposta !== null ? resultado.resposta : 'Sem resposta.';
+            let resposta = resultado.resposta !== undefined && resultado.resposta !== null ? resultado.resposta : '';
 
             // Permite que resposta seja uma string vazia para as skills silenciosas
             if (resultado.resposta === "") {
@@ -1233,7 +1232,7 @@ class BotCore {
                 return;
             }
 
-            let resposta = resultado.resposta !== undefined && resultado.resposta !== null ? resultado.resposta : 'Sem resposta';
+            let resposta = resultado.resposta !== undefined && resultado.resposta !== null ? resultado.resposta : '';
 
             // Permite que resposta seja uma string vazia para as skills silenciosas
             if (resultado.resposta === "") {
@@ -2087,6 +2086,47 @@ class BotCore {
                         break;
                     }
 
+                    case 'transcribe_audio': {
+                        // Tenta baixar áudio da mensagem citada ou da atual
+                        const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+                        const targetMsg = quotedMsg || m.message;
+
+                        if (!targetMsg?.audioMessage) {
+                            await this.sock.sendMessage(jid, { text: '❌ Por favor, responda a um áudio para eu transcrever.' }, { quoted: m });
+                            break;
+                        }
+
+                        try {
+                            await this.sock.sendMessage(jid, { react: { text: '🎧', key: m.key } });
+                            const dl = await this.mediaProcessor.downloadMedia(targetMsg, 'audio');
+                            if (dl?.buffer) {
+                                const transcricao = await this.audioProcessor.speechToText(dl.buffer);
+                                if (transcricao.sucesso) {
+                                    await this.sock.sendMessage(jid, {
+                                        text: `📝 *Transcrição do Áudio:*\n\n"${transcricao.texto}"`
+                                    }, { quoted: m });
+                                } else {
+                                    await this.sock.sendMessage(jid, { text: '❌ Não consegui transcrever este áudio.' }, { quoted: m });
+                                }
+                            }
+                        } catch (tErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro na transcrição: ${tErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'get_group_history': {
+                        const { limit = 20 } = params;
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Esta função é exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        // Esta ação apenas confirma que os dados de histórico já estão na STM do Python
+                        // O backend Python já tem acesso à STM via UnifiedContext.
+                        await this.sock.sendMessage(jid, { react: { text: '📚', key: m.key } });
+                        break;
+                    }
+
                     case 'moderation': {
                         const { type, target: modTarget, reason: modReason } = params;
                         if (!modTarget) break;
@@ -2114,6 +2154,103 @@ class BotCore {
                                 break;
                         }
                         await this.sock.sendMessage(jid, { text: `🛡️ *MODERAÇÃO AKIRA:* Ação \`${type}\` executada em @${modTarget.split('@')[0]}\nMotivo: ${modReason}`, mentions: [modTarget] }, { quoted: m });
+                        break;
+                    }
+
+                    case 'set_bot_profile': {
+                        const { name: newName, about: newAbout } = params;
+                        try {
+                            // Só o dono pode disparar isso via IA
+                            const isOwner = this.config.isDono(userId.split('@')[0]);
+                            if (!isOwner) {
+                                await this.sock.sendMessage(jid, { text: '⚠️ Apenas o meu proprietário pode alterar o meu perfil.' }, { quoted: m });
+                                break;
+                            }
+
+                            if (newName) {
+                                await this.sock.updateProfileName(newName);
+                                await this.sock.sendMessage(jid, { text: `✅ Nome alterado para: *${newName}*` }, { quoted: m });
+                            }
+                            if (newAbout) {
+                                await this.sock.updateProfileStatus(newAbout);
+                                await this.sock.sendMessage(jid, { text: `✅ Recado alterado para: *${newAbout}*` }, { quoted: m });
+                            }
+                        } catch (pErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao atualizar perfil: ${pErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'group_control': {
+                        const { action: gcAction } = params;
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Função exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            switch (gcAction) {
+                                case 'open':
+                                    await this.sock.groupSettingUpdate(jid, 'not_announcement');
+                                    await this.sock.sendMessage(jid, { text: '🔓 *Grupo Aberto:* Todos os membros podem enviar mensagens agora.' });
+                                    break;
+                                case 'close':
+                                    await this.sock.groupSettingUpdate(jid, 'announcement');
+                                    await this.sock.sendMessage(jid, { text: '🔒 *Grupo Fechado:* Apenas administradores podem enviar mensagens.' });
+                                    break;
+                                case 'lock_settings':
+                                    await this.sock.groupSettingUpdate(jid, 'locked');
+                                    await this.sock.sendMessage(jid, { text: '🛡️ *Configurações Bloqueadas:* Apenas administradores podem editar o grupo.' });
+                                    break;
+                                case 'unlock_settings':
+                                    await this.sock.groupSettingUpdate(jid, 'unlocked');
+                                    await this.sock.sendMessage(jid, { text: '🔓 *Configurações Liberadas:* Todos os membros podem editar o grupo.' });
+                                    break;
+                            }
+                        } catch (gcErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro no controle de grupo: ${gcErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'delete_message': {
+                        const { target_key } = params;
+                        // Se não passar key, tenta usar a citada
+                        const keyToDelete = target_key || m.message?.extendedTextMessage?.contextInfo?.stanzaId;
+                        if (!keyToDelete) {
+                            await this.sock.sendMessage(jid, { text: '❌ Responda a uma mensagem para eu apagar.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            const deleteKey = {
+                                remoteJid: jid,
+                                fromMe: target_key ? false : (m.message?.extendedTextMessage?.contextInfo?.participant === this.sock.user.id),
+                                id: keyToDelete,
+                                participant: m.message?.extendedTextMessage?.contextInfo?.participant
+                            };
+                            await this.sock.sendMessage(jid, { delete: deleteKey });
+                        } catch (delErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao apagar: ${delErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'send_contact': {
+                        const { display_name, phone } = params;
+                        if (!display_name || !phone) break;
+                        try {
+                            const vcard = 'BEGIN:VCARD\n' + 'VERSION:3.0\n' +
+                                `FN:${display_name}\n` +
+                                `TEL;type=CELL;type=VOICE;waid=${phone}:${phone}\n` +
+                                'END:VCARD';
+                            await this.sock.sendMessage(jid, {
+                                contacts: {
+                                    displayName: display_name,
+                                    contacts: [{ vcard }]
+                                }
+                            }, { quoted: m });
+                        } catch (cErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao enviar contato: ${cErr.message}` }, { quoted: m });
+                        }
                         break;
                     }
 
