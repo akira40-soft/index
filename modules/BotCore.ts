@@ -2146,7 +2146,6 @@ class BotCore {
                         try {
                             // Envia feedback visual imediato
                             await this.sock.sendMessage(jid, { react: { text: '🎧', key: m.key } });
-                            await this.sock.sendMessage(jid, { text: '🎧 *Transcrição iniciada...* Estou a processar o áudio, aguarda um momento.' }, { quoted: m });
 
                             // Tenta baixar áudio (downloadMedia já resolve se é quoted ou direto)
                             const dl = await this.mediaProcessor.downloadMedia(m, 'audio');
@@ -2171,33 +2170,9 @@ class BotCore {
                     }
 
                     case 'analyze_image': {
-                        try {
-                            // Reação + Feedback
-                            await this.sock.sendMessage(jid, { react: { text: '👁️', key: m.key } });
-                            await this.sock.sendMessage(jid, { text: '👁️ *Análise visual iniciada...* Estou a olhar para a imagem, um segundo.' }, { quoted: m });
-
-                            const dl = await this.mediaProcessor.downloadMedia(m, 'image');
-                            if (dl?.buffer) {
-                                // Chama API de visão
-                                const res = await this.apiClient.analyzeImage(dl.buffer.toString('base64'), userId, jid);
-                                if (res.success) {
-                                    const analise = res.analise;
-                                    let resp = `👁️ *ANÁLISE VISUAL AKIRA*\n\n${analise.description || 'Não consegui descrever a imagem.'}`;
-
-                                    if (analise.ocr) resp += `\n\n📝 *Texto Identificado:*\n${analise.ocr}`;
-                                    if (analise.qr) resp += `\n\n🔗 *QR Code:* ${analise.qr}`;
-
-                                    await this.sock.sendMessage(jid, { text: resp }, { quoted: m });
-                                } else {
-                                    await this.sock.sendMessage(jid, { text: `❌ Falha na análise: ${res.error || 'Erro desconhecido'}` }, { quoted: m });
-                                }
-                            } else {
-                                await this.sock.sendMessage(jid, { text: '❌ Por favor, responda a uma imagem para eu analisar.' }, { quoted: m });
-                            }
-                        } catch (vErr: any) {
-                            this.logger.error(`[VISION] Erro: ${vErr.message}`);
-                            await this.sock.sendMessage(jid, { text: `❌ Erro na visão: ${vErr.message}` }, { quoted: m });
-                        }
+                        // REGRAS: Esta ação agora é processada LOCALMENTE pelo backend Python.
+                        // O BotCore apenas fornece a imagem no payload inicial.
+                        this.logger.debug('👁️ [AGENT] Ação analyze_image ignorada no BotCore (processada no Backend).');
                         break;
                     }
 
