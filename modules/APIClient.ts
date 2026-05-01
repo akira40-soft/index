@@ -248,6 +248,7 @@ class APIClient {
 
             if (result.success) {
                 return {
+                    success: true,
                     // Usar a resposta text se houver, ou vazio se for vazio explícito. 
                     // Só usa 'Sem resposta' se estiver estritamente nulo ou indefinido e não houver remote_actions.
                     resposta: (result.data && result.data.resposta !== undefined && result.data.resposta !== null)
