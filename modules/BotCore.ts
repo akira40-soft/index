@@ -1324,11 +1324,7 @@ class BotCore {
                         await this.presenceSimulator.stop(m.key.remoteJid);
                     }
 
-                    // 5. Processar remote_actions (skills, imagens, etc.)
-                    if (resultado.remote_actions?.length > 0) {
-                        this.logger.info(`🚀 [AGENT] ${resultado.remote_actions.length} ação(ões) remota(s) a executar`);
-                        this.handleRemoteActions(resultado.remote_actions, m).catch(() => { });
-                    }
+
 
                     // ✅ LÓGICA DE REPLY CONDICIONAL:
                     // - PV: responde em reply APENAS se usuario mandou em reply
