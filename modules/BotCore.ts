@@ -577,10 +577,8 @@ class BotCore {
                 // Isso força o WhatsApp do usuário a negociar novas chaves (Signal Session Reset)
                 const isOwner = this.config?.isDono && this.config.isDono(jid);
                 if (isOwner) {
-                    this.logger.warn(`🔧 [REPAIR] Tentando reparar sessão com o dono silenciosamente: ${jid}`);
-                    // Silently attempt to repair by sending a read receipt which forces a key negotiation
+                    // Tenta reparar sessão silenciosamente sem poluir o log
                     this.sock.readMessages([m.key]).catch(() => { });
-                    // Optionally, send a silent presence update
                     this.sock.sendPresenceUpdate('available', jid).catch(() => { });
                 }
                 return;
@@ -601,9 +599,9 @@ class BotCore {
 
             if (this.connectionStartTime && m.messageTimestamp) {
                 const messageTimeMs = Number(m.messageTimestamp) * 1000;
-                if (messageTimeMs < this.connectionStartTime - 30000) { // Tolerância de 30s para clock drift
-
-                    console.log(`❌ DROP: Mensagem antiga. Atual: ${this.connectionStartTime}, Msg: ${messageTimeMs}`);
+                // Aumentamos a tolerância de clock drift para 12 horas, pois alguns dispositivos/redes mandam timestamps completamente dessincronizados
+                if (messageTimeMs < this.connectionStartTime - 43200000) {
+                    console.log(`❌ DROP: Mensagem super antiga. Atual: ${this.connectionStartTime}, Msg: ${messageTimeMs} (Dif: ${(this.connectionStartTime - messageTimeMs) / 1000}s)`);
                     return;
                 }
             }
@@ -1008,7 +1006,12 @@ class BotCore {
                 return;
             }
 
-            const resposta = resultado.resposta || 'Sem resposta.';
+            let resposta = resultado.resposta !== undefined && resultado.resposta !== null ? resultado.resposta : 'Sem resposta.';
+
+            // Permite que resposta seja uma string vazia para as skills silenciosas
+            if (resultado.resposta === "") {
+                resposta = "";
+            }
 
             // ✅ NOVO FLUXO: Digitação Realista iniciada agora que temos a resposta
             if (this.presenceSimulator) {
@@ -1109,14 +1112,7 @@ class BotCore {
                 ? this.config.isDono(JidUtils.normalizeUserNumber(numeroReal), nome)
                 : false;
 
-            // ✅ SINCRONIZAÇÃO FORÇADA: Reação instantânea para o dono no PV
-            // Isso ajuda a "acordar" a sessão Signal se estiver desincronizada
-            if (isOwner && !ehGrupo) {
-                try {
-                    await this.sock.sendMessage(m.key.remoteJid, { react: { text: '⚡', key: m.key } });
-                } catch (e) { }
-            }
-
+            // O 'isOwner' e rate limit original fica aqui sem a reação forçada ⚡
 
             if (!isOwner && this.moderationSystem?.checkAndLimitHourlyMessages) {
                 const res = this.moderationSystem.checkAndLimitHourlyMessages(numeroReal, nome, numeroReal, texto, null, isOwner);
@@ -1237,7 +1233,12 @@ class BotCore {
                 return;
             }
 
-            const resposta = resultado.resposta || 'Sem resposta';
+            let resposta = resultado.resposta !== undefined && resultado.resposta !== null ? resultado.resposta : 'Sem resposta';
+
+            // Permite que resposta seja uma string vazia para as skills silenciosas
+            if (resultado.resposta === "") {
+                resposta = "";
+            }
 
             if (foiAudio) {
                 this.logger.info('🎤 [AUDIO RESPONSE] Gerando voz com ElevenLabs...');
@@ -1322,6 +1323,41 @@ class BotCore {
             }
 
             this.logger.info(`✅ [RESPONDIDO] ${resposta.substring(0, 80)}`);
+
+            // 🎭 [NOVO] Sistema de Reações Emocionais (Ocasional)
+            // A Akira vai reagir aleatoriamente a mensagens do usuário baseada no humor da própria resposta
+            // A chance é de cerca de 15% para não poluir o chat
+            if (Math.random() < 0.15 && resposta && resposta.trim().length > 0) {
+                const respostaLower = resposta.toLowerCase();
+                let emojiParaReagir = '';
+
+                // Deteção de Humor Ofensivo / Raiva
+                if (/(foda-se|merda|caralho|idiota|cala a boca|odeio|inferno|estúpido|vai tomar)/.test(respostaLower)) {
+                    emojiParaReagir = Math.random() > 0.5 ? '🖕' : '😡';
+                }
+                // Humor Romântico / Carinhoso
+                else if (/(te amo|meu amor|querido|coração|lindo|gostoso|saudades)/.test(respostaLower)) {
+                    emojiParaReagir = Math.random() > 0.5 ? '❤️' : '🥰';
+                }
+                // Humor Engraçado / Riso
+                else if (/(kkk|hahaha|lmao|lol|engraçado|ri muito|hilário|😂|🤣)/.test(respostaLower)) {
+                    emojiParaReagir = Math.random() > 0.5 ? '😂' : '🤣';
+                }
+                // Surpresa / Choque
+                else if (/(nossa|caramba|meu deus|uau|mds|wtf)/.test(respostaLower)) {
+                    emojiParaReagir = '😱';
+                }
+                // Aprovação / Positivo
+                else if (/(exatamente|isso mesmo|concordo|boa|perfeito|incrível)/.test(respostaLower)) {
+                    emojiParaReagir = '👍';
+                }
+
+                if (emojiParaReagir) {
+                    setTimeout(() => {
+                        this.sock.sendMessage(m.key.remoteJid, { react: { text: emojiParaReagir, key: m.key } }).catch(() => { });
+                    }, 1000); // Um ligeiro delay para ser mais humano
+                }
+            }
         } catch (error: any) {
             // ✅ BUG FIX: Imprime o erro completo, não apenas .message (que pode ser undefined)
             const errMsg = error?.message || String(error) || 'erro desconhecido';
