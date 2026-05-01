@@ -918,7 +918,9 @@ class BotCore {
             }
 
 
-            if (temImagem) {
+            const isImageReply = replyInfo?.quotedType === 'image';
+
+            if (temImagem || isImageReply) {
                 await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
             } else if (temAudio) {
                 // ═══ LÓGICA DE ÁUDIO ═══
@@ -1993,16 +1995,30 @@ class BotCore {
                         if (!prompt) break;
 
                         try {
+                            // Tenta o Nano Banana (Google Imagen 3) primeiro
+                            this.logger.info(`🎨 Tentando Nano Banana (Imagen 3) para: ${prompt}`);
+                            const nanoRes = await this.apiClient.generateImage(prompt);
+
+                            if (nanoRes.success) {
+                                await this.sock.sendMessage(jid, {
+                                    image: nanoRes.buffer,
+                                    caption: `Gerado por Akira (Nano Banana 🍌)`
+                                }, { quoted: m });
+                                break;
+                            }
+
+                            this.logger.warn(`⚠️ Nano Banana falhou: ${nanoRes.error}. Tentando fallback Pollinations...`);
+
+                            // Fallback para Pollinations (Poly)
                             const encodedPrompt = encodeURIComponent(prompt);
                             const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
 
-                            // Download the image buffer
                             const imgRes = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 60000 });
                             const imgBuffer = Buffer.from(imgRes.data);
 
                             await this.sock.sendMessage(jid, {
                                 image: imgBuffer,
-                                caption: `Gerado por Akira`
+                                caption: `Gerado por Akira (Poly 💠)`
                             }, { quoted: m });
                         } catch (imgErr: any) {
                             await this.sock.sendMessage(jid, { text: `❌ Erro ao gerar imagem: ${imgErr.message}` }, { quoted: m });

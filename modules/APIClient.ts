@@ -277,6 +277,35 @@ class APIClient {
     }
 
     /**
+     * Gera uma imagem usando o Imagen 3 (Nano Banana) via Backend Python
+     */
+    async generateImage(prompt: string, aspect_ratio: string = "1:1"): Promise<any> {
+        try {
+            const result = await this.request('POST', '/generate-image', {
+                prompt,
+                aspect_ratio
+            });
+
+            if (result.success && result.data?.success) {
+                return {
+                    success: true,
+                    buffer: Buffer.from(result.data.image_b64, 'base64'),
+                    mime_type: result.data.mime_type,
+                    model: result.data.model
+                };
+            }
+
+            return {
+                success: false,
+                error: result.data?.error || result.error || 'Erro ao gerar imagem'
+            };
+        } catch (error: any) {
+            this.logger.error(`[API] Erro ao chamar generateImage: \${error.message}`);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
     * Faz requisição para análise de visão
     */
     async analyzeImage(imageBase64: string, usuario: string = 'anonimo', numero: string = ''): Promise<any> {
