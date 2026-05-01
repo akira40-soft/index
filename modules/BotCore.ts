@@ -699,11 +699,15 @@ class BotCore {
             const connectedBotNumber = JidUtils.getNumber(this.BOT_JID || '');
             const envBotNumber = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
+            const replyInfo = await this.messageProcessor.extractReplyInfo(m);
+            // Se for reply, vamos tentar resolver o nome do autor citado para enriquecer o contexto
+            if (replyInfo && replyInfo.isReply && replyInfo.participantJidCitado) {
+                replyInfo.quoted_author_name = await this.resolveAuthorName(replyInfo.participantJidCitado, remoteJid);
+            }
+
             const isMention = textoFinal.includes(`@${connectedBotNumber}`) || textoFinal.includes(`@${envBotNumber}`);
 
-            const replyParticipant = m.message?.extendedTextMessage?.contextInfo?.participant;
-            const replyParticipantNumber = replyParticipant ? JidUtils.getNumber(replyParticipant) : null;
-            const isReplyToMe = replyParticipantNumber === connectedBotNumber || replyParticipantNumber === envBotNumber;
+            const isReplyToMe = replyInfo ? replyInfo.ehRespostaAoBot : false;
 
             // ✅ Nova verificação: O usuário chamou o bot pelo nome ou por um apelido?
             const botName = String(this.config.BOT_NAME).toLowerCase();
@@ -711,12 +715,6 @@ class BotCore {
 
             const textLower = textoFinal.toLowerCase();
             const isCallingBot = textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido));
-
-            const replyInfo = await this.messageProcessor.extractReplyInfo(m);
-            // Se for reply, vamos tentar resolver o nome do autor citado para enriquecer o contexto
-            if (replyInfo && replyInfo.isReply && replyInfo.participantJidCitado) {
-                replyInfo.quoted_author_name = await this.resolveAuthorName(replyInfo.participantJidCitado, remoteJid);
-            }
 
             const nome = await this._resolveUserName(m, numero, remoteJid);
             const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
@@ -2381,6 +2379,35 @@ class BotCore {
                                 if (!val) break;
                                 await this.sock.groupUpdateDescription(jid, val);
                                 await this.sock.sendMessage(jid, { text: `✅ Descrição do grupo atualizada!` }, { quoted: m });
+                                break;
+                            }
+                            case 'add_member': {
+                                if (!val) break;
+                                // Aceita múltiplos números separados por vírgula
+                                const targets = val.split(',').map((v: string) => v.trim().replace(/\D/g, '')).map((v: string) => {
+                                    if (v.length === 9 && (v.startsWith('9') || v.startsWith('2'))) return '244' + v + '@s.whatsapp.net';
+                                    return v + '@s.whatsapp.net';
+                                });
+                                try {
+                                    await this.sock.groupParticipantsUpdate(jid, targets, 'add');
+                                    await this.sock.sendMessage(jid, { text: `✅ Tentei adicionar os membros solicitados.` }, { quoted: m });
+                                } catch (addErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao adicionar membros: ${addErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+                            case 'remove_member': {
+                                if (!val) break;
+                                const targets = val.split(',').map((v: string) => v.trim().replace(/\D/g, '')).map((v: string) => {
+                                    if (v.length === 9 && (v.startsWith('9') || v.startsWith('2'))) return '244' + v + '@s.whatsapp.net';
+                                    return v + '@s.whatsapp.net';
+                                });
+                                try {
+                                    await this.sock.groupParticipantsUpdate(jid, targets, 'remove');
+                                    await this.sock.sendMessage(jid, { text: `👢 Membros removidos conforme solicitado.` }, { quoted: m });
+                                } catch (remErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao remover membros: ${remErr.message}` }, { quoted: m });
+                                }
                                 break;
                             }
                         }
