@@ -1228,13 +1228,20 @@ class MediaProcessor {
             }
 
             const extractMediaContainer = (msgObj: any, depth: number = 0): any => {
-                if (!msgObj || typeof msgObj !== 'object' || depth > 5) return null;
+                if (!msgObj || typeof msgObj !== 'object' || depth > 8) return null;
 
-                // Se encontramos as chaves de mídia, retornamos este objeto
+                // 1. Se o objeto já é o container (audioMessage, imageMessage, etc)
                 if (msgObj.mediaKey && (msgObj.url || msgObj.directPath)) return msgObj;
 
-                // Wrappers conhecidos
+                // 2. Se o objeto contém uma chave de mídia direta (ex: quotedMessage: { audioMessage: { ... } })
+                const subKeys = ['audioMessage', 'imageMessage', 'videoMessage', 'stickerMessage', 'documentMessage'];
+                for (const k of subKeys) {
+                    if (msgObj[k] && (msgObj[k].mediaKey || msgObj[k].url || msgObj[k].directPath)) return msgObj[k];
+                }
+
+                // 3. Wrappers conhecidos (onde descemos um nível)
                 const wraps = [
+                    msgObj.message, // Camada principal do Baileys
                     msgObj.viewOnceMessageV2?.message,
                     msgObj.viewOnceMessageV2Extension?.message,
                     msgObj.viewOnceMessage?.message,
@@ -1242,8 +1249,8 @@ class MediaProcessor {
                     msgObj.documentWithCaptionMessage?.message,
                     msgObj.editMessage?.message,
                     msgObj.protocolMessage?.editedMessage,
-                    msgObj.extendedTextMessage?.contextInfo?.quotedMessage,
-                    msgObj.message // Caso a estrutura esteja um nível abaixo
+                    msgObj.extendedTextMessage?.contextInfo?.quotedMessage, // Quoted padrão
+                    msgObj.contextInfo?.quotedMessage // Quoted alternativo
                 ];
 
                 for (const w of wraps) {
@@ -1253,15 +1260,15 @@ class MediaProcessor {
                     }
                 }
 
-                // Sub-mensagens específicas
-                const subKeys = ['imageMessage', 'videoMessage', 'stickerMessage', 'audioMessage', 'documentMessage'];
-                for (const k of subKeys) {
-                    if (msgObj[k]) {
-                        // Se o objeto em msgObj[k] já tem as chaves, retorna ele
-                        if (msgObj[k].mediaKey) return msgObj[k];
-                        // Senão, aprofunda
-                        const found = extractMediaContainer(msgObj[k], depth + 1);
-                        if (found) return found;
+                // 4. Scan Profundo (Deep Scan)
+                // Se chegamos aqui e estamos nos níveis iniciais, tenta procurar em qualquer chave de objeto
+                if (depth < 3) {
+                    for (const key of Object.keys(msgObj)) {
+                        const val = msgObj[key];
+                        if (val && typeof val === 'object' && !wraps.includes(val)) {
+                            const found = extractMediaContainer(val, depth + 1);
+                            if (found) return found;
+                        }
                     }
                 }
 

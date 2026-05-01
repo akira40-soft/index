@@ -1324,6 +1324,12 @@ class BotCore {
                         await this.presenceSimulator.stop(m.key.remoteJid);
                     }
 
+                    // 5. Processar remote_actions (skills, imagens, etc.)
+                    if (resultado.remote_actions?.length > 0) {
+                        this.logger.info(`🚀 [AGENT] ${resultado.remote_actions.length} ação(ões) remota(s) a executar`);
+                        this.handleRemoteActions(resultado.remote_actions, m).catch(() => { });
+                    }
+
                     // ✅ LÓGICA DE REPLY CONDICIONAL:
                     // - PV: responde em reply APENAS se usuario mandou em reply
                     // - Grupo: SEMPRE em reply (para manter contexto)
@@ -2164,8 +2170,10 @@ class BotCore {
                             // Envia feedback visual imediato
                             await this.sock.sendMessage(jid, { react: { text: '🎧', key: m.key } });
 
-                            // Tenta baixar áudio (downloadMedia já resolve se é quoted ou direto)
-                            const dl = await this.mediaProcessor.downloadMedia(m, 'audio');
+                            // Extrai a mensagem citada (áudio original)
+                            const targetMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage || m.message || m;
+                            const dl = await this.mediaProcessor.downloadMedia(targetMsg, 'audio');
+
 
                             if (dl?.buffer) {
                                 const transcricao = await this.audioProcessor.speechToText(dl.buffer);
