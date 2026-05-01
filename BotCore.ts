@@ -147,6 +147,12 @@ class BotCore {
     private pipelineLogCounter: number = 0;
     private readonly PIPELINE_LOG_INTERVAL = 10;
 
+    // Rastreamento de falhas de descriptografia por JID (Bad MAC Error)
+    private decryptionFailures: Map<string, { count: number; firstSeen: number }> = new Map();
+    private readonly DECRYPT_FAILURE_THRESHOLD = 3;   // falhas consecutivas antes de limpar sessão
+    private readonly DECRYPT_FAILURE_WINDOW_MS = 60000; // janela de 60s para contar falhas
+
+
     constructor() {
         this.config = ConfigManager.getInstance();
         this.logger = pino({
@@ -571,20 +577,34 @@ class BotCore {
             // O Baileys tentará descriptografar novamente quando receber as chaves (retry).
             if (!m.message) {
                 const jid = m.key.remoteJid;
-                this.logger.debug(`⚠️ Falha de decrypt (Bad MAC?) para ${jid}. Aguardando retry...`);
+                this.logger.warn(`⚠️ [BAD MAC] Falha de descriptografia para ${jid}. Rastreando...`);
 
-                // Se for o dono, tentamos "cutucar" a conexão enviando uma msg reativa
-                // Isso força o WhatsApp do usuário a negociar novas chaves (Signal Session Reset)
-                const isOwner = this.config?.isDono && this.config.isDono(jid);
-                if (isOwner) {
-                    this.logger.warn(`🔧 [REPAIR] Tentando reparar sessão com o dono silenciosamente: ${jid}`);
-                    // Silently attempt to repair by sending a read receipt which forces a key negotiation
+                // ── Rastrear falhas por JID dentro de uma janela de tempo ──────────────
+                const now = Date.now();
+                const existing = this.decryptionFailures.get(jid);
+                if (existing && (now - existing.firstSeen) < this.DECRYPT_FAILURE_WINDOW_MS) {
+                    existing.count++;
+                } else {
+                    // Primeira falha ou janela expirou — reinicia contador
+                    this.decryptionFailures.set(jid, { count: 1, firstSeen: now });
+                }
+
+                const failures = this.decryptionFailures.get(jid)!;
+                this.logger.warn(`⚠️ [BAD MAC] ${jid}: ${failures.count}/${this.DECRYPT_FAILURE_THRESHOLD} falhas na janela de ${this.DECRYPT_FAILURE_WINDOW_MS / 1000}s`);
+
+                if (failures.count >= this.DECRYPT_FAILURE_THRESHOLD) {
+                    // Limiar atingido — sessão Signal corrompida confirmada
+                    this.logger.error(`🔴 [BAD MAC] Limiar atingido para ${jid}. Limpando sessão Signal corrompida...`);
+                    this.decryptionFailures.delete(jid); // Reseta contador
+                    await this._clearCorruptedSession(jid);
+                } else {
+                    // Ainda dentro do limiar — tenta reparação leve (nudge)
                     this.sock.readMessages([m.key]).catch(() => { });
-                    // Optionally, send a silent presence update
                     this.sock.sendPresenceUpdate('available', jid).catch(() => { });
                 }
                 return;
             }
+
 
 
 
@@ -1613,6 +1633,59 @@ class BotCore {
             this.logger.error('❌ Erro limpar credenciais:', error.message);
         }
     }
+
+    /**
+     * Remove apenas os arquivos de sessão Signal de um JID específico.
+     *
+     * O protocolo Signal armazena o estado de cada sessão em arquivos
+     * `session-<number>.<deviceId>.json` dentro de AUTH_FOLDER. Quando esses
+     * arquivos ficam dessincronizados com o servidor do WhatsApp, toda mensagem
+     * daquele contato falha com "Bad MAC Error". Deletar somente esses arquivos
+     * força o Baileys a negociar uma nova sessão Signal na próxima mensagem,
+     * sem exigir novo QR Code nem apagar credenciais de outros contatos.
+     */
+    async _clearCorruptedSession(jid: string): Promise<void> {
+        try {
+            const authFolder = this.config.AUTH_FOLDER;
+            if (!fs.existsSync(authFolder)) {
+                this.logger.warn(`⚠️ [SESSION REPAIR] AUTH_FOLDER não encontrado: ${authFolder}`);
+                return;
+            }
+
+            // Extrai o número do JID (ex: "5511999887766@s.whatsapp.net" → "5511999887766")
+            const number = jid.split('@')[0].split(':')[0];
+            if (!number) {
+                this.logger.warn(`⚠️ [SESSION REPAIR] Não foi possível extrair número de: ${jid}`);
+                return;
+            }
+
+            // Padrão dos arquivos de sessão Signal: session-<number>.<deviceId>.json
+            const files = fs.readdirSync(authFolder);
+            const sessionFiles = files.filter(f => f.startsWith(`session-${number}`) && f.endsWith('.json'));
+
+            if (sessionFiles.length === 0) {
+                this.logger.info(`ℹ️ [SESSION REPAIR] Nenhum arquivo de sessão encontrado para ${number}. Reconectando...`);
+            } else {
+                for (const file of sessionFiles) {
+                    const filePath = path.join(authFolder, file);
+                    fs.rmSync(filePath, { force: true });
+                    this.logger.info(`🗑️ [SESSION REPAIR] Removido: ${file}`);
+                }
+                this.logger.info(`✅ [SESSION REPAIR] ${sessionFiles.length} sessão(ões) de ${number} removida(s). O Baileys negociará nova sessão automaticamente.`);
+            }
+
+            // Reconecta para que o Baileys recarregue o estado de auth sem as sessões corrompidas
+            this.logger.info('🔄 [SESSION REPAIR] Reconectando para aplicar limpeza de sessão...');
+            if (this.sock) {
+                try { this.sock.end(undefined); } catch (_) { }
+            }
+            await delay(2000);
+            this.connect();
+        } catch (error: any) {
+            this.logger.error(`❌ [SESSION REPAIR] Erro ao limpar sessão de ${jid}: ${error.message}`);
+        }
+    }
+
 
     getStatus(): any {
         return {
