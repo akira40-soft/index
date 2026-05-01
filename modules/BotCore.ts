@@ -466,7 +466,26 @@ class BotCore {
 
             this.sock.ev.on('messages.upsert', async ({ messages, type }: any) => {
                 if (type !== 'notify') return;
-                for (const m of messages) await this.processMessage(m);
+
+                for (const m of messages) {
+                    // Detecção de erro de Bad MAC (falha de descriptografia)
+                    // No Baileys v6+, m.messageStubType === 1 (CIPHERTEXT_ERROR)
+                    if (m.messageStubType === 1) {
+                        this.logger.error(`🚨 [DECRYPT FAILURE] Mensagem ilegível de ${m.key.remoteJid}. Tentando reparar...`);
+                        await this._repairCorruptedSession(m.key.remoteJid!);
+
+                        // Notifica o dono se possível
+                        if (this.config.OWNER_NUMBER) {
+                            try {
+                                const jidDono = this.config.OWNER_NUMBER.includes('@') ? this.config.OWNER_NUMBER : `${this.config.OWNER_NUMBER}@s.whatsapp.net`;
+                                await this.sock.sendMessage(jidDono, { text: `⚠️ *REPARO DE SESSÃO:* Detectei um erro de descriptografia (Bad MAC) em @${m.key.remoteJid?.split('@')[0]}. A sessão corrompida foi limpa para forçar sincronização.` }, { mentions: [m.key.remoteJid!] });
+                            } catch (e) { }
+                        }
+                        continue;
+                    }
+
+                    await this.processMessage(m);
+                }
             });
 
             this.sock.ev.on('group-participants.update', async (update: any) => {
@@ -566,33 +585,40 @@ class BotCore {
             if (shouldLog) this.logger.debug('🔹 [PIPELINE] Iniciando');
             if (!m) return;
 
+            // ✅ LOG DE DIAGNÓSTICO INICIAL (Injetado para rastrear Bad MAC)
+            const jid = m.key.remoteJid;
+            const fromMe = m.key.fromMe;
+            const messageId = m.key.id;
+
             // ✅ CORREÇÃO CRÍTICA: Se a mensagem falhou ao descriptografar (m.message nulo),
             // NÃO a marquemos como processada e NÃO prossigamos. 
             // O Baileys tentará descriptografar novamente quando receber as chaves (retry).
             if (!m.message) {
-                const jid = m.key.remoteJid;
-                this.logger.debug(`⚠️ Falha de decrypt (Bad MAC?) para ${jid}. Aguardando retry...`);
+                this.logger.warn(`⚠️ [DECRYPT FAILURE] Falha ao ler mensagem ${messageId} de ${jid}.`);
 
-                const numeroCheck = jid.split('@')[0];
-                const isOwner = this.config?.isDono && this.config.isDono(numeroCheck);
-                if (isOwner) {
-                    // Tenta reparar sessão silenciosamente
-                    this.logger.debug(`🔧 [REPAIR] Tentando recuperar sessão com o dono: ${jid}`);
-                    this.sock.readMessages([m.key]).catch(() => { });
-                    this.sock.sendPresenceUpdate('available', jid).catch(() => { });
+                const numeroCheck = JidUtils.getNumber(jid);
+                const isPrivileged = this.config?.isDono && this.config.isDono(numeroCheck);
+
+                if (isPrivileged) {
+                    this.logger.info(`🔧 [REPAIR] Tentando reparar sessão corrompida com usuário privilegiado: ${numeroCheck}`);
+                    await this._repairCorruptedSession(jid);
+
+                    // Tenta forçar o socket a solicitar novas chaves
+                    if (this.sock) {
+                        this.sock.readMessages([m.key]).catch(() => { });
+                        this.sock.sendPresenceUpdate('available', jid).catch(() => { });
+                    }
                 }
                 return;
             }
 
-
-
             // Agora sim verificamos se já processamos este ID com sucesso
             if (this.isMessageProcessed(m.key)) return;
 
-            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${m.key.remoteJid} | fromMe: ${m.key.fromMe} | Txt: "${String(textRaw).substring(0, 15)}"`);
+            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${jid} | fromMe: ${fromMe} | Txt: "${String(textRaw).substring(0, 15)}"`);
 
             // ✅ VALIDAÇÃO RÍGIDA: Ignorar mensagens do próprio bot
-            if (m.key.fromMe) return;
+            if (fromMe) return;
 
             if (m.message.protocolMessage) return;
 
@@ -818,13 +844,12 @@ class BotCore {
             isCommand = isCommand || this.messageProcessor.isCommand(textoFinal);
 
             // ═══ FILTRO DE ÁUDIO EM GRUPO ═══
-            // Em grupos, áudios SEM reply ao bot são completamente ignorados:
-            // não transcrevemos, não gastamos tokens Deepgram, não contamos rate limit.
-            // A única forma de ativar a Akira via áudio no grupo é mandar o áudio em REPLY a ela.
+            // Em grupos, áudios SEM reply ao bot são geralmente ignorados para economizar recursos.
+            // Mas permitimos se houver MENÇÃO direta ou se chamarem pelo NOME no caption.
             if (temAudio && ehGrupo) {
                 const ehReplyAoBotParaAudio = !!replyInfo?.ehRespostaAoBot;
-                if (!ehReplyAoBotParaAudio) {
-                    this.logger.debug(`⏭️ [ÁUDIO GRUPO IGNORADO] ${nome}: áudio sem reply ao bot`);
+                if (!ehReplyAoBotParaAudio && !isMention && !isCallingBot) {
+                    this.logger.debug(`⏭️ [ÁUDIO GRUPO IGNORADO] ${nome}: áudio sem reply/menção ao bot`);
                     return;
                 }
             }
@@ -1648,8 +1673,39 @@ class BotCore {
             this.currentQR = null;
             this.BOT_JID = null;
             this.reconnectAttempts = 0;
-        } catch (error: any) {
-            this.logger.error('❌ Erro limpar credenciais:', error.message);
+        } catch (e: any) {
+            this.logger.error('Erro ao limpar auth:', e.message);
+        }
+    }
+
+    /**
+     * Repara sessão corrompida apagando arquivos de sessão específicos do JID.
+     * Útil para resolver o erro "Bad MAC" sem resetar o bot inteiro.
+     */
+    private async _repairCorruptedSession(jid: string): Promise<void> {
+        try {
+            const numero = JidUtils.getNumber(jid);
+            const authDir = this.config.AUTH_FOLDER;
+            if (!fs.existsSync(authDir)) return;
+
+            const files = fs.readdirSync(authDir);
+            let deletedCount = 0;
+
+            for (const file of files) {
+                // Apaga arquivos de sessão e sender-key relacionados ao número
+                if (file.includes(`session-${numero}`) || file.includes(`sender-key-${numero}`)) {
+                    try {
+                        fs.unlinkSync(path.join(authDir, file));
+                        deletedCount++;
+                    } catch (err) { }
+                }
+            }
+
+            if (deletedCount > 0) {
+                this.logger.info(`🧹 [REPAIR] Removidos ${deletedCount} arquivos de sessão corrompidos para ${numero}`);
+            }
+        } catch (e: any) {
+            this.logger.error(`❌ [REPAIR] Erro ao tentar reparar sessão: ${e.message}`);
         }
     }
 
@@ -2087,18 +2143,14 @@ class BotCore {
                     }
 
                     case 'transcribe_audio': {
-                        // Tenta baixar áudio da mensagem citada ou da atual
-                        const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-                        const targetMsg = quotedMsg || m.message;
-
-                        if (!targetMsg?.audioMessage) {
-                            await this.sock.sendMessage(jid, { text: '❌ Por favor, responda a um áudio para eu transcrever.' }, { quoted: m });
-                            break;
-                        }
-
                         try {
+                            // Envia feedback visual imediato
                             await this.sock.sendMessage(jid, { react: { text: '🎧', key: m.key } });
-                            const dl = await this.mediaProcessor.downloadMedia(targetMsg, 'audio');
+                            await this.sock.sendMessage(jid, { text: '🎧 *Transcrição iniciada...* Estou a processar o áudio, aguarda um momento.' }, { quoted: m });
+
+                            // Tenta baixar áudio (downloadMedia já resolve se é quoted ou direto)
+                            const dl = await this.mediaProcessor.downloadMedia(m, 'audio');
+
                             if (dl?.buffer) {
                                 const transcricao = await this.audioProcessor.speechToText(dl.buffer);
                                 if (transcricao.sucesso) {
@@ -2106,11 +2158,45 @@ class BotCore {
                                         text: `📝 *Transcrição do Áudio:*\n\n"${transcricao.texto}"`
                                     }, { quoted: m });
                                 } else {
-                                    await this.sock.sendMessage(jid, { text: '❌ Não consegui transcrever este áudio.' }, { quoted: m });
+                                    await this.sock.sendMessage(jid, { text: '❌ Não consegui transcrever este áudio. Talvez a qualidade esteja má ou seja muito curto.' }, { quoted: m });
                                 }
+                            } else {
+                                await this.sock.sendMessage(jid, { text: '❌ Não consegui encontrar o arquivo de áudio. Por favor, responda diretamente a uma nota de voz.' }, { quoted: m });
                             }
                         } catch (tErr: any) {
+                            this.logger.error(`[TRANSCRIBE] Erro: ${tErr.message}`);
                             await this.sock.sendMessage(jid, { text: `❌ Erro na transcrição: ${tErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'analyze_image': {
+                        try {
+                            // Reação + Feedback
+                            await this.sock.sendMessage(jid, { react: { text: '👁️', key: m.key } });
+                            await this.sock.sendMessage(jid, { text: '👁️ *Análise visual iniciada...* Estou a olhar para a imagem, um segundo.' }, { quoted: m });
+
+                            const dl = await this.mediaProcessor.downloadMedia(m, 'image');
+                            if (dl?.buffer) {
+                                // Chama API de visão
+                                const res = await this.apiClient.analyzeImage(dl.buffer.toString('base64'), userId, jid);
+                                if (res.success) {
+                                    const analise = res.analise;
+                                    let resp = `👁️ *ANÁLISE VISUAL AKIRA*\n\n${analise.description || 'Não consegui descrever a imagem.'}`;
+
+                                    if (analise.ocr) resp += `\n\n📝 *Texto Identificado:*\n${analise.ocr}`;
+                                    if (analise.qr) resp += `\n\n🔗 *QR Code:* ${analise.qr}`;
+
+                                    await this.sock.sendMessage(jid, { text: resp }, { quoted: m });
+                                } else {
+                                    await this.sock.sendMessage(jid, { text: `❌ Falha na análise: ${res.error || 'Erro desconhecido'}` }, { quoted: m });
+                                }
+                            } else {
+                                await this.sock.sendMessage(jid, { text: '❌ Por favor, responda a uma imagem para eu analisar.' }, { quoted: m });
+                            }
+                        } catch (vErr: any) {
+                            this.logger.error(`[VISION] Erro: ${vErr.message}`);
+                            await this.sock.sendMessage(jid, { text: `❌ Erro na visão: ${vErr.message}` }, { quoted: m });
                         }
                         break;
                     }
