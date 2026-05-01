@@ -844,14 +844,15 @@ class BotCore {
             isCommand = isCommand || this.messageProcessor.isCommand(textoFinal);
 
             // ═══ FILTRO DE ÁUDIO EM GRUPO ═══
-            // Em grupos, áudios SEM reply ao bot são geralmente ignorados para economizar recursos.
-            // Mas permitimos se houver MENÇÃO direta ou se chamarem pelo NOME no caption.
+            // Processa áudio em grupo SE: for qualquer reply, menção ao bot, ou chamar pelo nome.
+            // Ignora áudios "soltos" (não em reply) para evitar processar notas de voz aleatórias.
             if (temAudio && ehGrupo) {
-                const ehReplyAoBotParaAudio = !!replyInfo?.ehRespostaAoBot;
-                if (!ehReplyAoBotParaAudio && !isMention && !isCallingBot) {
+                const ehReplyQualquer = !!(replyInfo?.isReply); // Qualquer reply, não só ao bot
+                if (!ehReplyQualquer && !isMention && !isCallingBot) {
                     this.logger.debug(`⏭️ [ÁUDIO GRUPO IGNORADO] ${nome}: áudio sem reply/menção ao bot`);
                     return;
                 }
+                this.logger.debug(`🎧 [ÁUDIO GRUPO] ${nome}: processando (reply=${ehReplyQualquer}, mention=${isMention}, call=${isCallingBot})...`);
             }
 
             if (shouldLog) this.logger.debug(`🔹 [PIPELINE] txt=${!!texto} img=${temImagem} aud=${temAudio} sticker=${temSticker}`);
