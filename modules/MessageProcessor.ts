@@ -674,7 +674,7 @@ class MessageProcessor {
     /**
     * Sanitiza texto para segurança
     */
-    sanitizeText(text: string | null | undefined, maxLength: number = 2000): string {
+    sanitizeText(text: string | null | undefined, maxLength: number = 6000): string {
         if (!text) return '';
 
         let sanitized = String(text)

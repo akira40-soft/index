@@ -65,7 +65,7 @@ class APIClient {
         const payload: any = {
             usuario: String(usuario || 'anonimo').substring(0, 50),
             numero: numeroLimpo.substring(0, 20),
-            mensagem: String(mensagem || '').substring(0, 2000),
+            mensagem: String(mensagem || '').substring(0, 6000),
             tipo_conversa: ['pv', 'grupo'].includes(tipo_conversa) ? tipo_conversa : 'pv',
             tipo_mensagem: finalTipoMensagem, // ✅ Agora pode ser 'game'
             historico: [],
@@ -81,14 +81,14 @@ class APIClient {
         if (mensagem_citada || (reply_metadata && reply_metadata.is_reply)) {
             const quotedAuthorNumerolimpo = JidUtils.cleanPhoneNumber(reply_metadata?.quoted_author_numero) || 'desconhecido';
 
-            payload.mensagem_citada = String(mensagem_citada || reply_metadata?.quoted_text_original || '').substring(0, 1000);
+            payload.mensagem_citada = String(mensagem_citada || reply_metadata?.quoted_text_original || '').substring(0, 6000);
             payload.reply_metadata = {
                 is_reply: true,
                 reply_to_bot: Boolean(reply_metadata?.reply_to_bot),
                 quoted_author_name: String(reply_metadata?.quoted_author_name || 'desconhecido').substring(0, 200),
                 quoted_author_numero: quotedAuthorNumerolimpo,
                 quoted_type: String(reply_metadata?.quoted_type || 'texto'),
-                quoted_text_original: String(reply_metadata?.quoted_text_original || '').substring(0, 1000),
+                quoted_text_original: String(reply_metadata?.quoted_text_original || '').substring(0, 6000),
                 context_hint: String(reply_metadata?.contextHint || reply_metadata?.context_hint || 'contexto_geral')
             };
         } else {
