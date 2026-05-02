@@ -279,11 +279,12 @@ class APIClient {
     /**
      * Gera uma imagem usando o Imagen 3 (Nano Banana) via Backend Python
      */
-    async generateImage(prompt: string, aspect_ratio: string = "1:1"): Promise<any> {
+    async generateImage(prompt: string, aspect_ratio: string = "1:1", model: string = "flux"): Promise<any> {
         try {
             const result = await this.request('POST', '/generate-image', {
                 prompt,
-                aspect_ratio
+                aspect_ratio,
+                model
             });
 
             if (result.success && result.data?.success) {

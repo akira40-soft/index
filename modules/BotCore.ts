@@ -2009,19 +2009,20 @@ class BotCore {
                         try {
                             // Tenta o Nano Banana (Google Imagen 3) primeiro
                             this.logger.info(`🎨 Tentando Nano Banana (Imagen 3) para: ${prompt}`);
-                            const nanoRes = await this.apiClient.generateImage(prompt);
+                            const nanoRes = await this.apiClient.generateImage(prompt, '1:1', imgModel);
 
                             if (nanoRes.success) {
+                                const modelLabel = nanoRes.model?.includes('pollinations') ? 'Poly 💠' : 'Nano Banana 🍌';
                                 await this.sock.sendMessage(jid, {
                                     image: nanoRes.buffer,
-                                    caption: `Gerado por Akira (Nano Banana 🍌)`
+                                    caption: `Gerado por Akira (${modelLabel})`
                                 }, { quoted: m });
                                 break;
                             }
 
-                            this.logger.warn(`⚠️ Nano Banana falhou: ${nanoRes.error}. Tentando fallback Pollinations...`);
+                            this.logger.warn(`⚠️ Geração primária falhou: ${nanoRes.error}. Tentando fallback direto Pollinations...`);
 
-                            // Fallback para Pollinations (Poly)
+                            // Fallback secundário (direto via TS se o Python falhar)
                             const encodedPrompt = encodeURIComponent(prompt);
                             const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
 
