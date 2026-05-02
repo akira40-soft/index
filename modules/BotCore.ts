@@ -364,8 +364,8 @@ class BotCore {
                     return undefined;
                 },
                 // ✅ AJUSTES PARA AMBIENTES DE CONTAINER (RAILWAY)
-                connectTimeoutMs: 60000,
-                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 120000,
+                defaultQueryTimeoutMs: 120000,
                 transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 10 }
             };
 
