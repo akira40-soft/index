@@ -2220,8 +2220,36 @@ class BotCore {
                     }
 
                     case 'moderation': {
-                        const { type, target: modTarget, reason: modReason } = params;
-                        if (!modTarget) break;
+                        const { type, target: rawTarget, reason: modReason } = params;
+                        const mentionJids: string[] = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                        const repliedParticipant: string | undefined = m.message?.extendedTextMessage?.contextInfo?.participant;
+                        let modTarget = rawTarget?.toString().trim() || '';
+
+                        if (!modTarget && mentionJids.length > 0) {
+                            modTarget = mentionJids[0];
+                        }
+
+                        if (!modTarget && repliedParticipant) {
+                            modTarget = repliedParticipant;
+                        }
+
+                        if (modTarget.startsWith('@')) {
+                            modTarget = modTarget.slice(1);
+                        }
+
+                        // Normaliza número ou menção para JID
+                        if (modTarget && !modTarget.includes('@')) {
+                            if (/^\d{5,}$/.test(modTarget)) {
+                                modTarget = `${modTarget}@s.whatsapp.net`;
+                            }
+                        }
+
+                        if (!modTarget || !modTarget.includes('@')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Não consegui determinar o alvo da moderação. Use um número completo, menção direta ou reply ao alvo.' }, { quoted: m });
+                            break;
+                        }
+
+                        const modTargetJid = modTarget;
 
                         // Verifica permissões (só o dono pode disparar via Agente por enquanto)
                         const isOwner = this.config.isDono(userId);
@@ -2235,8 +2263,6 @@ class BotCore {
                             break;
                         }
 
-                        const modTargetJid = modTarget.includes('@') ? modTarget : `${modTarget}@s.whatsapp.net`;
-
                         // Verifica se o bot é administrador do grupo antes de tentar remover alguém.
                         let groupMeta: any = null;
                         try {
@@ -2245,7 +2271,26 @@ class BotCore {
                             this.logger.warn(`Falha ao carregar metadata do grupo: ${metaErr.message}`);
                         }
 
-                        const botIsAdmin = groupMeta?.participants?.some((p: any) => p.id === this.sock.user?.id && (p.admin || p.isAdmin));
+                        const botJid = JidUtils.normalize(this.sock.user?.id);
+                        let botIsAdmin = false;
+
+                        if (groupMeta?.participants) {
+                            botIsAdmin = groupMeta.participants.some((p: any) => {
+                                const normalizedId = JidUtils.normalize(p.id);
+                                const role = p.admin || p.isAdmin || p.isSuperAdmin;
+                                const isAdminRole = role === 'admin' || role === 'superadmin' || role === true;
+                                return normalizedId === botJid && isAdminRole;
+                            });
+                        }
+
+                        if (!botIsAdmin && this.groupManagement) {
+                            try {
+                                botIsAdmin = await this.groupManagement.isUserAdmin(jid, this.sock.user?.id);
+                            } catch (fallbackErr: any) {
+                                this.logger.warn(`Falha no fallback de admin do bot: ${fallbackErr.message}`);
+                            }
+                        }
+
                         if ((type === 'kick' || type === 'ban') && !botIsAdmin) {
                             await this.sock.sendMessage(jid, { text: '❌ Não consigo remover usuários porque não sou administrador do grupo.' }, { quoted: m });
                             break;
