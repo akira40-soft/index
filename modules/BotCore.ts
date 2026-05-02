@@ -2230,22 +2230,50 @@ class BotCore {
                             break;
                         }
 
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Ação de moderação só pode ser executada dentro de um grupo.' }, { quoted: m });
+                            break;
+                        }
+
+                        const modTargetJid = modTarget.includes('@') ? modTarget : `${modTarget}@s.whatsapp.net`;
+
+                        // Verifica se o bot é administrador do grupo antes de tentar remover alguém.
+                        let groupMeta: any = null;
+                        try {
+                            groupMeta = await this.sock.groupMetadata(jid);
+                        } catch (metaErr: any) {
+                            this.logger.warn(`Falha ao carregar metadata do grupo: ${metaErr.message}`);
+                        }
+
+                        const botIsAdmin = groupMeta?.participants?.some((p: any) => p.id === this.sock.user?.id && (p.admin || p.isAdmin));
+                        if ((type === 'kick' || type === 'ban') && !botIsAdmin) {
+                            await this.sock.sendMessage(jid, { text: '❌ Não consigo remover usuários porque não sou administrador do grupo.' }, { quoted: m });
+                            break;
+                        }
+
+                        const removeParticipant = async (participantId: string) => {
+                            return await Promise.race([
+                                this.sock.groupParticipantsUpdate(jid, [participantId], 'remove'),
+                                new Promise((_, reject) => setTimeout(() => reject(new Error('A remoção demorou mais do que o esperado.')), 15000))
+                            ]);
+                        };
+
                         switch (type) {
                             case 'kick':
-                                await this.sock.groupParticipantsUpdate(jid, [modTarget], 'remove');
+                                await removeParticipant(modTargetJid);
                                 break;
                             case 'ban':
-                                await this.moderationSystem.banUser(modTarget, modReason);
-                                await this.sock.groupParticipantsUpdate(jid, [modTarget], 'remove');
+                                await this.moderationSystem.banUser(modTargetJid, modReason);
+                                await removeParticipant(modTargetJid);
                                 break;
                             case 'mute':
-                                await this.moderationSystem.muteUser(jid, modTarget, 60); // 60 min default
+                                await this.moderationSystem.muteUser(jid, modTargetJid, 60); // 60 min default
                                 break;
                             case 'clear':
                                 // Clear logic if available
                                 break;
                         }
-                        await this.sock.sendMessage(jid, { text: `🛡️ *MODERAÇÃO AKIRA:* Ação \`${type}\` executada em @${modTarget.split('@')[0]}\nMotivo: ${modReason}`, mentions: [modTarget] }, { quoted: m });
+                        await this.sock.sendMessage(jid, { text: `🛡️ *MODERAÇÃO AKIRA:* Ação \`${type}\` executada em @${modTargetJid.split('@')[0]}\nMotivo: ${modReason}`, mentions: [modTargetJid] }, { quoted: m });
                         break;
                     }
 
