@@ -615,7 +615,8 @@ class BotCore {
             // Agora sim verificamos se já processamos este ID com sucesso
             if (this.isMessageProcessed(m.key)) return;
 
-            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${jid} | fromMe: ${fromMe} | Txt: "${String(textRaw).substring(0, 15)}"`);
+            // LOG DE DIAGNÓSTICO INICIAL (Mostra o que bateu no socket sem cortes excessivos)
+            console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${jid} | fromMe: ${fromMe} | Txt: "${String(textRaw).substring(0, 100)}${textRaw.length > 100 ? '...' : ''}"`);
 
             // ✅ VALIDAÇÃO RÍGIDA: Ignorar mensagens do próprio bot
             if (fromMe) return;
@@ -796,36 +797,37 @@ class BotCore {
                 }
             }
 
-            // Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, escuta passivamente e ignora
+            // [ESCUTA PASSIVA] Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, escuta passivamente e ignora
             if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
-                if (textoFinal && textoFinal.length > 0) {
-                    const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
-                    this.apiClient.listenMessage({
-                        usuario: nome,
-                        numero: numeroReal,
-                        mensagem: textoFinal,
-                        tipo_conversa: 'grupo',
-                        grupo_id: remoteJid,
-                        grupo_nome: grupoNome,
-                        is_group: true,
-                        mensagem_citada: replyInfo?.textoMensagemCitada,
-                        reply_metadata: {
-                            is_reply: !!replyInfo,
-                            reply_to_bot: !!replyInfo?.ehRespostaAoBot,
-                            quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
-                            quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
-                            quoted_type: replyInfo?.quotedType || 'texto',
-                            quoted_text_original: replyInfo?.quotedTextOriginal || '',
-                            context_hint: replyInfo?.contextHint || 'contexto_geral'
-                        }
-                    }).catch(() => { });
-                }
+                // Removemos a restrição de 'textoFinal.length > 0' para rastrear literalmente TUDO (incluindo mídias sem legenda)
+                const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
+                // Adicionamos um log INFO visível para que o usuário saiba que a mensagem foi ouvida para o LSTM
+                this.logger.info(`🎧 [LSTM LISTENING] ${nome}: "${textoFinal.substring(0, 100)}${textoFinal.length > 100 ? '...' : ''}"`);
+                this.apiClient.listenMessage({
+                    usuario: nome,
+                    numero: numeroReal,
+                    mensagem: textoFinal,
+                    tipo_conversa: 'grupo',
+                    grupo_id: remoteJid,
+                    grupo_nome: grupoNome,
+                    is_group: true,
+                    mensagem_citada: replyInfo?.textoMensagemCitada,
+                    reply_metadata: {
+                        is_reply: !!replyInfo,
+                        reply_to_bot: !!replyInfo?.ehRespostaAoBot,
+                        quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
+                        quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
+                        quoted_type: replyInfo?.quotedType || 'texto',
+                        quoted_text_original: replyInfo?.quotedTextOriginal || '',
+                        context_hint: replyInfo?.contextHint || 'contexto_geral'
+                    }
+                }).catch(() => { });
                 return;
             }
 
-            // Log de diagnóstico para mensagens que serão processadas
+            // Log de diagnóstico para mensagens que serão processadas (Aumentado o limite de caracteres para evitar cortes)
             if (isCommand || isCallingBot || isMention || !ehGrupo) {
-                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${textoFinal.substring(0, 20)}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
+                console.log(`📩 [RECEBIDO] De: ${numero} | Txt: "${textoFinal.substring(0, 100)}${textoFinal.length > 100 ? '...' : ''}" | Cmd: ${isCommand} | Call: ${isCallingBot} | G: ${ehGrupo}`);
             }
 
             // [NFA] Feedback Imediato: Marca como entregue (2 ticks cinzas) assim que entra na fila

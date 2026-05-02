@@ -128,7 +128,7 @@ class GroupManagement {
         if (!metadata || !metadata.participants) return cached?.admins || [];
 
         const admins = metadata.participants
-            .filter((p: any) => p.admin === 'admin' || p.admin === 'superadmin')
+            .filter((p: any) => p.admin || p.isAdmin || p.isSuperAdmin)
             .map((p: any) => p.id ? JidUtils.normalize(p.id) : '');
 
         this.adminCache.set(groupJid, { admins, timestamp: Date.now() });
@@ -1062,7 +1062,7 @@ class GroupManagement {
             return true;
         }
 
-        if (!admins.includes(botId)) {
+        if (!(await this._isBotAdmin(groupJid))) {
             console.log(`❌ [GroupManagement] Bot NÃO está na lista de admins!`);
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para remover membros.' }, { quoted: m });
             return true;
@@ -1102,7 +1102,7 @@ class GroupManagement {
         const botJid = JidUtils.normalize(this.sock.user?.id);
         const admins = await this._getGroupAdmins(groupJid);
 
-        if (!admins.includes(botJid)) {
+        if (!(await this._isBotAdmin(groupJid))) {
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para adicionar membros.' }, { quoted: m });
             return true;
         }
@@ -1226,6 +1226,28 @@ class GroupManagement {
         const admins = await this._getGroupAdmins(groupJid);
         const normalizedUserJid = userJid ? JidUtils.normalize(userJid) : '';
         return admins.includes(normalizedUserJid);
+    }
+
+    /**
+     * Verifica se o bot é admin do grupo ignorando sufixos e erros de device
+     */
+    async _isBotAdmin(groupJid: string): Promise<boolean> {
+        const admins = await this._getGroupAdmins(groupJid);
+        const botNumEnv = this.config.BOT_NUMERO_REAL ? String(this.config.BOT_NUMERO_REAL).replace(/\D/g, '') : null;
+
+        let botNumSock = null;
+        if (this.sock?.user?.id) {
+            botNumSock = this.sock.user.id.split('@')[0].split(':')[0];
+        }
+
+        const normalize = (n: string) => n.replace(/\D/g, '').slice(-12);
+        const botNumEnvNorm = botNumEnv ? normalize(botNumEnv) : null;
+        const botNumSockNorm = botNumSock ? normalize(botNumSock) : null;
+
+        return admins.some(a => {
+            const adminNum = normalize(a);
+            return (botNumEnvNorm && adminNum === botNumEnvNorm) || (botNumSockNorm && adminNum === botNumSockNorm);
+        });
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -1502,7 +1524,7 @@ class GroupManagement {
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
         const botId = JidUtils.normalize(this.sock.user?.id);
-        if (!admins.includes(botId)) {
+        if (!(await this._isBotAdmin(groupJid))) {
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para alterar a descrição do grupo.' }, { quoted: m });
             return true;
         }
@@ -1538,7 +1560,7 @@ class GroupManagement {
         // Verificar se bot é admin
         const admins = await this._getGroupAdmins(groupJid);
         const botId = JidUtils.normalize(this.sock.user?.id);
-        if (!admins.includes(botId)) {
+        if (!(await this._isBotAdmin(groupJid))) {
             await this.sock.sendMessage(groupJid, { text: '❌ Eu preciso ser admin para alterar a foto do grupo.' }, { quoted: m });
             return true;
         }

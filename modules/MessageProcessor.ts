@@ -510,7 +510,20 @@ class MessageProcessor {
             sockNumero = JidUtils.getNumber(String(this.sock.user.id));
         }
 
-        return jidNumero === botNumeroEnv || (sockNumero && jidNumero === sockNumero);
+        // Normalização agressiva para garantir match independente de sufixos :1, :2 etc
+        const normalize = (n: string) => n.replace(/\D/g, '').slice(-12); // Pega os últimos 12 dígitos (padrão DDI+DDD+NUM)
+
+        const targetNum = normalize(jidNumero);
+        const envNum = botNumeroEnv ? normalize(botNumeroEnv) : null;
+        const sockNum = sockNumero ? normalize(sockNumero) : null;
+
+        const isMatch = (envNum && targetNum === envNum) || (sockNum && targetNum === sockNum);
+
+        if (isMatch) {
+            this.logger?.debug(`✅ [BOT IDENTITY MATCH] JID ${jid} (${targetNum}) matched Bot (Env: ${envNum}, Sock: ${sockNum})`);
+        }
+
+        return !!isMatch;
     }
 
     /**
@@ -518,13 +531,22 @@ class MessageProcessor {
     */
     hasAudio(message: any): boolean {
         try {
-            const tipo = getContentType(message.message);
+            const msg = message.message;
+            if (!msg) return false;
+
+            const tipo = getContentType(msg);
             if (tipo === 'audioMessage') return true;
 
+            // View Once
             if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
-                const subMsg = message.message[tipo].message;
-                return getContentType(subMsg) === 'audioMessage';
+                const subMsg = msg[tipo].message;
+                if (getContentType(subMsg) === 'audioMessage') return true;
             }
+
+            // Quoted Message
+            const quoted = msg.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted && getContentType(quoted) === 'audioMessage') return true;
+
             return false;
         } catch (e: any) {
             return false;
@@ -536,13 +558,22 @@ class MessageProcessor {
     */
     hasImage(message: any): boolean {
         try {
-            const tipo = getContentType(message.message);
+            const msg = message.message;
+            if (!msg) return false;
+
+            const tipo = getContentType(msg);
             if (tipo === 'imageMessage') return true;
 
+            // View Once
             if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
-                const subMsg = message.message[tipo].message;
-                return getContentType(subMsg) === 'imageMessage';
+                const subMsg = msg[tipo].message;
+                if (getContentType(subMsg) === 'imageMessage') return true;
             }
+
+            // Quoted Message
+            const quoted = msg.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted && getContentType(quoted) === 'imageMessage') return true;
+
             return false;
         } catch (e: any) {
             return false;
