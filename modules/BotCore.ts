@@ -677,6 +677,14 @@ class BotCore {
             const texto = this.messageProcessor.extractText(m);
             const temImagem = this.messageProcessor.hasImage(m);
             const temAudio = this.messageProcessor.hasAudio(m);
+
+            // ✅ IDENTIFICAÇÃO DE MÍDIA REAL (Desta mensagem, não de reply)
+            const mediaTypeReal = this.messageProcessor.getMediaType(m);
+            const temImagemReal = mediaTypeReal === 'imagem';
+            const temAudioReal = mediaTypeReal === 'audio';
+            const temVideoReal = mediaTypeReal === 'video';
+            const temDocumentoReal = mediaTypeReal === 'documento';
+
             const caption = this.messageProcessor.extractText(m) || '';
             const participant = m.key.participant || m.key.remoteJid;
             const temSticker = !!m.message?.stickerMessage;
@@ -919,16 +927,17 @@ class BotCore {
             }
 
 
-            const isImageReply = replyInfo?.quotedType === 'image';
+            const isImageOrReply = temImagem || (replyInfo?.quotedType === 'image');
 
-            if (temImagem || isImageReply) {
+            if (isImageOrReply) {
                 await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
-            } else if (temAudio) {
-                // ═══ LÓGICA DE ÁUDIO ═══
+            } else if (temAudioReal) {
+                // ═══ LÓGICA DE ÁUDIO REAL (Mensagem de voz direta) ═══
                 this.logger.info(`🎤 [ÁUDIO RECEBIDO] Processando voz de ${nome}...`);
                 await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo, true);
             } else {
-                // Se for texto ou qualquer outra msg com texto (sticker com legenda, etc)
+                // Se for texto (mesmo que dê reply a um áudio)
+                // Mantemos o texto original para não perder comandos como "transcreva"
                 await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo);
 
             }
@@ -2214,7 +2223,7 @@ class BotCore {
                         if (!modTarget) break;
 
                         // Verifica permissões (só o dono pode disparar via Agente por enquanto)
-                        const isOwner = this.config.OWNER_NUMBERS.includes(userId.split('@')[0]);
+                        const isOwner = this.config.isDono(userId);
                         if (!isOwner) {
                             await this.sock.sendMessage(jid, { text: '⚠️ Ações de moderação via IA estão restritas ao proprietário.' }, { quoted: m });
                             break;
