@@ -1992,6 +1992,7 @@ class BotCore {
             const { action, params, reason } = actionData;
             const jid = m.key.remoteJid;
             const userId = m.key.participant || m.key.remoteJid;
+            const ehGrupo = jid.endsWith('@g.us');
 
             // Resolve o alvo da ação (se fornecido)
             let target = params?.target || params?.target_user_id || '';
@@ -2830,26 +2831,41 @@ class BotCore {
 
                     // ─── STORY / STATUS ───────────────────────────────────────────────────
                     case 'post_status': {
-                        const { caption: statusCaption } = params;
+                        const { caption: statusCaption, mention_group } = params;
                         const statusJid = 'status@broadcast';
                         try {
-                            // Colecta JIDs de todos os grupos para o statusJidList (obrigatório para ser visível)
+                            // 1. Inicia JIDs com o autor e o dono
                             let statusJids: string[] = [
                                 m.key.participant || m.key.remoteJid,
                                 `${this.config.OWNER_NUMBER}@s.whatsapp.net`
                             ];
-                            try {
-                                const groups = await this.sock.groupFetchAllParticipating();
-                                for (const group of Object.values(groups as any)) {
-                                    for (const p of (group as any).participants) {
-                                        statusJids.push(p.id);
-                                    }
+
+                            // 2. Adiciona todos os usuários registrados (os "contactos" da Akira)
+                            if (this.registrationSystem && (this.registrationSystem as any).users) {
+                                const regUsers = (this.registrationSystem as any).users;
+                                for (const u of regUsers) {
+                                    if (u.id) statusJids.push(u.id);
                                 }
-                            } catch (e) { }
-                            statusJids = [...new Set(statusJids)].filter(j => j && j.endsWith('@s.whatsapp.net'));
+                            }
+
+                            // 3. Se mention_group for true, garante que o grupo actual veja e seja mencionado
+                            let mentions: string[] = [];
+                            if (mention_group && ehGrupo) {
+                                try {
+                                    const groupMeta = await this.sock.groupMetadata(jid);
+                                    for (const p of groupMeta.participants) {
+                                        statusJids.push(p.id);
+                                        mentions.push(p.id);
+                                    }
+                                } catch (e) {
+                                    this.logger.warn(`⚠️ Falha ao obter participantes do grupo para menção no status: ${e}`);
+                                }
+                            }
+
+                            // Limpeza e Unificação (Limite de 500 para estabilidade)
+                            statusJids = [...new Set(statusJids)].filter(j => j && j.endsWith('@s.whatsapp.net')).slice(0, 500);
 
                             // 1. Imagem da própria mensagem (user enviou a foto diretamente -> passamos m inteiro)
-                            // 2. Imagem citada
                             const directImg = m.message?.imageMessage ? m : null;
                             const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
                                 || m.message?.imageMessage?.contextInfo?.quotedMessage;
@@ -2861,10 +2877,11 @@ class BotCore {
                                     await this.sock.sendMessage(statusJid, {
                                         image: dl.buffer,
                                         caption: statusCaption || '✨',
+                                        mentions: mentions.length > 0 ? mentions : undefined,
                                         backgroundColor: '#000000',
                                         font: 1
                                     }, { statusJidList: statusJids });
-                                    await this.sock.sendMessage(jid, { text: `✅ Story publicado com a imagem!` }, { quoted: m });
+                                    await this.sock.sendMessage(jid, { text: `✅ Story publicado com imagem para os teus contactos${mention_group ? ' e mencionei o grupo' : ''}!` }, { quoted: m });
                                     break;
                                 }
                             }
@@ -2873,10 +2890,11 @@ class BotCore {
                             const textContent = statusCaption || params.text || '💬';
                             await this.sock.sendMessage(statusJid, {
                                 text: textContent,
+                                mentions: mentions.length > 0 ? mentions : undefined,
                                 backgroundColor: '#6c5ce7',
                                 font: 4
                             }, { statusJidList: statusJids });
-                            await this.sock.sendMessage(jid, { text: `✅ Story de texto publicado!` }, { quoted: m });
+                            await this.sock.sendMessage(jid, { text: `✅ Story de texto publicado para os teus contactos${mention_group ? ' e mencionei o grupo' : ''}!` }, { quoted: m });
                         } catch (statusErr: any) {
                             await this.sock.sendMessage(jid, { text: `❌ Erro ao postar story: ${statusErr.message}` }, { quoted: m });
                         }
@@ -3072,10 +3090,10 @@ class BotCore {
                     }
 
                     default:
-                        this.logger.warn(`⚠️ [AGENT] Ação desconhecida: ${action}`);
+                        this.logger.warn(`⚠️ [AGENT] Ação desconhecida: ${action} `);
                 }
             } catch (err: any) {
-                this.logger.error(`❌ [AGENT] Erro ao executar ${action}: ${err.message}`);
+                this.logger.error(`❌[AGENT] Erro ao executar ${action}: ${err.message} `);
                 await this.sock.sendMessage(jid, { text: `❌ Erro ao processar a ação \`${action}\`: ${err.message}` }, { quoted: m });
             }
         }
