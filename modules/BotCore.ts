@@ -1402,16 +1402,17 @@ class BotCore {
 
 
 
-                    // ✅ LÓGICA DE REPLY CONDICIONAL:
-                    // - PV: responde em reply APENAS se usuario mandou em reply
-                    // - Grupo: SEMPRE em reply (para manter contexto)
-                    // - DONO NO PV: SEMPRE SEM REPLY (para evitar bugs de contextInfo em sessões instáveis)
+                    // ✅ LÓGICA DE REPLY CONDICIONAL (PV):
+                    // - PV mensagem normal → resposta normal (sem quote)
+                    // - PV com reply → Akira responde em reply para dar realismo de conversa
+                    // - Grupo → SEMPRE em reply (para manter contexto visual)
                     const opcoes: any = {};
                     if (ehGrupo) {
                         opcoes.quoted = m; // Grupo: sempre reply
-                    } else if (replyInfo?.isReply && !isOwner) {
-                        opcoes.quoted = m; // PV: reply apenas se user mandou em reply (exceto dono)
+                    } else if (replyInfo?.isReply) {
+                        opcoes.quoted = m; // PV: reply se o utilizador mandou em reply
                     }
+                    // PV mensagem directa: sem quote (resposta fluída, como conversa normal)
 
                     const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
                     this.logger.info(`✅ [DISPATCH OK] ID: ${sentMsg?.key?.id}`);
