@@ -94,8 +94,9 @@ class ConfigManager {
     public STICKER_PACK: string = "";
     public FEATURE_AUTO_GROUP_JOIN: boolean = false;
     public TTS_PROXY: string = "";
-    public TIKTOK_SESSION_ID: string = "";
-    [key: string]: any;
+public TIKTOK_SESSION_ID: string = "";
+[key: string]: any;
+    public FORCE_PV_SESSION_REFRESH: boolean = false;
 
     constructor() {
         if (ConfigManager.instance) {
@@ -266,8 +267,9 @@ class ConfigManager {
         this.API_AUTH_TOKEN = process.env?.API_AUTH_TOKEN || '';
         this.STICKER_AUTHOR = process.env?.STICKER_AUTHOR || 'Akira Bot';
         this.STICKER_PACK = process.env?.STICKER_PACK || 'V21 Enterprise';
-        this.TTS_PROXY = process.env?.TTS_PROXY || "http://pgwtfkpg:oyqt2wfsbzsu@198.23.239.134:6540/";
+this.TTS_PROXY = process.env?.TTS_PROXY || "http://pgwtfkpg:oyqt2wfsbzsu@198.23.239.134:6540/";
         this.TIKTOK_SESSION_ID = process.env?.TIKTOK_SESSION_ID || "";
+        this.FORCE_PV_SESSION_REFRESH = process.env?.FORCE_PV_SESSION_REFRESH === 'true';
 
         ConfigManager.instance = this;
     }

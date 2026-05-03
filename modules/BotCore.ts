@@ -142,10 +142,14 @@ class BotCore {
         };
 
     // Deduplicação
-    private processedMessages: Set<string> = new Set();
-    private readonly MAX_PROCESSED_MESSAGES = 1000;
+    private processedMessages: Map<string, number> = new Map(); // compositeKey -> timestamp
+    private readonly MAX_PROCESSED_MESSAGES = 5000;
+    private readonly DUPLICATE_WINDOW_MS = 30000; // 30s window
+    private duplicateCounters: Map<string, number> = new Map(); // sender -> duplicate count
     private pipelineLogCounter: number = 0;
     private readonly PIPELINE_LOG_INTERVAL = 10;
+    private sessionFailures: Map<string, number> = new Map();
+    private readonly MAX_FAILURES_BEFORE_PV_RESET = 5;
 
     constructor() {
         this.config = ConfigManager.getInstance();
@@ -229,6 +233,9 @@ class BotCore {
     async initializeComponents() {
         try {
             this.logger.debug('🔧 Inicializando componentes..');
+
+            // ✅ DUPLICATE FIX: Initialize SessionRepair para auto-repair
+            await this._initSessionRepair();
 
             // Auto-atualiza yt-dlp em background (não bloqueia o startup)
             this._selfUpdateYtdlp().catch(() => { });
@@ -471,16 +478,13 @@ class BotCore {
                     // Detecção de erro de Bad MAC (falha de descriptografia)
                     // No Baileys v6+, m.messageStubType === 1 (CIPHERTEXT_ERROR)
                     if (m.messageStubType === 1) {
-                        this.logger.error(`🚨 [DECRYPT FAILURE] Mensagem ilegível de ${m.key.remoteJid}. Tentando reparar...`);
-                        await this._repairCorruptedSession(m.key.remoteJid!);
+                        const jid = m.key.remoteJid!;
+                        this.logger.error(`🚨 [DECRYPT FAILURE] Mensagem ilegível de ${jid}. Tentando reparar...`);
 
-                        // Notifica o dono se possível
-                        if (this.config.OWNER_NUMBER) {
-                            try {
-                                const jidDono = this.config.OWNER_NUMBER.includes('@') ? this.config.OWNER_NUMBER : `${this.config.OWNER_NUMBER}@s.whatsapp.net`;
-                                await this.sock.sendMessage(jidDono, { text: `⚠️ *REPARO DE SESSÃO:* Detectei um erro de descriptografia (Bad MAC) em @${m.key.remoteJid?.split('@')[0]}. A sessão corrompida foi limpa para forçar sincronização.` }, { mentions: [m.key.remoteJid!] });
-                            } catch (e) { }
-                        }
+                        // Track + Aggressive repair
+                        await this._repairCorruptedSession(jid);
+
+                        // Early return para não marcar como processada
                         continue;
                     }
 
@@ -560,19 +564,59 @@ class BotCore {
         }
     }
 
-    private isMessageProcessed(key: any): boolean {
-        if (!key?.id) return false;
-        const messageId = key.id;
-        if (this.processedMessages.has(messageId)) {
-            this.logger.debug(`⏭️ Já processada: ${messageId.substring(0, 15)}`);
+    private async isMessageProcessed(m: any, textoFinal: string, numeroReal: string): Promise<boolean> {
+        if (!m?.key?.id) return false;
+
+        // ✅ COMPOSITE KEY: message_id + sender (anti-duplicate definitivo)
+        const messageId = m.key.id;
+        const senderNorm = JidUtils.normalizeUserNumber(numeroReal);
+        const compositeKey = `${messageId}_${senderNorm}`;
+        const now = Date.now();
+
+        // Cleanup expired entries
+        for (const [key, timestamp] of this.processedMessages.entries()) {
+            if (now - timestamp > this.DUPLICATE_WINDOW_MS) {
+                this.processedMessages.delete(key);
+            }
+        }
+
+        if (this.processedMessages.has(compositeKey)) {
+            this.logger.warn(`🔄 [DEDUPE HIT] Mensagem repetida interceptada: ${messageId} de ${senderNorm}`);
+
+            // Track duplicates per sender
+            const dupCount = (this.duplicateCounters.get(senderNorm) || 0) + 1;
+            this.duplicateCounters.set(senderNorm, dupCount);
+
+            // Auto-repair trigger: 3+ duplicates
+            if (dupCount >= 3) {
+                this.logger.error(`🚨 [AUTO-REPAIR] ${dupCount} duplicates from ${senderNorm}. Triggering session repair...`);
+                this._repairCorruptedSession(m.key.remoteJid).catch(console.error);
+                this.duplicateCounters.delete(senderNorm); // Reset counter
+            }
+
             return true;
         }
-        this.processedMessages.add(messageId);
+
+        this.processedMessages.set(compositeKey, now);
+
+        // Cleanup large cache
         if (this.processedMessages.size > this.MAX_PROCESSED_MESSAGES) {
-            const arr = Array.from(this.processedMessages);
-            this.processedMessages = new Set(arr.slice(-this.MAX_PROCESSED_MESSAGES / 2));
+            const entries = Array.from(this.processedMessages.entries());
+            this.processedMessages = new Map(entries.slice(-this.MAX_PROCESSED_MESSAGES / 2));
         }
+
         return false;
+    }
+
+    private _hashContent(content: string): string {
+        // Simple hash for deduplication (não precisa crypto pesado)
+        let hash = 0;
+        for (let i = 0; i < content.length; i++) {
+            const char = content.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash).toString(36);
     }
 
     async processMessage(m: any): Promise<void> {
@@ -594,7 +638,7 @@ class BotCore {
             // NÃO a marquemos como processada e NÃO prossigamos. 
             // O Baileys tentará descriptografar novamente quando receber as chaves (retry).
             if (!m.message) {
-                this.logger.warn(`⚠️ [DECRYPT FAILURE] Falha ao ler mensagem ${messageId} de ${jid}.`);
+                this.logger.warn(`⚠️ [DECRYPT FAILURE] Falha ao ler mensagem ${messageId} de ${jid}. Payload Bruto: ${JSON.stringify(m)}`);
 
                 const numeroCheck = JidUtils.getNumber(jid);
                 const isPrivileged = this.config?.isDono && this.config.isDono(numeroCheck);
@@ -612,8 +656,16 @@ class BotCore {
                 return;
             }
 
-            // Agora sim verificamos se já processamos este ID com sucesso
-            if (this.isMessageProcessed(m.key)) return;
+            // ✅ Deduplicação robusta AVANÇADA (composite key: sender+hash+timestamp)
+            const remoteJid_ = m.key.remoteJid;
+            let numero_ = await this.messageProcessor.extractUserNumber(m, this.sock);
+            if (numero_ && numero_.includes('@lid')) {
+                numero_ = await this.resolveIdentity(numero_);
+            }
+            const nome_ = await this._resolveUserName(m, numero_, remoteJid_);
+            const numeroReal_ = JidUtils.normalizeUserNumber(numero_) || 'desconhecido';
+            const textoFinal_ = (this.messageProcessor.extractText(m) || '').trim();
+            if (await this.isMessageProcessed(m, textoFinal_ || '[sem texto]', numeroReal_)) return;
 
             // LOG DE DIAGNÓSTICO INICIAL (Mostra o que bateu no socket sem cortes excessivos)
             console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${jid} | fromMe: ${fromMe} | Txt: "${String(textRaw).substring(0, 100)}${textRaw.length > 100 ? '...' : ''}"`);
@@ -1030,7 +1082,8 @@ class BotCore {
                     reply_to_bot: replyInfo.ehRespostaAoBot,
                     quoted_author_name: await this.resolveAuthorName(replyInfo.participantJidCitado, m.key.remoteJid),
                     quoted_author_numero: replyInfo.quotedAuthorNumero || 'desconhecido'
-                } : null
+                } : null,
+                message_id: m.key.id // ✅ IDEMPOTENCY KEY
             });
 
             this.logger.info(`👁️ Analisando imagem...`);
@@ -1245,7 +1298,8 @@ class BotCore {
                 reply_metadata: replyMetadata,
                 is_bot_self_response: false,
                 is_group: ehGrupo,
-                sender_is_bot: false
+                sender_is_bot: false,
+                message_id: m.key.id // ✅ IDEMPOTENCY KEY
             });
 
             // 🤫 [SILÊNCIO] O bot agora "pensa" em silêncio antes de digitar (Realismo Humano)
@@ -1696,32 +1750,29 @@ class BotCore {
      * Repara sessão corrompida apagando arquivos de sessão específicos do JID.
      * Útil para resolver o erro "Bad MAC" sem resetar o bot inteiro.
      */
-    private async _repairCorruptedSession(jid: string): Promise<void> {
-        try {
-            const numero = JidUtils.getNumber(jid);
-            const authDir = this.config.AUTH_FOLDER;
-            if (!fs.existsSync(authDir)) return;
+    // ✅ INTEGRATED SessionRepair - Duplicate trigger usa SessionRepair diretamente
+    private sessionRepair: any;
 
-            const files = fs.readdirSync(authDir);
-            let deletedCount = 0;
-
-            for (const file of files) {
-                // Apaga arquivos de sessão e sender-key relacionados ao número
-                if (file.includes(`session-${numero}`) || file.includes(`sender-key-${numero}`)) {
-                    try {
-                        fs.unlinkSync(path.join(authDir, file));
-                        deletedCount++;
-                    } catch (err) { }
-                }
-            }
-
-            if (deletedCount > 0) {
-                this.logger.info(`🧹 [REPAIR] Removidos ${deletedCount} arquivos de sessão corrompidos para ${numero}`);
-            }
-        } catch (e: any) {
-            this.logger.error(`❌ [REPAIR] Erro ao tentar reparar sessão: ${e.message}`);
-        }
+    private async _initSessionRepair() {
+        const { SessionRepair } = await import('./SessionRepair.js');
+        this.sessionRepair = new SessionRepair(this.sock);
     }
+
+    private async _repairCorruptedSession(jid: string): Promise<void> {
+        if (!this.sessionRepair) await this._initSessionRepair();
+        await this.sessionRepair.repairCorruptedSession(jid);
+    }
+
+    private async _forceSignalSync(jid: string, numero: string): Promise<void> {
+        if (!this.sessionRepair) await this._initSessionRepair();
+        await this.sessionRepair.forceSignalSync(jid);
+    }
+
+    private async _forcePVSessionReset(numero: string, jid: string): Promise<void> {
+        if (!this.sessionRepair) await this._initSessionRepair();
+        await this.sessionRepair.forcePVReset(numero, jid);
+    }
+
 
     getStatus(): any {
         return {
@@ -2297,10 +2348,18 @@ class BotCore {
                         }
 
                         const removeParticipant = async (participantId: string) => {
-                            return await Promise.race([
-                                this.sock.groupParticipantsUpdate(jid, [participantId], 'remove'),
-                                new Promise((_, reject) => setTimeout(() => reject(new Error('A remoção demorou mais do que o esperado.')), 15000))
-                            ]);
+                            try {
+                                return await Promise.race([
+                                    this.sock.groupParticipantsUpdate(jid, [participantId], 'remove'),
+                                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timed Out')), 30000))
+                                ]);
+                            } catch (err: any) {
+                                if (err.message === 'Timed Out') {
+                                    this.logger.warn(`⚠️ [MODERATION] Timeout ao remover ${participantId}, mas prosseguindo com a confirmação.`);
+                                    return; // Prossegue mesmo com timeout
+                                }
+                                throw err;
+                            }
                         };
 
                         switch (type) {
@@ -2308,11 +2367,11 @@ class BotCore {
                                 await removeParticipant(modTargetJid);
                                 break;
                             case 'ban':
-                                await this.moderationSystem.banUser(modTargetJid, modReason);
+                                if (this.moderationSystem) await this.moderationSystem.banUser(modTargetJid, modReason);
                                 await removeParticipant(modTargetJid);
                                 break;
                             case 'mute':
-                                await this.moderationSystem.muteUser(jid, modTargetJid, 60); // 60 min default
+                                if (this.moderationSystem) await this.moderationSystem.muteUser(jid, modTargetJid, 60); // 60 min default
                                 break;
                             case 'clear':
                                 // Clear logic if available
@@ -2395,6 +2454,111 @@ class BotCore {
                             await this.sock.sendMessage(jid, { delete: deleteKey });
                         } catch (delErr: any) {
                             await this.sock.sendMessage(jid, { text: `❌ Erro ao apagar: ${delErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'image_effect': {
+                        const { effect } = params;
+                        try {
+                            const targetMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage || m.message;
+                            const dl = await this.mediaProcessor.downloadMedia(targetMsg, 'image');
+                            if (dl?.buffer && this.imageEffects) {
+                                await this.sock.sendMessage(jid, { react: { text: '🎨', key: m.key } });
+                                const result = await this.imageEffects.processImage(dl.buffer, effect || 'hd');
+                                if (result.success) {
+                                    if (result.effect === 'sticker' || effect === 'sticker') {
+                                        await this.sock.sendMessage(jid, { sticker: result.buffer }, { quoted: m });
+                                    } else {
+                                        await this.sock.sendMessage(jid, { image: result.buffer, caption: `✨ Efeito ${effect} aplicado!` }, { quoted: m });
+                                    }
+                                } else {
+                                    await this.sock.sendMessage(jid, { text: `❌ Falha ao aplicar efeito: ${result.error}` }, { quoted: m });
+                                }
+                            } else {
+                                await this.sock.sendMessage(jid, { text: '❌ Responda a uma imagem para aplicar o efeito.' }, { quoted: m });
+                            }
+                        } catch (e: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro no efeito: ${e.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'send_sticker': {
+                        try {
+                            const targetMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage || m.message;
+                            const dl = await this.mediaProcessor.downloadMedia(targetMsg, 'image'); // can be video/image
+                            if (dl?.buffer && this.imageEffects) {
+                                await this.sock.sendMessage(jid, { react: { text: '🔄', key: m.key } });
+                                const stickerResult = await this.imageEffects.convertToSticker(dl.buffer, 'Akira Bot');
+                                if (stickerResult.success) {
+                                    await this.sock.sendMessage(jid, { sticker: stickerResult.buffer }, { quoted: m });
+                                } else {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao criar sticker: ${stickerResult.error}` }, { quoted: m });
+                                }
+                            } else {
+                                await this.sock.sendMessage(jid, { text: '❌ Responda a uma imagem ou vídeo curto para criar o sticker.' }, { quoted: m });
+                            }
+                        } catch (e: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro no sticker: ${e.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'tag_everyone': {
+                        const { message: tagMessage } = params;
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Função exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            const grpMeta = await this.sock.groupMetadata(jid);
+                            const participants = grpMeta.participants.map((p: any) => p.id);
+                            const text = tagMessage || '📣 *Atenção de todos!*';
+                            await this.sock.sendMessage(jid, { text, mentions: participants }, { quoted: m });
+                        } catch (e: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao mencionar todos: ${e.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'create_poll': {
+                        const { name, options } = params;
+                        if (!name || !options || !Array.isArray(options) || options.length < 2) {
+                            await this.sock.sendMessage(jid, { text: '❌ Preciso de um nome para a enquete e pelo menos 2 opções.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            await this.sock.sendMessage(jid, {
+                                poll: {
+                                    name: name,
+                                    values: options.slice(0, 12),
+                                    selectableCount: 1
+                                }
+                            }, { quoted: m });
+                        } catch (e: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao criar enquete: ${e.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'send_location': {
+                        const { latitude, longitude, name, address } = params;
+                        if (!latitude || !longitude) {
+                            await this.sock.sendMessage(jid, { text: '❌ Coordenadas inválidas para a localização.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            await this.sock.sendMessage(jid, {
+                                location: {
+                                    degreesLatitude: parseFloat(latitude),
+                                    degreesLongitude: parseFloat(longitude),
+                                    name: name || 'Localização',
+                                    address: address || ''
+                                }
+                            }, { quoted: m });
+                        } catch (e: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao enviar localização: ${e.message}` }, { quoted: m });
                         }
                         break;
                     }

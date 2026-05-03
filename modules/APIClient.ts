@@ -49,15 +49,16 @@ class APIClient {
             is_bot_self_response = false,
             is_group = false,
             sender_is_bot = false,
-            isGameCommand = false // ✅ NOVA: Detectar se é comando de jogo
+            isGameCommand = false, // ✅ NOVA: Detectar se é comando de jogo
+            message_id // ✅ Adicionado para idempotência
         } = messageData;
 
         // ✅ CORREÇÃO: Garantir que numero é sempre apenas dígitos (sem @lid, @s.whatsapp.net, etc)
         const numeroLimpo = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
 
-        // ✅ SINCRONIZAÇÃO: Detectar tipo_mensagem (inclui 'game' para comandos de jogo)
+        // ✅ SINCRONIZAÇÃO: Detectar tipo_mensagem (inclui 'game' para comandos de jogo ou replies a jogos)
         const gameCommands = ['#play', '#game', '#grid', '#tactics', '#economy', '#level'];
-        const isGameCmd = isGameCommand || gameCommands.some(cmd => (mensagem || '').toLowerCase().startsWith(cmd));
+        const isGameCmd = isGameCommand || gameCommands.some(cmd => (mensagem || '').toLowerCase().startsWith(cmd)) || Boolean(reply_metadata?.isReplyToGame);
 
         const finalTipoMensagem = isGameCmd ? 'game' :
             (['texto', 'image', 'audio', 'video'].includes(tipo_mensagem) ? tipo_mensagem : 'texto');
@@ -113,6 +114,11 @@ class APIClient {
             payload.grupo_id = grupo_id;
             payload.contexto_grupo = grupo_nome || 'Grupo';
             payload.grupo_nome = grupo_nome;
+        }
+
+        // ✅ IDEMPOTENCY KEY (Anti-Duplicate)
+        if (message_id) {
+            payload.message_id = message_id;
         }
 
         return payload;
