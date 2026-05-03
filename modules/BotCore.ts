@@ -364,11 +364,14 @@ class BotCore {
                 markOnlineOnConnect: true,
                 maxMsgRetryCount: 15,
                 getMessage: async (key: any) => {
+                    // ✅ FIX "No session record": Retornar SEMPRE algo (dummy se necessário)
+                    // Sem isso, o Baileys não consegue processar o pedido de retry e a mensagem morre.
                     if (this.store) {
                         const msg = await this.store.loadMessage(key.remoteJid, key.id);
-                        return msg?.message || undefined;
+                        if (msg?.message) return msg.message;
                     }
-                    return undefined;
+                    // Dummy message: garante que o Baileys envia um retry request ao remetente
+                    return { conversation: '' };
                 },
                 // ✅ AJUSTES PARA AMBIENTES DE CONTAINER (RAILWAY)
                 connectTimeoutMs: 120000,
@@ -477,11 +480,25 @@ class BotCore {
                 for (const m of messages) {
                     // Detecção de erro de Bad MAC (falha de descriptografia)
                     // No Baileys v6+, m.messageStubType === 1 (CIPHERTEXT_ERROR)
-                    if (m.messageStubType === 1) {
+                    if (m.messageStubType) {
                         const jid = m.key.remoteJid!;
-                        this.logger.error(`🚨 [DECRYPT FAILURE] Mensagem ilegível de ${jid}. Tentando reparar...`);
+                        this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
-                        // Track + Aggressive repair
+                        // ✅ FIX NÃO-CANÓNICO: Forçar retry direto pelo socket para QUALQUER tipo de stub
+                        // Isso faz o WhatsApp do remetente reenviar a mensagem com chaves frescas.
+                        if (this.sock) {
+                            try {
+                                await this.sock.sendRetryRequest(m).catch(() => {
+                                    // Fallback: readMessages também provoca renegociação
+                                    this.sock.readMessages([m.key]).catch(() => { });
+                                });
+                                this.logger.info(`🔄 [RETRY REQUEST] Pedido de reenvio enviado para ${jid}`);
+                            } catch (retryErr) {
+                                this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
+                            }
+                        }
+
+                        // Repair de sessão como medida adicional
                         await this._repairCorruptedSession(jid);
 
                         // Early return para não marcar como processada
@@ -634,24 +651,20 @@ class BotCore {
             const fromMe = m.key.fromMe;
             const messageId = m.key.id;
 
-            // ✅ CORREÇÃO CRÍTICA: Se a mensagem falhou ao descriptografar (m.message nulo),
-            // NÃO a marquemos como processada e NÃO prossigamos. 
-            // O Baileys tentará descriptografar novamente quando receber as chaves (retry).
+            // ✅ FIX "No session record": Se m.message for nulo, a mensagem chegou como stub (sem decriptar).
+            // Em vez de abandonar, forçamos um retry request para que o remetente reenvie com chaves frescas.
             if (!m.message) {
-                this.logger.warn(`⚠️ [DECRYPT FAILURE] Falha ao ler mensagem ${messageId} de ${jid}. Payload Bruto: ${JSON.stringify(m)}`);
+                this.logger.warn(`⚠️ [DECRYPT FAILURE] Stub sem conteúdo de ${jid}. StubType=${m.messageStubType} | Params=${JSON.stringify(m.messageStubParameters)}`);
 
-                const numeroCheck = JidUtils.getNumber(jid);
-                const isPrivileged = this.config?.isDono && this.config.isDono(numeroCheck);
-
-                if (isPrivileged) {
-                    this.logger.info(`🔧 [REPAIR] Tentando reparar sessão corrompida com usuário privilegiado: ${numeroCheck}`);
-                    await this._repairCorruptedSession(jid);
-
-                    // Tenta forçar o socket a solicitar novas chaves
-                    if (this.sock) {
-                        this.sock.readMessages([m.key]).catch(() => { });
-                        this.sock.sendPresenceUpdate('available', jid).catch(() => { });
-                    }
+                // ✅ RETRY REQUEST: Solicitar reenvio ao remetente (não-canónico mas funciona)
+                if (this.sock) {
+                    try {
+                        await this.sock.sendRetryRequest(m).catch(async () => {
+                            // Fallback: readMessages provoca renegociação de chaves
+                            await this.sock.readMessages([m.key]).catch(() => { });
+                        });
+                        this.logger.info(`🔄 [RETRY] Pedido de reenvio enviado para ${jid}`);
+                    } catch (e) { /* silencioso */ }
                 }
                 return;
             }
