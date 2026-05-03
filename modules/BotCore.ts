@@ -2677,6 +2677,114 @@ class BotCore {
                         break;
                     }
 
+                    // ─── STORY / STATUS ───────────────────────────────────────────────────
+                    case 'post_status': {
+                        // Publica no story do WhatsApp (status@broadcast)
+                        const { caption: statusCaption, image_url: statusImageUrl } = params;
+                        const statusJid = 'status@broadcast';
+                        try {
+                            // Se existir imagem citada na mensagem, usa-a como base
+                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+                            if (quotedMsg && this.mediaProcessor) {
+                                const dl = await this.mediaProcessor.downloadMedia(quotedMsg, 'image');
+                                if (dl?.buffer) {
+                                    await this.sock.sendMessage(statusJid, {
+                                        image: dl.buffer,
+                                        caption: statusCaption || '✨',
+                                        backgroundColor: '#000000',
+                                        font: 1
+                                    });
+                                    await this.sock.sendMessage(jid, { text: `✅ Story publicado com a imagem!` }, { quoted: m });
+                                    break;
+                                }
+                            }
+                            // Fallback: story só de texto
+                            const textContent = statusCaption || params.text || '💬';
+                            await this.sock.sendMessage(statusJid, {
+                                text: textContent,
+                                backgroundColor: '#6c5ce7',
+                                font: 4
+                            });
+                            await this.sock.sendMessage(jid, { text: `✅ Story de texto publicado!` }, { quoted: m });
+                        } catch (statusErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao postar story: ${statusErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── PIN / AFIXAR MENSAGEM ─────────────────────────────────────────────
+                    case 'pin_message': {
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Só posso afixar mensagens em grupos.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            // Usa a mensagem citada, ou a mensagem actual
+                            const quotedId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || m.key.id;
+                            const pinDuration = params.duration_secs || 86400; // 24h padrão
+                            await this.sock.sendMessage(jid, {
+                                pin: {
+                                    type: 1, // 1 = pin, 2 = unpin
+                                    time: pinDuration,
+                                    key: {
+                                        remoteJid: jid,
+                                        fromMe: m.message?.extendedTextMessage?.contextInfo?.participant === this.sock?.user?.id,
+                                        id: quotedId,
+                                        participant: m.message?.extendedTextMessage?.contextInfo?.participant
+                                    }
+                                }
+                            });
+                            await this.sock.sendMessage(jid, { text: `📌 Mensagem afixada!` }, { quoted: m });
+                        } catch (pinErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao afixar mensagem: ${pinErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── REENCAMINHAR MENSAGEM ─────────────────────────────────────────────
+                    case 'forward_message': {
+                        const { to_jid: forwardTarget } = params;
+                        try {
+                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+                            if (!quotedMsg) {
+                                await this.sock.sendMessage(jid, { text: '❌ Responde a uma mensagem para eu reencaminhar.' }, { quoted: m });
+                                break;
+                            }
+                            const targetJid = forwardTarget
+                                ? (forwardTarget.includes('@') ? forwardTarget : `${forwardTarget.replace(/\D/g, '')}@s.whatsapp.net`)
+                                : jid;
+                            await this.sock.sendMessage(targetJid, { forward: { key: { ...m.key, id: m.message?.extendedTextMessage?.contextInfo?.stanzaId }, message: quotedMsg } });
+                            await this.sock.sendMessage(jid, { text: `✅ Mensagem reencaminhada!` }, { quoted: m });
+                        } catch (fwdErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao reencaminhar: ${fwdErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── ALTERAR ÍCONE DO GRUPO ────────────────────────────────────────────
+                    case 'set_group_icon': {
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Função exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        try {
+                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+                            if (!quotedMsg || !this.mediaProcessor) {
+                                await this.sock.sendMessage(jid, { text: '❌ Responde a uma imagem para eu usar como ícone do grupo.' }, { quoted: m });
+                                break;
+                            }
+                            const dl = await this.mediaProcessor.downloadMedia(quotedMsg, 'image');
+                            if (!dl?.buffer) {
+                                await this.sock.sendMessage(jid, { text: '❌ Não consegui ler a imagem. Tenta com outra.' }, { quoted: m });
+                                break;
+                            }
+                            await this.sock.updateProfilePicture(jid, dl.buffer);
+                            await this.sock.sendMessage(jid, { text: '✅ Ícone do grupo atualizado!' }, { quoted: m });
+                        } catch (iconErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao alterar ícone: ${iconErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
                     default:
                         this.logger.warn(`⚠️ [AGENT] Ação desconhecida: ${action}`);
                 }
