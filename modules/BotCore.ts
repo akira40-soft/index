@@ -2673,20 +2673,176 @@ class BotCore {
                                 }
                                 break;
                             }
+
+                            // ─── PROMOÇÃO / REBAIXAMENTO DE ADMINS ─────────────────────────────
+                            case 'promote_admin':
+                            case 'demote_admin': {
+                                if (!val) { await this.sock.sendMessage(jid, { text: '❌ Passa o número do membro.' }, { quoted: m }); break; }
+                                const role = req === 'promote_admin' ? 'promote' : 'demote';
+                                const pTargets = val.split(',').map((v: string) => {
+                                    const n = v.trim().replace(/\D/g, '');
+                                    return (n.length === 9 ? '244' + n : n) + '@s.whatsapp.net';
+                                });
+                                try {
+                                    await this.sock.groupParticipantsUpdate(jid, pTargets, role);
+                                    const emoji = role === 'promote' ? '👑' : '📉';
+                                    await this.sock.sendMessage(jid, { text: `${emoji} Concluído: ${role} para ${pTargets.map((p: string) => p.split('@')[0]).join(', ')}` }, { quoted: m });
+                                } catch (pErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao alterar cargo: ${pErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+
+                            // ─── BLOQUEIO / ABERTURA DO GRUPO ──────────────────────────────────
+                            case 'lock_group':
+                            case 'unlock_group': {
+                                const setting = req === 'lock_group' ? 'announcement' : 'not_announcement';
+                                try {
+                                    await this.sock.groupSettingUpdate(jid, setting);
+                                    const msg = req === 'lock_group'
+                                        ? '🔒 Grupo fechado — só admins podem enviar mensagens.'
+                                        : '🔓 Grupo aberto — todos podem enviar mensagens.';
+                                    await this.sock.sendMessage(jid, { text: msg }, { quoted: m });
+                                } catch (lErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao alterar permissões: ${lErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+
+                            // ─── MENSAGENS TEMPORÁRIAS (EPHEMERAL) ─────────────────────────────
+                            case 'set_ephemeral': {
+                                // val pode ser '0' (desativar), '86400' (1d), '604800' (7d), '7776000' (90d)
+                                const secs = parseInt(val || '86400', 10);
+                                try {
+                                    await this.sock.groupToggleEphemeral(jid, secs);
+                                    const label = secs === 0 ? 'desativadas' : secs <= 86400 ? '24 horas' : secs <= 604800 ? '7 dias' : '90 dias';
+                                    await this.sock.sendMessage(jid, { text: `⏳ Mensagens temporárias: *${label}*` }, { quoted: m });
+                                } catch (epErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao configurar ephemeral: ${epErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+
+                            // ─── SAIR DO GRUPO ─────────────────────────────────────────────────
+                            case 'leave_group': {
+                                try {
+                                    await this.sock.sendMessage(jid, { text: '👋 Ok, saindo do grupo. Até mais!' }, { quoted: m });
+                                    await new Promise(r => setTimeout(r, 1500));
+                                    await this.sock.groupLeave(jid);
+                                } catch (lgErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao sair do grupo: ${lgErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+
+                            // ─── ENTRAR VIA LINK ───────────────────────────────────────────────
+                            case 'join_group': {
+                                if (!val) { await this.sock.sendMessage(jid, { text: '❌ Passa o link do grupo.' }, { quoted: m }); break; }
+                                try {
+                                    // Extrai apenas o código do link
+                                    const inviteCode = val.replace('https://chat.whatsapp.com/', '').trim();
+                                    const gid = await this.sock.groupAcceptInvite(inviteCode);
+                                    await this.sock.sendMessage(jid, { text: `✅ Entrei no grupo! ID: ${gid}` }, { quoted: m });
+                                } catch (jgErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao entrar no grupo: ${jgErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+
+                            // ─── DESAFIXAR MENSAGEM ─────────────────────────────────────────────
+                            case 'unpin_message': {
+                                try {
+                                    const quotedId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || val;
+                                    if (!quotedId) { await this.sock.sendMessage(jid, { text: '❌ Responde à mensagem que queres desafixar.' }, { quoted: m }); break; }
+                                    await this.sock.sendMessage(jid, {
+                                        pin: {
+                                            type: 2, // 2 = unpin
+                                            key: {
+                                                remoteJid: jid,
+                                                fromMe: false,
+                                                id: quotedId,
+                                                participant: m.message?.extendedTextMessage?.contextInfo?.participant
+                                            }
+                                        }
+                                    });
+                                    await this.sock.sendMessage(jid, { text: '📌 Mensagem desafixada!' }, { quoted: m });
+                                } catch (upErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao desafixar: ${upErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+
+                            // ─── CRIAR NOVO GRUPO ───────────────────────────────────────────────
+                            case 'create_group': {
+                                // val = 'Nome do Grupo|244923000000,244923111111'
+                                if (!val) { await this.sock.sendMessage(jid, { text: '❌ Formato: <nome>|<números separados por vírgula>' }, { quoted: m }); break; }
+                                const [groupName, membersStr] = val.split('|');
+                                const members = (membersStr || '').split(',').map((v: string) => {
+                                    const n = v.trim().replace(/\D/g, '');
+                                    return (n.length === 9 ? '244' + n : n) + '@s.whatsapp.net';
+                                }).filter((v: string) => v.length > 10);
+                                try {
+                                    const newGroup = await this.sock.groupCreate(groupName?.trim() || 'Novo Grupo', members);
+                                    const newJid = newGroup.id || newGroup.gid;
+                                    await this.sock.sendMessage(jid, { text: `✅ Grupo *${groupName}* criado! ID: ${newJid}` }, { quoted: m });
+                                } catch (cgErr: any) {
+                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao criar grupo: ${cgErr.message}` }, { quoted: m });
+                                }
+                                break;
+                            }
+                        }
+                        break;
+                    }
+
+                    // ─── CONTROLO DE PERMISSÕES DO GRUPO (manage_group_settings) ─────────
+                    case 'group_control': {
+                        if (!jid.endsWith('@g.us')) {
+                            await this.sock.sendMessage(jid, { text: '❌ Função exclusiva de grupos.' }, { quoted: m });
+                            break;
+                        }
+                        const { action: gAction } = params;
+                        try {
+                            switch (gAction) {
+                                case 'open':
+                                    await this.sock.groupSettingUpdate(jid, 'not_announcement');
+                                    await this.sock.sendMessage(jid, { text: '🔓 Grupo aberto — todos podem enviar.' }, { quoted: m });
+                                    break;
+                                case 'close':
+                                    await this.sock.groupSettingUpdate(jid, 'announcement');
+                                    await this.sock.sendMessage(jid, { text: '🔒 Grupo fechado — só admins podem enviar.' }, { quoted: m });
+                                    break;
+                                case 'lock_settings':
+                                    await this.sock.groupSettingUpdate(jid, 'locked');
+                                    await this.sock.sendMessage(jid, { text: '🔐 Edição de info bloqueada para não-admins.' }, { quoted: m });
+                                    break;
+                                case 'unlock_settings':
+                                    await this.sock.groupSettingUpdate(jid, 'unlocked');
+                                    await this.sock.sendMessage(jid, { text: '🔓 Edição de info liberada para todos.' }, { quoted: m });
+                                    break;
+                                default:
+                                    await this.sock.sendMessage(jid, { text: `❌ Ação desconhecida: ${gAction}` }, { quoted: m });
+                            }
+                        } catch (gcErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro: ${gcErr.message}` }, { quoted: m });
                         }
                         break;
                     }
 
                     // ─── STORY / STATUS ───────────────────────────────────────────────────
                     case 'post_status': {
-                        // Publica no story do WhatsApp (status@broadcast)
-                        const { caption: statusCaption, image_url: statusImageUrl } = params;
+                        const { caption: statusCaption } = params;
                         const statusJid = 'status@broadcast';
                         try {
-                            // Se existir imagem citada na mensagem, usa-a como base
-                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-                            if (quotedMsg && this.mediaProcessor) {
-                                const dl = await this.mediaProcessor.downloadMedia(quotedMsg, 'image');
+                            // ✅ FIX: Prioridade de imagem
+                            // 1. Imagem da própria mensagem (user enviou a foto diretamente)
+                            // 2. Imagem citada (user respondeu a uma foto)
+                            const directImg = m.message?.imageMessage ? m.message : null;
+                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
+                                || m.message?.imageMessage?.contextInfo?.quotedMessage;
+                            const imageSource = directImg || (quotedMsg?.imageMessage ? quotedMsg : null);
+
+                            if (imageSource && this.mediaProcessor) {
+                                const dl = await this.mediaProcessor.downloadMedia(imageSource, 'image');
                                 if (dl?.buffer) {
                                     await this.sock.sendMessage(statusJid, {
                                         image: dl.buffer,
@@ -2785,6 +2941,121 @@ class BotCore {
                         }
                         break;
                     }
+                    // ─── GRUPO B — EDITAR MENSAGEM ────────────────────────────────────────
+                    case 'edit_message': {
+                        const { new_text: editText, message_id: editId } = params;
+                        if (!editText) { await this.sock.sendMessage(jid, { text: '❌ Preciso do novo texto para editar.' }, { quoted: m }); break; }
+                        try {
+                            const targetId = editId || m.message?.extendedTextMessage?.contextInfo?.stanzaId;
+                            if (!targetId) { await this.sock.sendMessage(jid, { text: '❌ Responde à mensagem que queres editar.' }, { quoted: m }); break; }
+                            await this.sock.sendMessage(jid, {
+                                edit: { remoteJid: jid, fromMe: true, id: targetId },
+                                text: editText
+                            });
+                        } catch (editErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao editar: ${editErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── GRUPO B — VERIFICAR NÚMERO ──────────────────────────────────────
+                    case 'check_number': {
+                        const { phone: checkPhone } = params;
+                        if (!checkPhone) { await this.sock.sendMessage(jid, { text: '❌ Passa o número a verificar.' }, { quoted: m }); break; }
+                        try {
+                            const normalized = checkPhone.replace(/\D/g, '');
+                            const result = await this.sock.onWhatsApp(normalized + '@s.whatsapp.net');
+                            const exists = result?.[0]?.exists ?? false;
+                            const wa = result?.[0]?.jid || '';
+                            await this.sock.sendMessage(jid, {
+                                text: exists
+                                    ? `✅ *+${normalized}* está no WhatsApp! JID: ${wa}`
+                                    : `❌ *+${normalized}* não está no WhatsApp.`
+                            }, { quoted: m });
+                        } catch (cnErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao verificar número: ${cnErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── GRUPO B — INFO DO PERFIL ────────────────────────────────────────
+                    case 'get_profile_info': {
+                        const { phone: profilePhone } = params;
+                        if (!profilePhone) { await this.sock.sendMessage(jid, { text: '❌ Passa o número do contacto.' }, { quoted: m }); break; }
+                        try {
+                            const n = profilePhone.replace(/\D/g, '');
+                            const profileJid = n + '@s.whatsapp.net';
+                            const [statusResult, picResult] = await Promise.allSettled([
+                                this.sock.fetchStatus(profileJid),
+                                this.sock.profilePictureUrl(profileJid, 'image')
+                            ]);
+                            const about = statusResult.status === 'fulfilled' ? statusResult.value?.status || 'Sem recado' : 'Indisponível';
+                            const pic = picResult.status === 'fulfilled' ? picResult.value : null;
+                            const infoText = `📱 *Perfil de +${n}*\n\n📝 Recado: ${about}\n🖼️ Foto: ${pic ? 'Disponível' : 'Privada ou sem foto'}`;
+                            if (pic) {
+                                await this.sock.sendMessage(jid, { image: { url: pic }, caption: infoText }, { quoted: m });
+                            } else {
+                                await this.sock.sendMessage(jid, { text: infoText }, { quoted: m });
+                            }
+                        } catch (piErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao obter perfil: ${piErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── GRUPO B — GERIR CHAT ────────────────────────────────────────────
+                    case 'archive_chat': {
+                        const { operation: chatOp, duration_hours } = params;
+                        try {
+                            switch (chatOp) {
+                                case 'archive':
+                                    await this.sock.chatModify({ archive: true }, jid);
+                                    await this.sock.sendMessage(jid, { text: '📦 Conversa arquivada!' }, { quoted: m }); break;
+                                case 'unarchive':
+                                    await this.sock.chatModify({ archive: false }, jid);
+                                    await this.sock.sendMessage(jid, { text: '📤 Conversa desarquivada!' }, { quoted: m }); break;
+                                case 'mute': {
+                                    const muteHours = parseInt(duration_hours || '8', 10);
+                                    await this.sock.chatModify({ mute: Date.now() + muteHours * 3600 * 1000 }, jid);
+                                    await this.sock.sendMessage(jid, { text: `🔇 Silenciada por ${muteHours}h.` }, { quoted: m }); break;
+                                }
+                                case 'unmute':
+                                    await this.sock.chatModify({ mute: null }, jid);
+                                    await this.sock.sendMessage(jid, { text: '🔔 Notificações reativadas!' }, { quoted: m }); break;
+                                case 'pin':
+                                    await this.sock.chatModify({ pin: true }, jid);
+                                    await this.sock.sendMessage(jid, { text: '📌 Chat fixado!' }, { quoted: m }); break;
+                                case 'unpin':
+                                    await this.sock.chatModify({ pin: false }, jid);
+                                    await this.sock.sendMessage(jid, { text: '📌 Chat desafixado.' }, { quoted: m }); break;
+                                case 'mark_unread':
+                                    await this.sock.chatModify({ markRead: false }, jid);
+                                    await this.sock.sendMessage(jid, { text: '🔵 Marcada como não lida.' }, { quoted: m }); break;
+                                default:
+                                    await this.sock.sendMessage(jid, { text: `❌ Operação desconhecida: ${chatOp}` }, { quoted: m });
+                            }
+                        } catch (acErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao gerir chat: ${acErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    // ─── GRUPO B — BLOQUEAR / DESBLOQUEAR ───────────────────────────────
+                    case 'block_user': {
+                        const { phone: blockPhone, unblock } = params;
+                        if (!blockPhone) { await this.sock.sendMessage(jid, { text: '❌ Passa o número.' }, { quoted: m }); break; }
+                        try {
+                            const blockJid = blockPhone.replace(/\D/g, '') + '@s.whatsapp.net';
+                            await this.sock.updateBlockStatus(blockJid, unblock ? 'unblock' : 'block');
+                            await this.sock.sendMessage(jid, {
+                                text: `${unblock ? '✅ Desbloqueado' : '🚫 Bloqueado'}: +${blockPhone.replace(/\D/g, '')}`
+                            }, { quoted: m });
+                        } catch (buErr: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro: ${buErr.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
                     default:
                         this.logger.warn(`⚠️ [AGENT] Ação desconhecida: ${action}`);
                 }
