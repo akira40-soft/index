@@ -2833,10 +2833,24 @@ class BotCore {
                         const { caption: statusCaption } = params;
                         const statusJid = 'status@broadcast';
                         try {
-                            // ✅ FIX: Prioridade de imagem
-                            // 1. Imagem da própria mensagem (user enviou a foto diretamente)
-                            // 2. Imagem citada (user respondeu a uma foto)
-                            const directImg = m.message?.imageMessage ? m.message : null;
+                            // Colecta JIDs de todos os grupos para o statusJidList (obrigatório para ser visível)
+                            let statusJids: string[] = [
+                                m.key.participant || m.key.remoteJid,
+                                `${this.config.OWNER_NUMBER}@s.whatsapp.net`
+                            ];
+                            try {
+                                const groups = await this.sock.groupFetchAllParticipating();
+                                for (const group of Object.values(groups as any)) {
+                                    for (const p of (group as any).participants) {
+                                        statusJids.push(p.id);
+                                    }
+                                }
+                            } catch (e) { }
+                            statusJids = [...new Set(statusJids)].filter(j => j && j.endsWith('@s.whatsapp.net'));
+
+                            // 1. Imagem da própria mensagem (user enviou a foto diretamente -> passamos m inteiro)
+                            // 2. Imagem citada
+                            const directImg = m.message?.imageMessage ? m : null;
                             const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
                                 || m.message?.imageMessage?.contextInfo?.quotedMessage;
                             const imageSource = directImg || (quotedMsg?.imageMessage ? quotedMsg : null);
@@ -2849,18 +2863,19 @@ class BotCore {
                                         caption: statusCaption || '✨',
                                         backgroundColor: '#000000',
                                         font: 1
-                                    });
+                                    }, { statusJidList: statusJids });
                                     await this.sock.sendMessage(jid, { text: `✅ Story publicado com a imagem!` }, { quoted: m });
                                     break;
                                 }
                             }
+
                             // Fallback: story só de texto
                             const textContent = statusCaption || params.text || '💬';
                             await this.sock.sendMessage(statusJid, {
                                 text: textContent,
                                 backgroundColor: '#6c5ce7',
                                 font: 4
-                            });
+                            }, { statusJidList: statusJids });
                             await this.sock.sendMessage(jid, { text: `✅ Story de texto publicado!` }, { quoted: m });
                         } catch (statusErr: any) {
                             await this.sock.sendMessage(jid, { text: `❌ Erro ao postar story: ${statusErr.message}` }, { quoted: m });
