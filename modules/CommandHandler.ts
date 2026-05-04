@@ -129,8 +129,8 @@ class CommandHandler {
         this.sock = sock;
 
         // ✅ Propaga o socket para TODOS os sub-módulos que já existem
-        if (this.groupManagement?.setSocket) this.groupManagement.setSocket(sock);
         if (this.stickerHandler?.setSocket) this.stickerHandler.setSocket(sock);
+        if (this.groupManagement?.setSocket) this.groupManagement.setSocket(sock);
         if (this.userProfile?.setSocket) this.userProfile.setSocket(sock);
         if (this.botProfile?.setSocket) this.botProfile.setSocket(sock);
         if (this.presenceSimulator) this.presenceSimulator.sock = sock;

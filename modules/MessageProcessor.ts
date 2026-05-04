@@ -145,18 +145,8 @@ class MessageProcessor {
 
             let msg = message.message;
 
-            // Suporte a viewOnceMessage (aninhada)
-            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
-                msg = msg[tipo].message;
-                const subTipo = getContentType(msg);
-                if (!subTipo) return '';
-
-                switch (subTipo) {
-                    case 'imageMessage': return msg.imageMessage.caption || '';
-                    case 'videoMessage': return msg.videoMessage.caption || '';
-                    default: return '';
-                }
-            }
+            // ✅ REMOVER: Não tratamos viewOnce especialmente
+            // Todas as mensagens são processadas normalmente, sem desaparecer
 
             switch (tipo) {
                 case 'conversation':

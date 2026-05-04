@@ -1,3 +1,4 @@
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * CLASSE: BotCore
@@ -90,7 +91,6 @@ import UserProfile from './UserProfile.js';
 import BotProfile from './BotProfile.js';
 import GroupManagement from './GroupManagement.js';
 import ImageEffects from './ImageEffects.js';
-import StickerViewOnceHandler from './StickerViewOnceHandler.js';
 import PermissionManager from './PermissionManager.js';
 import JidUtils from './JidUtils.js';
 
@@ -127,7 +127,6 @@ class BotCore {
     public groupManagement: any;
     public imageEffects: any;
     public permissionManager: any;
-    public stickerViewOnceHandler: any;
     public commandHandler: any;
 
     // Event listeners
@@ -260,8 +259,6 @@ class BotCore {
             this.permissionManager = new PermissionManager(this.logger, this.registrationSystem);
             // @ts-ignore
             this.rateLimiter = new RateLimiter(this.config);
-            // @ts-ignore
-            this.stickerViewOnceHandler = new StickerViewOnceHandler(this.sock, this.config);
 
             this.paymentManager = new PaymentManager(this, this.subscriptionManager);
             this.presenceSimulator = new PresenceSimulator(this.sock || null);
@@ -310,7 +307,6 @@ class BotCore {
             // Módulos com setSocket nativo
             if (this.commandHandler?.setSocket) this.commandHandler.setSocket(sock);
             if (this.groupManagement?.setSocket) this.groupManagement.setSocket(sock);
-            if (this.stickerViewOnceHandler?.setSocket) this.stickerViewOnceHandler.setSocket(sock);
             if (this.botProfile?.setSocket) this.botProfile.setSocket(sock);
             if (this.userProfile?.setSocket) this.userProfile.setSocket(sock);
 
@@ -360,14 +356,18 @@ class BotCore {
                 markOnlineOnConnect: true,
                 maxMsgRetryCount: 15,
                 getMessage: async (key: any) => {
-                    // ✅ FIX "No session record": Retornar SEMPRE algo (dummy se necessário)
-                    // Sem isso, o Baileys não consegue processar o pedido de retry e a mensagem morre.
+                    // ✅ Prioriza carregar a mensagem real do store para decriptografia precisa
                     if (this.store) {
-                        const msg = await this.store.loadMessage(key.remoteJid, key.id);
-                        if (msg?.message) return msg.message;
+                        try {
+                            const msg = await this.store.loadMessage(key.remoteJid, key.id);
+                            if (msg?.message) return msg.message;
+                        } catch (e) {
+                            this.logger.debug(`[GET_MESSAGE] Erro ao carregar do store: ${e}`);
+                        }
                     }
-                    // Dummy message: garante que o Baileys envia um retry request ao remetente
-                    return { conversation: '' };
+                    // Se não houver a mensagem, retornamos undefined para que o Baileys use o fluxo nativo de retry.
+                    // O uso de { conversation: '' } forçado pode causar Bad MAC em mensagens de mídia.
+                    return undefined;
                 },
                 // ✅ AJUSTES PARA AMBIENTES DE CONTAINER (RAILWAY)
                 connectTimeoutMs: 120000,
@@ -2666,20 +2666,6 @@ class BotCore {
                                     await this.sock.sendMessage(jid, { text: msg }, { quoted: m });
                                 } catch (lErr: any) {
                                     await this.sock.sendMessage(jid, { text: `❌ Erro ao alterar permissões: ${lErr.message}` }, { quoted: m });
-                                }
-                                break;
-                            }
-
-                            // ─── MENSAGENS TEMPORÁRIAS (EPHEMERAL) ─────────────────────────────
-                            case 'set_ephemeral': {
-                                // val pode ser '0' (desativar), '86400' (1d), '604800' (7d), '7776000' (90d)
-                                const secs = parseInt(val || '86400', 10);
-                                try {
-                                    await this.sock.groupToggleEphemeral(jid, secs);
-                                    const label = secs === 0 ? 'desativadas' : secs <= 86400 ? '24 horas' : secs <= 604800 ? '7 dias' : '90 dias';
-                                    await this.sock.sendMessage(jid, { text: `⏳ Mensagens temporárias: *${label}*` }, { quoted: m });
-                                } catch (epErr: any) {
-                                    await this.sock.sendMessage(jid, { text: `❌ Erro ao configurar ephemeral: ${epErr.message}` }, { quoted: m });
                                 }
                                 break;
                             }
