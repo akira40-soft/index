@@ -32,8 +32,9 @@ export class SessionRepair {
             for (const file of files) {
                 if (file.includes(`session-${numero}`) || file.includes(`sender-key-${numero}`)) {
                     try {
-                        fs.unlinkSync(path.join(authDir, file));
-                        deletedCount++;
+                        // DESATIVADO: Deletar arquivos causa "No session found" em retries
+                        // fs.unlinkSync(path.join(authDir, file));
+                        // deletedCount++;
                     } catch (err) { }
                 }
             }

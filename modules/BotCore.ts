@@ -584,10 +584,9 @@ class BotCore {
     private async isMessageProcessed(m: any, textoFinal: string, numeroReal: string): Promise<boolean> {
         if (!m?.key?.id) return false;
 
-        // ✅ COMPOSITE KEY: message_id + sender (anti-duplicate definitivo)
-        const messageId = m.key.id;
+        const contentHash = this._hashContent(textoFinal);
         const senderNorm = JidUtils.normalizeUserNumber(numeroReal);
-        const compositeKey = `${messageId}_${senderNorm}`;
+        const compositeKey = `${m.key.id}_${senderNorm}_${contentHash}`;
         const now = Date.now();
 
         // Cleanup expired entries
@@ -598,7 +597,7 @@ class BotCore {
         }
 
         if (this.processedMessages.has(compositeKey)) {
-            this.logger.warn(`🔄 [DEDUPE HIT] Mensagem repetida interceptada: ${messageId} de ${senderNorm}`);
+            this.logger.warn(`🔄 [DEDUPE HIT] Mensagem repetida interceptada: ${m.key.id} de ${senderNorm}`);
 
             // Track duplicates per sender
             const dupCount = (this.duplicateCounters.get(senderNorm) || 0) + 1;
@@ -691,9 +690,8 @@ class BotCore {
 
             if (this.connectionStartTime && m.messageTimestamp) {
                 const messageTimeMs = Number(m.messageTimestamp) * 1000;
-                // Aumentamos a tolerância de clock drift para 12 horas, pois alguns dispositivos/redes mandam timestamps completamente dessincronizados
-                if (messageTimeMs < this.connectionStartTime - 43200000) {
-                    console.log(`❌ DROP: Mensagem super antiga. Atual: ${this.connectionStartTime}, Msg: ${messageTimeMs} (Dif: ${(this.connectionStartTime - messageTimeMs) / 1000}s)`);
+                // Reduzimos a tolerância para 2 minutos (120000ms) para evitar processar msgs antigas no reconnect
+                if (messageTimeMs < this.connectionStartTime - 120000) {
                     return;
                 }
             }

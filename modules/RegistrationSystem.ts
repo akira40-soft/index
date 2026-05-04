@@ -15,7 +15,7 @@ class RegistrationSystem {
     private config: any;
     private logger: any;
     private dbPath: string;
-    private users: RegisteredUser[];
+    public users: RegisteredUser[];
     public sock: any;
 
     constructor(logger = console) {
