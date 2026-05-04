@@ -148,7 +148,6 @@ class BotCore {
     private duplicateCounters: Map<string, number> = new Map(); // sender -> duplicate count
     private pipelineLogCounter: number = 0;
     private readonly PIPELINE_LOG_INTERVAL = 10;
-    private sessionFailures: Map<string, number> = new Map();
     private readonly MAX_FAILURES_BEFORE_PV_RESET = 5;
 
     constructor() {
@@ -233,9 +232,6 @@ class BotCore {
     async initializeComponents() {
         try {
             this.logger.debug('🔧 Inicializando componentes..');
-
-            // ✅ DUPLICATE FIX: Initialize SessionRepair para auto-repair
-            await this._initSessionRepair();
 
             // Auto-atualiza yt-dlp em background (não bloqueia o startup)
             this._selfUpdateYtdlp().catch(() => { });
@@ -436,9 +432,6 @@ class BotCore {
                             this.logger.error('❌ Muitas falhas. Reiniciando...');
                             process.exit(1);
                         }
-                    } else {
-                        this.logger.info('🔒 Desconectado permanentemente');
-                        this._cleanAuthOnError();
                     }
                 } else if (connection === 'open') {
                     this.logger.info('✅ CONEXÃO ESTABELECIDA!');
@@ -497,9 +490,6 @@ class BotCore {
                                 this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
                             }
                         }
-
-                        // Repair de sessão como medida adicional
-                        await this._repairCorruptedSession(jid);
 
                         // Early return para não marcar como processada
                         continue;
@@ -615,10 +605,9 @@ class BotCore {
             const dupCount = (this.duplicateCounters.get(senderNorm) || 0) + 1;
             this.duplicateCounters.set(senderNorm, dupCount);
 
-            // Auto-repair trigger: 3+ duplicates
+            // Auto-repair desativado por pedido do usuário
             if (dupCount >= 3) {
-                this.logger.error(`🚨 [AUTO-REPAIR] ${dupCount} duplicates from ${senderNorm}. Triggering session repair...`);
-                this._repairCorruptedSession(m.key.remoteJid).catch(console.error);
+                this.logger.error(`🚨 [ANTI-LOOP] ${dupCount} duplicados detectados de ${senderNorm}.`);
                 this.duplicateCounters.delete(senderNorm); // Reset counter
             }
 
@@ -1758,49 +1747,6 @@ class BotCore {
         return false;
     }
 
-    _cleanAuthOnError(): void {
-        try {
-            if (fs.existsSync(this.config.AUTH_FOLDER)) {
-                fs.rmSync(this.config.AUTH_FOLDER, { recursive: true, force: true });
-                this.logger.info('🧹 Credenciais limpas');
-            }
-            this.isConnected = false;
-            this.currentQR = null;
-            this.BOT_JID = null;
-            this.reconnectAttempts = 0;
-        } catch (e: any) {
-            this.logger.error('Erro ao limpar auth:', e.message);
-        }
-    }
-
-    /**
-     * Repara sessão corrompida apagando arquivos de sessão específicos do JID.
-     * Útil para resolver o erro "Bad MAC" sem resetar o bot inteiro.
-     */
-    // ✅ INTEGRATED SessionRepair - Duplicate trigger usa SessionRepair diretamente
-    private sessionRepair: any;
-
-    private async _initSessionRepair() {
-        const { SessionRepair } = await import('./SessionRepair.js');
-        this.sessionRepair = new SessionRepair(this.sock);
-    }
-
-    private async _repairCorruptedSession(jid: string): Promise<void> {
-        if (!this.sessionRepair) await this._initSessionRepair();
-        await this.sessionRepair.repairCorruptedSession(jid);
-    }
-
-    private async _forceSignalSync(jid: string, numero: string): Promise<void> {
-        if (!this.sessionRepair) await this._initSessionRepair();
-        await this.sessionRepair.forceSignalSync(jid);
-    }
-
-    private async _forcePVSessionReset(numero: string, jid: string): Promise<void> {
-        if (!this.sessionRepair) await this._initSessionRepair();
-        await this.sessionRepair.forcePVReset(numero, jid);
-    }
-
-
     getStatus(): any {
         return {
             isConnected: this.isConnected,
@@ -2267,10 +2213,11 @@ class BotCore {
                                         text: `📝 *Transcrição do Áudio:*\n\n"${transcricao.texto}"`
                                     }, { quoted: m });
                                 } else {
-                                    await this.sock.sendMessage(jid, { text: '❌ Não consegui transcrever este áudio. Talvez a qualidade esteja má ou seja muito curto.' }, { quoted: m });
+                                    this.logger.warn('[TRANSCRIBE] Falha na transcrição (possível áudio curto ou ruidoso).');
                                 }
                             } else {
-                                await this.sock.sendMessage(jid, { text: '❌ Não consegui encontrar o arquivo de áudio. Por favor, responda diretamente a uma nota de voz.' }, { quoted: m });
+                                // SILENCIADO: Se a IA pedir para transcrever mas não houver áudio, ignoramos em silêncio para evitar mensagens chatas ao usuário.
+                                this.logger.warn('[TRANSCRIBE] Nenhuma mídia de áudio encontrada no contexto do comando da IA.');
                             }
                         } catch (tErr: any) {
                             this.logger.error(`[TRANSCRIBE] Erro: ${tErr.message}`);
@@ -2865,13 +2812,20 @@ class BotCore {
                             let mentions: string[] = [];
                             if (mention_group && ehGrupo) {
                                 try {
-                                    const groupMeta = await this.sock.groupMetadata(jid);
-                                    for (const p of groupMeta.participants) {
-                                        statusJids.push(p.id);
-                                        mentions.push(p.id);
+                                    // ✅ TIMEOUT PROTECTION: Desiste se o grupo for muito grande ou demorar a responder
+                                    const groupMeta: any = await Promise.race([
+                                        this.sock.groupMetadata(jid),
+                                        new Promise((_, reject) => setTimeout(() => reject(new Error('Timed Out')), 5000))
+                                    ]);
+
+                                    if (groupMeta?.participants) {
+                                        for (const p of groupMeta.participants) {
+                                            statusJids.push(p.id);
+                                            mentions.push(p.id);
+                                        }
                                     }
                                 } catch (e) {
-                                    this.logger.warn(`⚠️ Falha ao obter participantes do grupo para menção no status: ${e}`);
+                                    this.logger.warn(`⚠️ Falha ao obter participantes para story: ${e}`);
                                 }
                             }
 
@@ -2909,7 +2863,8 @@ class BotCore {
                             }, { statusJidList: statusJids });
                             await this.sock.sendMessage(jid, { text: `✅ Story de texto publicado para os teus contactos${mention_group ? ' e mencionei o grupo' : ''}!` }, { quoted: m });
                         } catch (statusErr: any) {
-                            await this.sock.sendMessage(jid, { text: `❌ Erro ao postar story: ${statusErr.message}` }, { quoted: m });
+                            // SILENCIADO: Se falhar ao postar story (falso positivo da IA), apenas logamos.
+                            this.logger.error(`❌ Falha na ação post_status: ${statusErr.message}`);
                         }
                         break;
                     }
