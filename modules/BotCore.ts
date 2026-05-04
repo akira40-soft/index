@@ -581,13 +581,25 @@ class BotCore {
         }
     }
 
-    private async isMessageProcessed(m: any, textoFinal: string, numeroReal: string): Promise<boolean> {
+    private async isMessageProcessed(m: any, textoFinal: string, numeroReal: string, ehGrupo: boolean): Promise<boolean> {
         if (!m?.key?.id) return false;
 
         const contentHash = this._hashContent(textoFinal);
         const senderNorm = JidUtils.normalizeUserNumber(numeroReal);
         const compositeKey = `${m.key.id}_${senderNorm}_${contentHash}`;
         const now = Date.now();
+
+        // ✅ NOVO: Bloqueio de Loop de Conteúdo (Anti-Bot Loop)
+        // Se a mesma mensagem for enviada no mesmo chat em menos de 5s, ignoramos (mesmo com ID diferente)
+        // Isso evita que dois bots fiquem a responder um ao outro infinitamente.
+        if (ehGrupo && textoFinal && textoFinal.length > 5) {
+            const groupContentKey = `loop_${m.key.remoteJid}_${contentHash}`;
+            if (this.processedMessages.has(groupContentKey)) {
+                this.logger.debug(`🛑 [ANTI-BOT-LOOP] Conteúdo idêntico detectado em grupo. Ignorando.`);
+                return true;
+            }
+            this.processedMessages.set(groupContentKey, now);
+        }
 
         // Cleanup expired entries
         for (const [key, timestamp] of this.processedMessages.entries()) {
@@ -668,6 +680,12 @@ class BotCore {
                 return;
             }
 
+            // ✅ Identificação de tipo de conversa antecipada para deduplicação
+            const remoteJid = String(m.key.remoteJid || '');
+            const ehGrupo = remoteJid.endsWith('@g.us');
+            const ehStatus = remoteJid === 'status@broadcast';
+            const ehNewsletter = remoteJid.endsWith('@newsletter');
+
             // ✅ Deduplicação robusta AVANÇADA (composite key: sender+hash+timestamp)
             const remoteJid_ = m.key.remoteJid;
             let numero_ = await this.messageProcessor.extractUserNumber(m, this.sock);
@@ -677,7 +695,7 @@ class BotCore {
             const nome_ = await this._resolveUserName(m, numero_, remoteJid_);
             const numeroReal_ = JidUtils.normalizeUserNumber(numero_) || 'desconhecido';
             const textoFinal_ = (this.messageProcessor.extractText(m) || '').trim();
-            if (await this.isMessageProcessed(m, textoFinal_ || '[sem texto]', numeroReal_)) return;
+            if (await this.isMessageProcessed(m, textoFinal_ || '[sem texto]', numeroReal_, ehGrupo)) return;
 
             // LOG DE DIAGNÓSTICO INICIAL (Mostra o que bateu no socket sem cortes excessivos)
             console.log(`🚨 [DEBUG EXTREMO] MENSAGEM BATEU NO SOCKET! remoteJid: ${jid} | fromMe: ${fromMe} | Txt: "${String(textRaw).substring(0, 100)}${textRaw.length > 100 ? '...' : ''}"`);
@@ -698,12 +716,9 @@ class BotCore {
 
             if (shouldLog) this.logger.debug('🔹 [PIPELINE] Válida');
 
-            const remoteJid = String(m.key.remoteJid || '');
 
             // ✅ VALIDAÇÃO CORRETA: Usar métodos Type-Safe para detectar tipo de conversa
-            const ehGrupo = remoteJid.endsWith('@g.us');
-            const ehStatus = remoteJid === 'status@broadcast';
-            const ehNewsletter = remoteJid.endsWith('@newsletter');
+
 
             // ✅ BUG FIX: Ignorar Status e Newsletters imediatamente
             // Evita que Newsletters esgotem o rate limit do utilizador e poluem logs
