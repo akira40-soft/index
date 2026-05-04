@@ -5,7 +5,7 @@ FROM node:20-alpine
 # Runtime env (definido DEPOIS do install - isso é crítico!)
 ENV RAILWAY_ENVIRONMENT=true \
     PINO_NO_PRETTY=true \
-    DATA_DIR=/app/data \
+    DATA_DIR=/tmp/akira_data \
     NODE_OPTIONS="--dns-result-order=ipv4first --no-warnings" \
     UV_THREADPOOL_SIZE=128 \
     LANG=C.UTF-8
@@ -24,12 +24,12 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages yt-dlp && \
     ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp 2>/dev/null || true && \
     echo "✅ yt-dlp instalado"
 
-# Dirs persistentes
-RUN mkdir -p /app/data/auth_info_baileys \
-    /app/data/database \
-    /app/data/logs \
-    /app/data/temp && \
-    chmod -R 755 /app/data
+# Dirs persistentes (usando volume Railway em /tmp/akira_data)
+RUN mkdir -p /tmp/akira_data/auth_info_baileys \
+    /tmp/akira_data/database \
+    /tmp/akira_data/logs \
+    /tmp/akira_data/temp && \
+    chmod -R 755 /tmp/akira_data
 
 WORKDIR /app
 
