@@ -489,36 +489,16 @@ class BotCore {
                         
                         this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | ehGrupo=${ehGrupo} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
-                        // 🔴 BUG FIX #1: Para PV com STUB - NÃO tentar processar
-                        // STUB = mensagem não descriptografada ou com erro de MAC
-                        // Não há conteúdo para extrair, apenas fazer retry
-                        // Se for Bad MAC Error, o retry vai falhar também - deixar para o usuário reenviar manualmente
+                        // 🔴 BUG FIX: Bad MAC Error (type=2) não pode ser resolvido com retry
+                        // Bad MAC = erro criptográfico real (chaves desincronizadas)
+                        // Retry vai falhar de novo, então apenas ignorar e pedir reenvio manual
                         if (!ehGrupo) {
-                            // PV com stub: apenas fazer retry (sem tentar processar conteúdo vazio)
-                            this.logger.info(`📍 [PV STUB] Ignorando mensagem com erro de descriptografia. Solicitando reenvio...`);
-                            
-                            const pvRetryCount = this.stubRetryCount.get(m.key.id || 'pv-unknown') || 0;
-                            
-                            if (pvRetryCount < this.MAX_STUB_RETRIES) {
-                                // Incrementar retry e enviar pedido
-                                this.stubRetryCount.set(m.key.id || 'pv-unknown', pvRetryCount + 1);
-                                
-                                if (this.sock) {
-                                    try {
-                                        await this.sock.sendRetryRequest(m).catch(() => {
-                                            this.sock.readMessages([m.key]).catch(() => { });
-                                        });
-                                        this.logger.info(`🔄 [PV RETRY] Tentativa ${pvRetryCount + 1}/${this.MAX_STUB_RETRIES} para ${jid}`);
-                                    } catch (retryErr) {
-                                        this.logger.warn(`⚠️ [PV RETRY ERR] ${retryErr}`);
-                                    }
-                                }
-                            } else {
-                                // Excedeu máximo de retries
-                                this.logger.warn(`⚠️ [PV STUB] Máximo de retries (${this.MAX_STUB_RETRIES}) atingido. Ignorando mensagem.`);
-                                this.stubRetryCount.delete(m.key.id || 'pv-unknown');
-                            }
-                            continue;  // ✅ Saltar para próxima mensagem
+                            // PV com STUB: Não fazer retry - é um erro criptográfico
+                            // Usuário precisa reenviar ou reiniciar chat com o bot
+                            this.logger.warn(`⚠️ [PV BAD MAC] Erro de descriptografia - chaves desincronizadas com ${jid}`);
+                            this.logger.info(`📍 [PV ACTION] Usuário deve reenviar mensagem ou reiniciar o chat.`);
+                            this.stubRetryCount.delete(m.key.id || 'pv-unknown');
+                            continue;  // Pular para próxima mensagem
                         } else {
                             // 🔴 BUG FIX: Grupo com stub - IGNORAR
                             // O retry não funciona porque as chaves não estão carregadas.
