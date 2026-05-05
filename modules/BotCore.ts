@@ -595,10 +595,11 @@ class BotCore {
         // ✅ NOVO: Bloqueio de Loop de Conteúdo (Anti-Bot Loop)
         // Se a mesma mensagem for enviada no mesmo chat em menos de 5s, ignoramos (mesmo com ID diferente)
         // Isso evita que dois bots fiquem a responder um ao outro infinitamente.
+        // ⚠️ CORREÇÃO: Incluir sender no groupContentKey para evitar bloquear outros usuários
         if (ehGrupo && textoFinal && textoFinal.length > 5) {
-            const groupContentKey = `loop_${m.key.remoteJid}_${contentHash}`;
+            const groupContentKey = `loop_${m.key.remoteJid}_${senderNorm}_${contentHash}`;
             if (this.processedMessages.has(groupContentKey)) {
-                this.logger.debug(`🛑 [ANTI-BOT-LOOP] Conteúdo idêntico detectado em grupo. Ignorando.`);
+                this.logger.debug(`🛑 [ANTI-BOT-LOOP] Conteúdo idêntico detectado em grupo de ${senderNorm}. Ignorando.`);
                 return true;
             }
             this.processedMessages.set(groupContentKey, now);
@@ -647,6 +648,104 @@ class BotCore {
             hash = hash & hash; // Convert to 32bit integer
         }
         return Math.abs(hash).toString(36);
+    }
+
+    /**
+     * ✅ NOVO: Método centralizado para construir metadados COMPLETOS para qualquer mensagem
+     * Garante que TODAS as mensagens enviadas ao LSTM tenham contexto máximo
+     */
+    private buildCompleteMessageMetadata(
+        m: any,
+        nome: string,
+        numeroReal: string,
+        textoFinal: string,
+        replyInfo: any,
+        ehGrupo: boolean,
+        remoteJid: string,
+        temImagem: boolean = false,
+        temAudio: boolean = false,
+        temVideo: boolean = false,
+        temSticker: boolean = false,
+        temDocumento: boolean = false,
+        isCommand: boolean = false,
+        isMention: boolean = false,
+        isCallingBot: boolean = false
+    ): any {
+        const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
+        const timestamp = m.messageTimestamp ? Number(m.messageTimestamp) * 1000 : Date.now();
+        
+        return {
+            // ===== USUÁRIO E IDENTIDADE =====
+            usuario: nome,
+            numero: numeroReal,
+            user_id: numeroReal,
+            
+            // ===== CONTEÚDO DA MENSAGEM =====
+            mensagem: textoFinal,
+            message_text: textoFinal,
+            message_length: textoFinal.length,
+            
+            // ===== TIPO DE CONVERSA =====
+            tipo_conversa: ehGrupo ? 'grupo' : 'pv',
+            is_group: ehGrupo,
+            grupo_id: ehGrupo ? remoteJid : null,
+            grupo_nome: grupoNome,
+            remote_jid: remoteJid,
+            
+            // ===== METADADOS DE MENSAGEM =====
+            message_id: m.key?.id,
+            timestamp: timestamp,
+            timestamp_ms: timestamp,
+            date: new Date(timestamp).toISOString(),
+            
+            // ===== TIPO DE MÍDIA =====
+            media: {
+                has_image: temImagem,
+                has_audio: temAudio,
+                has_video: temVideo,
+                has_sticker: temSticker,
+                has_document: temDocumento,
+                is_media_only: !textoFinal || textoFinal.startsWith('['),
+                media_type: temImagem ? 'imagem' : temAudio ? 'áudio' : temVideo ? 'vídeo' : temSticker ? 'figurinha' : temDocumento ? 'documento' : 'texto'
+            },
+            
+            // ===== CONTEXTO DE RESPOSTA/REPLY =====
+            mensagem_citada: replyInfo?.textoMensagemCitada,
+            reply_metadata: {
+                is_reply: !!replyInfo,
+                reply_to_bot: !!replyInfo?.ehRespostaAoBot,
+                quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
+                quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
+                quoted_type: replyInfo?.quotedType || 'texto',
+                quoted_text_original: replyInfo?.quotedTextOriginal || '',
+                context_hint: replyInfo?.contextHint || 'contexto_geral',
+                quoted_message_id: replyInfo?.quotedMsgId
+            },
+            
+            // ===== DETECÇÃO DE INTENÇÃO =====
+            detection: {
+                is_command: isCommand,
+                is_mention: isMention,
+                is_calling_bot: isCallingBot,
+                mentions_bot: isMention || isCallingBot,
+                is_passive: !isCommand && !isMention && !isCallingBot && !replyInfo?.ehRespostaAoBot
+            },
+            
+            // ===== PARTICIPANT INFO (GRUPOS) =====
+            ...(ehGrupo && {
+                participant_jid: m.key?.participant,
+                participant_number: m.key?.participant ? JidUtils.getNumber(m.key.participant) : null
+            }),
+            
+            // ===== ORIGEM E ROTEAMENTO =====
+            from_me: m.key?.fromMe || false,
+            key: {
+                id: m.key?.id,
+                remoteJid: m.key?.remoteJid,
+                fromMe: m.key?.fromMe,
+                participant: m.key?.participant
+            }
+        };
     }
 
     async processMessage(m: any): Promise<void> {
@@ -888,28 +987,14 @@ class BotCore {
             // [ESCUTA PASSIVA] Se for grupo e NÃO for comando/menção/reply/chamar pelo nome, escuta passivamente e ignora
             if (ehGrupo && !isCommand && !isMention && !isReplyToMe && !isCallingBot) {
                 // Removemos a restrição de 'textoFinal.length > 0' para rastrear literalmente TUDO (incluindo mídias sem legenda)
-                const grupoNome = remoteJid.split('@')[0] || 'Grupo Desconhecido';
-                // Adicionamos um log INFO visível para que o usuário saiba que a mensagem foi ouvida para o LSTM
+                // ✅ NOVO: Metadados COMPLETOS para melhor contexto de LSTM
                 this.logger.info(`🎧 [LSTM LISTENING] ${nome}: "${textoFinal.substring(0, 100)}${textoFinal.length > 100 ? '...' : ''}"`);
-                this.apiClient.listenMessage({
-                    usuario: nome,
-                    numero: numeroReal,
-                    mensagem: textoFinal,
-                    tipo_conversa: 'grupo',
-                    grupo_id: remoteJid,
-                    grupo_nome: grupoNome,
-                    is_group: true,
-                    mensagem_citada: replyInfo?.textoMensagemCitada,
-                    reply_metadata: {
-                        is_reply: !!replyInfo,
-                        reply_to_bot: !!replyInfo?.ehRespostaAoBot,
-                        quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
-                        quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
-                        quoted_type: replyInfo?.quotedType || 'texto',
-                        quoted_text_original: replyInfo?.quotedTextOriginal || '',
-                        context_hint: replyInfo?.contextHint || 'contexto_geral'
-                    }
-                }).catch(() => { });
+                const fullMetadata = this.buildCompleteMessageMetadata(
+                    m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, remoteJid,
+                    temImagem, temAudio, temVideoReal, temSticker, temDocumentoReal,
+                    isCommand, isMention, isCallingBot
+                );
+                this.apiClient.listenMessage(fullMetadata).catch(() => { });
                 return;
             }
 
