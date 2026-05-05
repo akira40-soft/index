@@ -475,24 +475,47 @@ class BotCore {
                     // No Baileys v6+, m.messageStubType === 1 (CIPHERTEXT_ERROR)
                     if (m.messageStubType) {
                         const jid = m.key.remoteJid!;
-                        this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | Params: ${JSON.stringify(m.messageStubParameters)}`);
+                        const ehGrupo = String(jid).endsWith('@g.us');
+                        
+                        this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | ehGrupo=${ehGrupo} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
-                        // ✅ FIX NÃO-CANÓNICO: Forçar retry direto pelo socket para QUALQUER tipo de stub
-                        // Isso faz o WhatsApp do remetente reenviar a mensagem com chaves frescas.
-                        if (this.sock) {
+                        // 🔴 BUG FIX #1: Para PV, SEMPRE tentar processar mesmo com stub
+                        // PV com stub pode ter conteúdo incompleto, mas temos que tentar
+                        // Grupo com stub é mais crítico - fazer retry direto
+                        if (!ehGrupo) {
+                            // PV com stub: tentar processar primeiro
+                            this.logger.info(`📍 [PV STUB RECOVERY] Processando PV mesmo com stub (tipo=${m.messageStubType})`);
                             try {
-                                await this.sock.sendRetryRequest(m).catch(() => {
-                                    // Fallback: readMessages também provoca renegociação
-                                    this.sock.readMessages([m.key]).catch(() => { });
-                                });
-                                this.logger.info(`🔄 [RETRY REQUEST] Pedido de reenvio enviado para ${jid}`);
-                            } catch (retryErr) {
-                                this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
+                                await this.processMessage(m);
+                            } catch (processErr) {
+                                this.logger.warn(`⚠️ [PV STUB] Falha ao processar: ${processErr}`);
                             }
+                            // Depois fazer retry para remetente reenviar com chaves novas
+                            if (this.sock) {
+                                try {
+                                    await this.sock.sendRetryRequest(m).catch(() => {
+                                        this.sock.readMessages([m.key]).catch(() => { });
+                                    });
+                                    this.logger.info(`🔄 [PV RETRY] Pedido de reenvio enviado para ${jid}`);
+                                } catch (retryErr) {
+                                    this.logger.warn(`⚠️ [PV RETRY ERR] ${retryErr}`);
+                                }
+                            }
+                            continue;  // ✅ Saltar para próxima mensagem
+                        } else {
+                            // Grupo com stub: fazer retry direto (padrão anterior)
+                            if (this.sock) {
+                                try {
+                                    await this.sock.sendRetryRequest(m).catch(() => {
+                                        this.sock.readMessages([m.key]).catch(() => { });
+                                    });
+                                    this.logger.info(`🔄 [RETRY REQUEST] Pedido de reenvio enviado para ${jid}`);
+                                } catch (retryErr) {
+                                    this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
+                                }
+                            }
+                            continue;  // Skip para grupo também
                         }
-
-                        // Early return para não marcar como processada
-                        continue;
                     }
 
                     await this.processMessage(m);
@@ -1416,8 +1439,35 @@ class BotCore {
                     }
                     // PV mensagem directa: sem quote (resposta fluída, como conversa normal)
 
-                    const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-                    this.logger.info(`✅ [DISPATCH OK] ID: ${sentMsg?.key?.id}`);
+                    // 🔴 BUG FIX #3: Tratamento robusto de erro para sock.sendMessage
+                    try {
+                        const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+                        
+                        if (!sentMsg || !sentMsg.key) {
+                            this.logger.error(`❌ [DISPATCH FAIL] Resposta não enviada - sentMsg inválido para ${m.key.remoteJid}`);
+                        } else {
+                            this.logger.info(`✅ [DISPATCH OK] ID: ${sentMsg?.key?.id}`);
+                        }
+                    } catch (sendErr: any) {
+                        const remoteJid = m.key?.remoteJid || 'unknown';
+                        const isPrivate = !String(remoteJid).endsWith('@g.us');
+                        const errorType = isPrivate ? '[PV ERROR]' : '[GROUP ERROR]';
+                        
+                        this.logger.error(`❌ ${errorType} Falha ao enviar resposta para ${remoteJid}: ${sendErr.message || sendErr}`);
+                        this.logger.debug(`📋 [STACK] ${sendErr.stack}`);
+                        
+                        // Retry automático para PV (mais crítico)
+                        if (isPrivate) {
+                            this.logger.warn(`🔄 [PV RETRY] Tentando reenvio da resposta...`);
+                            try {
+                                await delay(1000);  // Wait 1s before retry
+                                const retryMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
+                                this.logger.info(`✅ [DISPATCH RETRY OK] ID: ${retryMsg?.key?.id}`);
+                            } catch (retryErr) {
+                                this.logger.error(`❌ [PV RETRY FAIL] Reenvio falhou também: ${retryErr}`);
+                            }
+                        }
+                    }
 
                     if (this.presenceSimulator) await this.presenceSimulator.markAsRead(m, ehGrupo);
                 }
@@ -1701,8 +1751,18 @@ class BotCore {
     shouldRespondToAI(m: any, texto: string, ehGrupo: boolean, replyInfo: any, nomeRemetente: string = '', numeroRemetente: string = ''): boolean {
         // ✅ PV: SEMPRE responde (é conversa direcionada por definição)
         if (!ehGrupo) {
-            this.logger.debug(`📩 [PV] Mensagem de ${nomeRemetente} identificada. Respondendo automaticamente.`);
-            return true;
+            // 🔴 BUG FIX #2: Log diagnosticado + DOUBLE-CHECK para garantir decisão
+            const remoteJid = m.key?.remoteJid || 'desconhecido';
+            const messageId = m.key?.id || 'sem-id';
+            
+            this.logger.info(`📩 [PV DECISION] ✅ RESPONDENDO | User: ${nomeRemetente} | JID: ${remoteJid} | MsgID: ${messageId}`);
+            
+            // Double-check: se chegou aqui, SEMPRE deve responder
+            if (m.messageStubType) {
+                this.logger.warn(`📩 [PV DECISION] ⚠️ PV é um STUB, mas continuaremos: tipo=${m.messageStubType}`);
+            }
+            
+            return true;  // ✅ SEMPRE true para PV
         }
 
 
