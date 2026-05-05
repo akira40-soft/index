@@ -1181,6 +1181,85 @@ class BotCore {
         }
     }
 
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * MEDIA SEND PIPELINE - Envia mídia gerada (imagens via generate_image)
+     * ═══════════════════════════════════════════════════════════════════════
+     */
+    private async handleMediaResponse(m: any, mediaResponse: any, ehGrupo: boolean): Promise<void> {
+        if (!mediaResponse || !mediaResponse.tipo) {
+            this.logger.warn('⚠️ MediaResponse vazio ou sem tipo');
+            return;
+        }
+
+        try {
+            this.logger.info(`📸 [SEND MEDIA] Tipo: ${mediaResponse.tipo}`);
+
+            if (mediaResponse.tipo === 'imagem' || mediaResponse.tipo === 'image') {
+                // mediaResponse.dados pode ser:
+                // - base64 string
+                // - URL (https://...)
+                // - file path
+
+                let imageBuffer: Buffer | null = null;
+
+                if (mediaResponse.dados.startsWith('http')) {
+                    // URL: download
+                    this.logger.info(`🔗 Baixando imagem da URL...`);
+                    try {
+                        const response = await require('axios').default.get(mediaResponse.dados, {
+                            responseType: 'arraybuffer'
+                        });
+                        imageBuffer = Buffer.from(response.data);
+                    } catch (err: any) {
+                        this.logger.error(`❌ Erro baixando imagem: ${err.message}`);
+                        return;
+                    }
+                } else if (mediaResponse.dados.startsWith('/') || mediaResponse.dados.includes('\\')) {
+                    // Caminho de arquivo
+                    this.logger.info(`📁 Lendo imagem do arquivo...`);
+                    try {
+                        const fs = require('fs');
+                        imageBuffer = fs.readFileSync(mediaResponse.dados);
+                    } catch (err: any) {
+                        this.logger.error(`❌ Erro lendo arquivo: ${err.message}`);
+                        return;
+                    }
+                } else {
+                    // Base64
+                    this.logger.info(`🔐 Decodificando base64...`);
+                    try {
+                        imageBuffer = Buffer.from(mediaResponse.dados, 'base64');
+                    } catch (err: any) {
+                        this.logger.error(`❌ Erro decodificando base64: ${err.message}`);
+                        return;
+                    }
+                }
+
+                if (!imageBuffer || imageBuffer.length === 0) {
+                    this.logger.error(`❌ Image buffer vazio após processamento`);
+                    return;
+                }
+
+                const caption = mediaResponse.descricao || mediaResponse.caption || '';
+
+                // Envia a imagem
+                this.logger.info(`📤 Enviando imagem (${imageBuffer.length} bytes) com caption: "${caption.substring(0, 50)}..."`);
+                await this.sock.sendMessage(m.key.remoteJid, {
+                    image: imageBuffer,
+                    caption: caption,
+                    mimetype: mediaResponse.mime_type || 'image/jpeg'
+                }, { quoted: ehGrupo ? m : undefined });
+
+                this.logger.info(`✅ Imagem enviada com sucesso!`);
+            } else {
+                this.logger.warn(`⚠️ Tipo de mídia não suportado: ${mediaResponse.tipo}`);
+            }
+        } catch (err: any) {
+            this.logger.error(`❌ Erro genérico em handleMediaResponse: ${err.message}`);
+        }
+    }
+
     async handleImageMessage(m: any, nome: string, numeroReal: string, replyInfo: any, ehGrupo: boolean): Promise<void> {
         this.logger.info(`🖼️ [IMAGEM] ${nome}`);
         if (ehGrupo && this.config.FEATURE_LEVELING && this.levelSystem && this.groupManagement?.groupSettings[m.key.remoteJid]?.leveling) {
@@ -1511,6 +1590,16 @@ class BotCore {
                 resposta = "";
             }
 
+            // ✅ NOVO: Processa mídia na resposta (imagens geradas pela skill generate_image, etc)
+            if (resultado && resultado.media_response) {
+                this.logger.info(`📸 [MÍDIA NA RESPOSTA] Enviando: ${resultado.media_response.tipo}`);
+                try {
+                    await this.handleMediaResponse(m, resultado.media_response, ehGrupo);
+                } catch (err: any) {
+                    this.logger.error(`❌ Erro ao enviar mídia: ${err.message}`);
+                }
+            }
+
             if (foiAudio) {
                 this.logger.info('🎤 [AUDIO RESPONSE] Gerando voz com ElevenLabs...');
 
@@ -1691,13 +1780,8 @@ class BotCore {
     }
 
     /**
-     * Resolve nome real do usuário.
-     * Em grupo com Cloud MD, m.pushName pode vir vazio ou genérico.
-     * Tentamos groupMetadata participants lookup como fallback.
-     */
-    /**
-     * Resolve nome real do usuário a partir de um JID.
-     * Útil para mensagens diretas e para identificar autores em replies.
+     * Resolve nome real do usuário a partir de um JID
+     * Tentará: pushName → metadata do grupo → onWhatsApp → fallback
      */
     private async resolveAuthorName(jid: string, remoteJid: string): Promise<string> {
         if (!jid || jid === 'desconhecido') return 'Usuário';
@@ -1708,8 +1792,8 @@ class BotCore {
             return this.config.BOT_NAME || 'Akira';
         }
 
-        // 2. Se for grupo, tentar buscar nos metadados (participantes)
-        const isGroup = remoteJid.endsWith('@g.us');
+        // 2. Se for grupo, tentar buscar nos metadados
+        const isGroup = remoteJid?.endsWith('@g.us');
         if (isGroup && this.sock) {
             try {
                 const metadata = await this.sock.groupMetadata(remoteJid);
@@ -1725,7 +1809,7 @@ class BotCore {
             }
         }
 
-        // 3. Fallback: onWhatsApp (apenas para números reais, não LIDs)
+        // 3. Fallback: onWhatsApp (apenas para números reais)
         if (this.sock && !jid.includes('@lid') && jid.includes('@s.whatsapp.net')) {
             try {
                 const onWp = await this.sock.onWhatsApp(jid);
