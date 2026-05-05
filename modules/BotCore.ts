@@ -2140,33 +2140,38 @@ class BotCore {
                     }
 
                     case 'generate_image': {
-                        const { prompt, model: imgModel = 'flux', width = 1024, height = 1024 } = params;
-                        if (!prompt) break;
+                        const { 
+                            image_buffer_b64, 
+                            mime_type = 'image/png', 
+                            model: imgModel = 'flux',
+                            prompt: originalPrompt = ''
+                        } = params;
 
                         try {
-                            // Tenta o Nano Banana (Google Imagen 3) primeiro
-                            this.logger.info(`🎨 Tentando Nano Banana (Imagen 3) para: ${prompt}`);
-                            const nanoRes = await this.apiClient.generateImage(prompt, '1:1', imgModel);
-
-                            if (nanoRes.success && nanoRes.buffer) {
-                                const modelLabel = nanoRes.model?.includes('pollinations') ? 'Poly 💠' : 'Nano Banana 🍌';
+                            // ✅ Decodifica base64 de volta para Buffer
+                            if (image_buffer_b64) {
+                                const imgBuffer = Buffer.from(image_buffer_b64, 'base64');
                                 
-                                // ✅ GARANTIR: Enviar sempre como arquivo (buffer), nunca como link
-                                if (Buffer.isBuffer(nanoRes.buffer) && nanoRes.buffer.length > 0) {
+                                if (Buffer.isBuffer(imgBuffer) && imgBuffer.length > 0) {
+                                    const modelLabel = imgModel?.includes('cellcog') ? 'CellCog 🧠' : 'Flux 💠';
+                                    
                                     await this.sock.sendMessage(jid, {
-                                        image: nanoRes.buffer,
+                                        image: imgBuffer,
                                         caption: `🎨 Gerado por Akira (${modelLabel})`
                                     }, { quoted: m });
-                                    this.logger.info(`✅ Imagem enviada como arquivo binário`);
+                                    this.logger.info(`✅ Imagem enviada como arquivo binário (${modelLabel})`);
                                     break;
+                                } else {
+                                    throw new Error('Buffer vazio após decodificação base64');
                                 }
                             }
-
-                            this.logger.warn(`⚠️ Geração primária falhou: ${nanoRes.error || 'sem buffer'}. Tentando fallback direto Pollinations...`);
-
-                            // Fallback secundário (direto via TS se o Python falhar)
+                            
+                            // Fallback se não houver buffer_b64
+                            this.logger.warn(`⚠️ Nenhum buffer base64 fornecido. Tentando fallback direto Pollinations...`);
+                            
+                            const prompt = originalPrompt || 'Abstract art';
                             const encodedPrompt = encodeURIComponent(prompt);
-                            const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
+                            const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
 
                             const imgRes = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 60000 });
                             const imgBuffer = Buffer.from(imgRes.data);
@@ -2174,7 +2179,7 @@ class BotCore {
                             if (imgBuffer && imgBuffer.length > 0) {
                                 await this.sock.sendMessage(jid, {
                                     image: imgBuffer,
-                                    caption: `🎨 Gerado por Akira (Poly 💠 - Fallback)`
+                                    caption: `🎨 Gerado por Akira (Flux 💠 - Fallback)`
                                 }, { quoted: m });
                                 this.logger.info(`✅ Imagem fallback enviada como arquivo binário`);
                             } else {
