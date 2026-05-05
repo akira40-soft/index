@@ -652,6 +652,7 @@ class BotCore {
 
     /**
      * ✅ NOVO: Método centralizado para construir metadados COMPLETOS para qualquer mensagem
+     * ✅ COMPATÍVEL COM: endpoint /escutar do api.py
      * Garante que TODAS as mensagens enviadas ao LSTM tenham contexto máximo
      */
     private buildCompleteMessageMetadata(
@@ -674,43 +675,19 @@ class BotCore {
         const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
         const timestamp = m.messageTimestamp ? Number(m.messageTimestamp) * 1000 : Date.now();
         
+        // ✅ ESTRUTURA ESPERADA PELO ENDPOINT /escutar DO api.py
         return {
-            // ===== USUÁRIO E IDENTIDADE =====
+            // ===== CAMPOS OBRIGATÓRIOS DO ENDPOINT /escutar =====
+            mensagem: textoFinal,
             usuario: nome,
             numero: numeroReal,
-            user_id: numeroReal,
-            
-            // ===== CONTEÚDO DA MENSAGEM =====
-            mensagem: textoFinal,
-            message_text: textoFinal,
-            message_length: textoFinal.length,
-            
-            // ===== TIPO DE CONVERSA =====
+            nome_usuario: nome, // ✅ Requerido pelo endpoint
             tipo_conversa: ehGrupo ? 'grupo' : 'pv',
-            is_group: ehGrupo,
-            grupo_id: ehGrupo ? remoteJid : null,
-            grupo_nome: grupoNome,
-            remote_jid: remoteJid,
+            grupo_id: ehGrupo ? remoteJid : '',
+            grupo_nome: grupoNome || '',
+            mensagem_citada: replyInfo?.textoMensagemCitada || '',
             
-            // ===== METADADOS DE MENSAGEM =====
-            message_id: m.key?.id,
-            timestamp: timestamp,
-            timestamp_ms: timestamp,
-            date: new Date(timestamp).toISOString(),
-            
-            // ===== TIPO DE MÍDIA =====
-            media: {
-                has_image: temImagem,
-                has_audio: temAudio,
-                has_video: temVideo,
-                has_sticker: temSticker,
-                has_document: temDocumento,
-                is_media_only: !textoFinal || textoFinal.startsWith('['),
-                media_type: temImagem ? 'imagem' : temAudio ? 'áudio' : temVideo ? 'vídeo' : temSticker ? 'figurinha' : temDocumento ? 'documento' : 'texto'
-            },
-            
-            // ===== CONTEXTO DE RESPOSTA/REPLY =====
-            mensagem_citada: replyInfo?.textoMensagemCitada,
+            // ===== METADADOS DE REPLY (Esperados pelo endpoint) =====
             reply_metadata: {
                 is_reply: !!replyInfo,
                 reply_to_bot: !!replyInfo?.ehRespostaAoBot,
@@ -722,8 +699,26 @@ class BotCore {
                 quoted_message_id: replyInfo?.quotedMsgId
             },
             
+            // ===== CAMPOS EXTRAS PARA CONTEXTO MELHORADO (Enriquecimento LSTM) =====
+            contexto_grupo: ehGrupo ? remoteJid : '',
+            message_id: m.key?.id,
+            timestamp: timestamp,
+            timestamp_ms: timestamp,
+            date: new Date(timestamp).toISOString(),
+            
+            // ===== TIPO DE MÍDIA =====
+            media_info: {
+                has_image: temImagem,
+                has_audio: temAudio,
+                has_video: temVideo,
+                has_sticker: temSticker,
+                has_document: temDocumento,
+                is_media_only: !textoFinal || textoFinal.startsWith('['),
+                media_type: temImagem ? 'imagem' : temAudio ? 'áudio' : temVideo ? 'vídeo' : temSticker ? 'figurinha' : temDocumento ? 'documento' : 'texto'
+            },
+            
             // ===== DETECÇÃO DE INTENÇÃO =====
-            detection: {
+            detection_info: {
                 is_command: isCommand,
                 is_mention: isMention,
                 is_calling_bot: isCallingBot,
@@ -739,12 +734,8 @@ class BotCore {
             
             // ===== ORIGEM E ROTEAMENTO =====
             from_me: m.key?.fromMe || false,
-            key: {
-                id: m.key?.id,
-                remoteJid: m.key?.remoteJid,
-                fromMe: m.key?.fromMe,
-                participant: m.key?.participant
-            }
+            remote_jid: remoteJid,
+            is_group: ehGrupo
         };
     }
 
@@ -1046,26 +1037,13 @@ class BotCore {
 
             if (!deveResponder) {
                 this.logger.debug(`⏭️ [ESCUTA PASSIVA] ${nome}: "${textoFinal.substring(0, 50)}"`);
-                const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
-                this.apiClient.listenMessage({
-                    usuario: nome,
-                    numero: numeroReal,
-                    mensagem: textoFinal,
-                    tipo_conversa: ehGrupo ? 'grupo' : 'pv',
-                    grupo_id: ehGrupo ? remoteJid : null,
-                    grupo_nome: grupoNome,
-                    is_group: ehGrupo,
-                    mensagem_citada: replyInfo?.textoMensagemCitada,
-                    reply_metadata: {
-                        is_reply: !!replyInfo,
-                        reply_to_bot: !!replyInfo?.ehRespostaAoBot,
-                        quoted_author_name: replyInfo?.quoted_author_name || 'desconhecido',
-                        quoted_author_numero: replyInfo?.quotedAuthorNumero || 'desconhecido',
-                        quoted_type: replyInfo?.quotedType || 'texto',
-                        quoted_text_original: replyInfo?.quotedTextOriginal || '',
-                        context_hint: replyInfo?.contextHint || 'contexto_geral'
-                    }
-                }).catch(() => { });
+                // ✅ NOVO: Metadados COMPLETOS para melhor contexto de LSTM
+                const fullMetadata = this.buildCompleteMessageMetadata(
+                    m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, remoteJid,
+                    temImagem, temAudio, temVideoReal, temSticker, temDocumentoReal,
+                    isCommand, isMention, isCallingBot
+                );
+                this.apiClient.listenMessage(fullMetadata).catch(() => { });
                 return;
             }
 
