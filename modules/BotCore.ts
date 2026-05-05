@@ -489,27 +489,34 @@ class BotCore {
                         
                         this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | ehGrupo=${ehGrupo} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
-                        // 🔴 BUG FIX #1: Para PV, SEMPRE tentar processar mesmo com stub
-                        // PV com stub pode ter conteúdo incompleto, mas temos que tentar
-                        // Grupo com stub é mais crítico - fazer retry direto
+                        // 🔴 BUG FIX #1: Para PV com STUB - NÃO tentar processar
+                        // STUB = mensagem não descriptografada ou com erro de MAC
+                        // Não há conteúdo para extrair, apenas fazer retry
+                        // Se for Bad MAC Error, o retry vai falhar também - deixar para o usuário reenviar manualmente
                         if (!ehGrupo) {
-                            // PV com stub: tentar processar primeiro
-                            this.logger.info(`📍 [PV STUB RECOVERY] Processando PV mesmo com stub (tipo=${m.messageStubType})`);
-                            try {
-                                await this.processMessage(m);
-                            } catch (processErr) {
-                                this.logger.warn(`⚠️ [PV STUB] Falha ao processar: ${processErr}`);
-                            }
-                            // Depois fazer retry para remetente reenviar com chaves novas
-                            if (this.sock) {
-                                try {
-                                    await this.sock.sendRetryRequest(m).catch(() => {
-                                        this.sock.readMessages([m.key]).catch(() => { });
-                                    });
-                                    this.logger.info(`🔄 [PV RETRY] Pedido de reenvio enviado para ${jid}`);
-                                } catch (retryErr) {
-                                    this.logger.warn(`⚠️ [PV RETRY ERR] ${retryErr}`);
+                            // PV com stub: apenas fazer retry (sem tentar processar conteúdo vazio)
+                            this.logger.info(`📍 [PV STUB] Ignorando mensagem com erro de descriptografia. Solicitando reenvio...`);
+                            
+                            const pvRetryCount = this.stubRetryCount.get(m.key.id || 'pv-unknown') || 0;
+                            
+                            if (pvRetryCount < this.MAX_STUB_RETRIES) {
+                                // Incrementar retry e enviar pedido
+                                this.stubRetryCount.set(m.key.id || 'pv-unknown', pvRetryCount + 1);
+                                
+                                if (this.sock) {
+                                    try {
+                                        await this.sock.sendRetryRequest(m).catch(() => {
+                                            this.sock.readMessages([m.key]).catch(() => { });
+                                        });
+                                        this.logger.info(`🔄 [PV RETRY] Tentativa ${pvRetryCount + 1}/${this.MAX_STUB_RETRIES} para ${jid}`);
+                                    } catch (retryErr) {
+                                        this.logger.warn(`⚠️ [PV RETRY ERR] ${retryErr}`);
+                                    }
                                 }
+                            } else {
+                                // Excedeu máximo de retries
+                                this.logger.warn(`⚠️ [PV STUB] Máximo de retries (${this.MAX_STUB_RETRIES}) atingido. Ignorando mensagem.`);
+                                this.stubRetryCount.delete(m.key.id || 'pv-unknown');
                             }
                             continue;  // ✅ Saltar para próxima mensagem
                         } else {
