@@ -140,6 +140,10 @@ class BotCore {
             onDisconnected: null
         };
 
+    // 🔴 BUG FIX #3: Rastrear tentativas de retry de STUB para evitar loops infinitos
+    private stubRetryCount: Map<string, number> = new Map(); // messageId -> count
+    private readonly MAX_STUB_RETRIES = 2; // máximo 2 retries por mensagem
+
     // Deduplicação
     private processedMessages: Map<string, number> = new Map(); // compositeKey -> timestamp
     private readonly MAX_PROCESSED_MESSAGES = 5000;
@@ -452,6 +456,12 @@ class BotCore {
                         this.logger.info('🟢 Status de presença: SEMPRE DISPONÍVEL');
                     }
 
+                    // 🔴 BUG FIX #3: Sincronizar chaves de grupo após reconexão
+                    // Isso resolve "No session found to decrypt message" (STUB type=2)
+                    this._syncGroupSessionKeys().catch(err => {
+                        this.logger.warn(`⚠️ [SYNC] Falha ao sincronizar chaves de grupo: ${err.message}`);
+                    });
+
                     if (this.eventListeners.onConnected) this.eventListeners.onConnected(this.BOT_JID!);
                 }
             });
@@ -503,18 +513,30 @@ class BotCore {
                             }
                             continue;  // ✅ Saltar para próxima mensagem
                         } else {
-                            // Grupo com stub: fazer retry direto (padrão anterior)
-                            if (this.sock) {
-                                try {
-                                    await this.sock.sendRetryRequest(m).catch(() => {
-                                        this.sock.readMessages([m.key]).catch(() => { });
-                                    });
-                                    this.logger.info(`🔄 [RETRY REQUEST] Pedido de reenvio enviado para ${jid}`);
-                                } catch (retryErr) {
-                                    this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
+                            // Grupo com stub: fazer retry LIMITADO (máx 2 retries)
+                            const msgId = m.key.id || 'unknown';
+                            const retryCount = this.stubRetryCount.get(msgId) || 0;
+
+                            if (retryCount < this.MAX_STUB_RETRIES) {
+                                // Ainda há retries disponíveis
+                                this.stubRetryCount.set(msgId, retryCount + 1);
+                                
+                                if (this.sock) {
+                                    try {
+                                        await this.sock.sendRetryRequest(m).catch(() => {
+                                            this.sock.readMessages([m.key]).catch(() => { });
+                                        });
+                                        this.logger.info(`🔄 [RETRY REQUEST] Tentativa ${retryCount + 1}/${this.MAX_STUB_RETRIES} para ${jid}`);
+                                    } catch (retryErr) {
+                                        this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
+                                    }
                                 }
+                            } else {
+                                // Excedeu máximo de retries, ignorar
+                                this.logger.warn(`⚠️ [STUB] Excedido máximo de retries para ${msgId} de ${jid}`);
+                                this.stubRetryCount.delete(msgId); // Limpar da cache
                             }
-                            continue;  // Skip para grupo também
+                            continue;  // Skip para próxima mensagem
                         }
                     }
 
@@ -1889,6 +1911,49 @@ class BotCore {
             this.logger.info('✅ Desconectado');
         } catch (error: any) {
             this.logger.error('❌ Erro desconectar:', error.message);
+        }
+    }
+
+    /**
+     * 🔴 BUG FIX #3: Sincroniza chaves de sessão de todos os grupos após reconexão
+     * Isso resolve o erro "No session found to decrypt message" (STUB type=2)
+     * que deixa grupos respondendo com erro de descriptografia
+     */
+    private async _syncGroupSessionKeys(): Promise<void> {
+        try {
+            if (!this.sock || !this.store) return;
+
+            this.logger.info('🔄 [SYNC] Sincronizando chaves de sessão de grupos...');
+
+            // Fetch todos os chats armazenados
+            const chats = this.store.chats || {};
+            const groups: string[] = [];
+
+            // Identificar todos os grupos
+            for (const chatJid in chats) {
+                if (String(chatJid).endsWith('@g.us')) {
+                    groups.push(chatJid);
+                }
+            }
+
+            this.logger.info(`📊 [SYNC] Encontrados ${groups.length} grupos. Sincronizando...`);
+
+            // Para cada grupo, tentar obter metadata (força sincronização de chaves)
+            let syncedCount = 0;
+            for (const groupJid of groups) {
+                try {
+                    // Chamar groupMetadata força o Baileys a sincronizar as chaves
+                    await this.sock.groupMetadata(groupJid);
+                    syncedCount++;
+                } catch (err: any) {
+                    // Ignorar erros individuais de grupos - pode ser deixado por acidente
+                    this.logger.debug(`⚠️ [SYNC] Erro ao sincronizar ${groupJid}: ${err.message}`);
+                }
+            }
+
+            this.logger.info(`✅ [SYNC] ${syncedCount}/${groups.length} grupos sincronizados com sucesso`);
+        } catch (err: any) {
+            this.logger.warn(`⚠️ [SYNC] Erro geral na sincronização de grupos: ${err.message}`);
         }
     }
 
