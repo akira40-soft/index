@@ -639,6 +639,96 @@ class BotCore {
         return false;
     }
 
+    /**
+     * ✅ NOVO: Método para construir metadados COMPLETOS para dados sniffados de newsletters
+     * ✅ COMPATÍVEL COM: endpoint /treino/sniff do api.py
+     * Garante que dados de canais tenham contexto máximo para aprendizado offline
+     */
+    private buildCompleteSniffMetadata(
+        m: any,
+        remoteJid: string,
+        pushName: string,
+        messageType: string,
+        content: string
+    ): any {
+        const timestamp = m.messageTimestamp ? Number(m.messageTimestamp) * 1000 : Date.now();
+        const channelName = pushName || 'Newsletter';
+        
+        // ✅ ESTRUTURA ESPERADA PELO ENDPOINT /treino/sniff DO api.py
+        return {
+            // ===== CAMPOS OBRIGATÓRIOS DO ENDPOINT /treino/sniff =====
+            channelName: channelName,
+            content: content,
+            timestamp: timestamp,
+            
+            // ===== METADADOS COMPLEMENTARES (Enriquecimento Dataset) =====
+            channel_id: remoteJid,
+            channel_name: channelName,
+            message_id: m.key?.id,
+            timestamp_ms: timestamp,
+            date: new Date(timestamp).toISOString(),
+            
+            // ===== TIPO DE CONTEÚDO =====
+            message_type: messageType,
+            content_type: this._classifyContentType(messageType),
+            content_length: content.length,
+            
+            // ===== ORIGEM E CLASSIFICAÇÃO =====
+            source: 'newsletter_sniff',
+            source_type: 'passivo', // sempre passivo pois é newsletter
+            is_training_data: true,
+            dataset_category: 'raw_corpus', // para diferenciar de outros tipos
+            
+            // ===== METADADOS TÉCNICOS =====
+            is_newsletter: true,
+            is_channel: remoteJid.endsWith('@newsletter'),
+            message_jid: m.key?.id,
+            from_me: m.key?.fromMe || false,
+            
+            // ===== ENRIQUECIMENTO SEMÂNTICO (para IA aprender padrões) =====
+            content_preview: content.substring(0, 150),
+            content_full: content,
+            has_urls: /https?:\/\/|www\./i.test(content),
+            has_mentions: /@\w+/.test(content),
+            has_hashtags: /#\w+/.test(content),
+            estimated_language: this._detectLanguage(content),
+            estimated_sentiment: 'neutral' // placeholder, pode ser enriquecido
+        };
+    }
+
+    /**
+     * Classifica o tipo de conteúdo baseado no messageType
+     */
+    private _classifyContentType(messageType: string): string {
+        const typeMap: { [key: string]: string } = {
+            'conversation': 'texto',
+            'extendedTextMessage': 'texto_estendido',
+            'imageMessage': 'imagem',
+            'videoMessage': 'vídeo',
+            'audioMessage': 'áudio',
+            'documentMessage': 'documento',
+            'stickerMessage': 'figurinha',
+            'locationMessage': 'localização',
+            'contactMessage': 'contato',
+            'forwardedMessage': 'reencaminhado',
+            'buttonResponseMessage': 'resposta_botão',
+            'listResponseMessage': 'resposta_lista',
+        };
+        return typeMap[messageType] || 'outro';
+    }
+
+    /**
+     * Detecta linguagem aproximada do conteúdo (simplificado)
+     */
+    private _detectLanguage(content: string): string {
+        if (!content) return 'unknown';
+        // Heurística simples: se tem muitas palavras com "ão", "ç", "ã" = português
+        if (/[ãçóé]/gi.test(content)) return 'pt';
+        // Se tem muitas palavras com vocales + acentos = espanhol
+        if (/[áéíóú]/gi.test(content)) return 'es';
+        return 'en';
+    }
+
     private _hashContent(content: string): string {
         // Simple hash for deduplication (não precisa crypto pesado)
         let hash = 0;
@@ -2011,6 +2101,7 @@ class BotCore {
      * Intercepta passivamente mensagens de canais (Newsletters)
      * e guarda os dados estruturados para futuro treino da inteligência artificial.
      * Não gera respostas, logs no terminal (evitar spam) nem conta para Rate Limits.
+     * ✅ NOVO: Metadados COMPLETOS para garantir dataset rico
      */
     private _sniffNewsletter(m: any, remoteJid: string): void {
         try {
@@ -2031,19 +2122,19 @@ class BotCore {
             // Ignorar mensagens de sistema vazias que não sejam mídia
             if (!content && messageType !== 'imageMessage' && messageType !== 'videoMessage') return;
 
-            const sniffData = {
-                timestamp,
-                channelId: remoteJid,
-                channelName: pushName,
-                type: messageType,
-                content: content,
-                messageId: m.key?.id
-            };
+            // ✅ NOVO: Metadados COMPLETOS com enriquecimento semântico
+            const sniffData = this.buildCompleteSniffMetadata(
+                m,
+                remoteJid,
+                pushName,
+                messageType,
+                content
+            );
 
             const filePath = path.join(sniffDir, 'newsletters_corpus.jsonl');
             fs.appendFileSync(filePath, JSON.stringify(sniffData) + '\n');
 
-            // Envia para o backend Python auxiliar no treinamento offline
+            // Envia para o backend Python para treinamento offline
             if (this.apiClient) {
                 this.apiClient.sendSniffData(sniffData);
             }
