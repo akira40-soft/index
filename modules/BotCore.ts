@@ -513,30 +513,11 @@ class BotCore {
                             }
                             continue;  // ✅ Saltar para próxima mensagem
                         } else {
-                            // Grupo com stub: fazer retry LIMITADO (máx 2 retries)
-                            const msgId = m.key.id || 'unknown';
-                            const retryCount = this.stubRetryCount.get(msgId) || 0;
-
-                            if (retryCount < this.MAX_STUB_RETRIES) {
-                                // Ainda há retries disponíveis
-                                this.stubRetryCount.set(msgId, retryCount + 1);
-                                
-                                if (this.sock) {
-                                    try {
-                                        await this.sock.sendRetryRequest(m).catch(() => {
-                                            this.sock.readMessages([m.key]).catch(() => { });
-                                        });
-                                        this.logger.info(`🔄 [RETRY REQUEST] Tentativa ${retryCount + 1}/${this.MAX_STUB_RETRIES} para ${jid}`);
-                                    } catch (retryErr) {
-                                        this.logger.warn(`⚠️ [RETRY] Falha ao enviar retry request: ${retryErr}`);
-                                    }
-                                }
-                            } else {
-                                // Excedeu máximo de retries, ignorar
-                                this.logger.warn(`⚠️ [STUB] Excedido máximo de retries para ${msgId} de ${jid}`);
-                                this.stubRetryCount.delete(msgId); // Limpar da cache
-                            }
-                            continue;  // Skip para próxima mensagem
+                            // 🔴 BUG FIX: Grupo com stub - IGNORAR
+                            // O retry não funciona porque as chaves não estão carregadas.
+                            // Deixar Baileys recuperar naturalmente quando remetente reenviar.
+                            this.logger.warn(`⚠️ [STUB] Ignorando mensagem de grupo sem chaves. Remetente será solicitado a reenviar.`);
+                            continue;  // Pular para próxima mensagem
                         }
                     }
 
@@ -1921,32 +1902,51 @@ class BotCore {
      */
     private async _syncGroupSessionKeys(): Promise<void> {
         try {
-            if (!this.sock || !this.store) return;
+            if (!this.sock) return;
 
             this.logger.info('🔄 [SYNC] Sincronizando chaves de sessão de grupos...');
 
-            // Fetch todos os chats armazenados
-            const chats = this.store.chats || {};
-            const groups: string[] = [];
+            // 1. Tentar obter lista de chats via fetchChatList (novo no Baileys v6+)
+            let groups: string[] = [];
+            try {
+                // fetchChatList retorna os chats mais recentes
+                const chatList = await (this.sock.fetchChatList as any)?.({
+                    onChat: (chat: any) => {
+                        if (chat.id && String(chat.id).endsWith('@g.us')) {
+                            groups.push(chat.id);
+                        }
+                    }
+                }).catch(() => null);
+            } catch (err) {
+                this.logger.debug(`⚠️ [SYNC] fetchChatList não disponível, usando store...`);
+            }
 
-            // Identificar todos os grupos
-            for (const chatJid in chats) {
-                if (String(chatJid).endsWith('@g.us')) {
-                    groups.push(chatJid);
+            // 2. Fallback: usar store local
+            if (groups.length === 0 && this.store && this.store.chats) {
+                const chats = this.store.chats || {};
+                for (const chatJid in chats) {
+                    if (String(chatJid).endsWith('@g.us')) {
+                        groups.push(chatJid);
+                    }
                 }
             }
 
-            this.logger.info(`📊 [SYNC] Encontrados ${groups.length} grupos. Sincronizando...`);
+            if (groups.length === 0) {
+                this.logger.info('📊 [SYNC] Nenhum grupo encontrado para sincronizar (primeira conexão?)');
+                return;
+            }
 
-            // Para cada grupo, tentar obter metadata (força sincronização de chaves)
+            this.logger.info(`📊 [SYNC] Encontrados ${groups.length} grupos. Sincronizando chaves...`);
+
+            // 3. Para cada grupo, chamar groupMetadata para carregar chaves
             let syncedCount = 0;
             for (const groupJid of groups) {
                 try {
                     // Chamar groupMetadata força o Baileys a sincronizar as chaves
                     await this.sock.groupMetadata(groupJid);
                     syncedCount++;
+                    this.logger.debug(`✅ [SYNC] Chaves carregadas para ${groupJid}`);
                 } catch (err: any) {
-                    // Ignorar erros individuais de grupos - pode ser deixado por acidente
                     this.logger.debug(`⚠️ [SYNC] Erro ao sincronizar ${groupJid}: ${err.message}`);
                 }
             }
