@@ -2148,16 +2148,21 @@ class BotCore {
                             this.logger.info(`🎨 Tentando Nano Banana (Imagen 3) para: ${prompt}`);
                             const nanoRes = await this.apiClient.generateImage(prompt, '1:1', imgModel);
 
-                            if (nanoRes.success) {
+                            if (nanoRes.success && nanoRes.buffer) {
                                 const modelLabel = nanoRes.model?.includes('pollinations') ? 'Poly 💠' : 'Nano Banana 🍌';
-                                await this.sock.sendMessage(jid, {
-                                    image: nanoRes.buffer,
-                                    caption: `Gerado por Akira (${modelLabel})`
-                                }, { quoted: m });
-                                break;
+                                
+                                // ✅ GARANTIR: Enviar sempre como arquivo (buffer), nunca como link
+                                if (Buffer.isBuffer(nanoRes.buffer) && nanoRes.buffer.length > 0) {
+                                    await this.sock.sendMessage(jid, {
+                                        image: nanoRes.buffer,
+                                        caption: `🎨 Gerado por Akira (${modelLabel})`
+                                    }, { quoted: m });
+                                    this.logger.info(`✅ Imagem enviada como arquivo binário`);
+                                    break;
+                                }
                             }
 
-                            this.logger.warn(`⚠️ Geração primária falhou: ${nanoRes.error}. Tentando fallback direto Pollinations...`);
+                            this.logger.warn(`⚠️ Geração primária falhou: ${nanoRes.error || 'sem buffer'}. Tentando fallback direto Pollinations...`);
 
                             // Fallback secundário (direto via TS se o Python falhar)
                             const encodedPrompt = encodeURIComponent(prompt);
@@ -2166,11 +2171,17 @@ class BotCore {
                             const imgRes = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 60000 });
                             const imgBuffer = Buffer.from(imgRes.data);
 
-                            await this.sock.sendMessage(jid, {
-                                image: imgBuffer,
-                                caption: `Gerado por Akira (Poly 💠)`
-                            }, { quoted: m });
+                            if (imgBuffer && imgBuffer.length > 0) {
+                                await this.sock.sendMessage(jid, {
+                                    image: imgBuffer,
+                                    caption: `🎨 Gerado por Akira (Poly 💠 - Fallback)`
+                                }, { quoted: m });
+                                this.logger.info(`✅ Imagem fallback enviada como arquivo binário`);
+                            } else {
+                                throw new Error('Buffer vazio do Flux');
+                            }
                         } catch (imgErr: any) {
+                            this.logger.error(`❌ Erro ao gerar imagem: ${imgErr.message}`);
                             await this.sock.sendMessage(jid, { text: `❌ Erro ao gerar imagem: ${imgErr.message}` }, { quoted: m });
                         }
                         break;
