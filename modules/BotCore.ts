@@ -93,6 +93,7 @@ import GroupManagement from './GroupManagement.js';
 import ImageEffects from './ImageEffects.js';
 import PermissionManager from './PermissionManager.js';
 import JidUtils from './JidUtils.js';
+import SecurityLogger from './SecurityLogger.js';
 
 class BotCore {
     public config: any;
@@ -128,6 +129,7 @@ class BotCore {
     public imageEffects: any;
     public permissionManager: any;
     public commandHandler: any;
+    public securityLogger: any;
 
     // Event listeners
     public eventListeners: {
@@ -239,6 +241,7 @@ class BotCore {
             // Auto-atualiza yt-dlp em background (não bloqueia o startup)
             this._selfUpdateYtdlp().catch(() => { });
 
+            this.securityLogger = new SecurityLogger(this.config);
             this.apiClient = new APIClient(this.logger);
             this.audioProcessor = new AudioProcessor(this.logger);
             this.mediaProcessor = new MediaProcessor(this.logger);
@@ -304,6 +307,51 @@ class BotCore {
         }
     }
 
+    /**
+     * 🛡️ SECURITY SANITIZER: Detecta padrões de scripts maliciosos ou comandos destrutivos
+     * Protege contra injeções de hardware-destruction ou filesystem-wipe
+     */
+    private _sanitizeInput(texto: string, usuario: string, jid: string): boolean {
+        if (!texto) return false;
+
+        const dangerousPatterns = [
+            /rm\s+-rf/i,                   // Recursive force removal
+            /mkfs/i,                       // Format disk
+            /dd\s+if=\/dev\//i,            // Raw device write
+            /:(\s+)?\{\s+:\s+\|\s+:\s+&\s+\}\s+;\s+:/, // Fork bomb
+            /shutdown\s+-[rh]/i,           // Shutdown/Reboot
+            /reboot/i,                     // Reboot
+            /chmod\s+777\s+\//i,           // Dangerous permissions on root
+            /systemctl\s+(stop|disable)/i, // Stopping services
+            /(wget|curl).+\|(\s+)?(bash|sh|zsh|python|perl|php)/i, // Pipe to shell
+            /nc\s+-e\s+\//i,               // Reverse shell
+            /mv\s+\/\s+\/dev\/null/i,      // Move root to null
+            />\s+\/dev\/sda/i              // Overwrite disk directly
+        ];
+
+        const isMalicious = dangerousPatterns.some(pattern => pattern.test(texto));
+
+        if (isMalicious) {
+            this.logger.warn(`🚨 [SECURITY ALERT] Tentativa de injeção detectada! Usuário: ${usuario} | JID: ${jid} | Texto: ${texto}`);
+
+            // Log no SecurityLogger se disponível
+            if (this.securityLogger) {
+                this.securityLogger.logOperation({
+                    tipo: 'MALICIOUS_INJECTION',
+                    usuario: usuario,
+                    alvo: jid,
+                    resultado: 'BLOQUEADO',
+                    risco: 'CRÍTICO',
+                    detalhes: { texto }
+                });
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private _updateComponentsSocket(sock: any): void {
         try {
             this.logger.info('🔄 Atualizando socket em todos os módulos core...');
@@ -330,6 +378,7 @@ class BotCore {
             if (this.imageEffects?.setSocket) this.imageEffects.setSocket(sock);
             if (this.audioProcessor?.setSocket) this.audioProcessor.setSocket(sock);
             if (this.apiClient?.setSocket) this.apiClient.setSocket(sock);
+            if (this.securityLogger?.setSocket) this.securityLogger.setSocket(sock);
 
             // Simulador de presença (propriedade direta)
             if (this.presenceSimulator) this.presenceSimulator.sock = sock;
@@ -456,12 +505,6 @@ class BotCore {
                         this.logger.info('🟢 Status de presença: SEMPRE DISPONÍVEL');
                     }
 
-                    // 🔴 BUG FIX #3: Sincronizar chaves de grupo após reconexão
-                    // Isso resolve "No session found to decrypt message" (STUB type=2)
-                    this._syncGroupSessionKeys().catch(err => {
-                        this.logger.warn(`⚠️ [SYNC] Falha ao sincronizar chaves de grupo: ${err.message}`);
-                    });
-
                     if (this.eventListeners.onConnected) this.eventListeners.onConnected(this.BOT_JID!);
                 }
             });
@@ -486,7 +529,7 @@ class BotCore {
                     if (m.messageStubType) {
                         const jid = m.key.remoteJid!;
                         const ehGrupo = String(jid).endsWith('@g.us');
-                        
+
                         this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | ehGrupo=${ehGrupo} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
                         // 🔴 BUG FIX: Bad MAC Error (type=2) não pode ser resolvido com retry
@@ -653,38 +696,38 @@ class BotCore {
     ): any {
         const timestamp = m.messageTimestamp ? Number(m.messageTimestamp) * 1000 : Date.now();
         const channelName = pushName || 'Newsletter';
-        
+
         // ✅ ESTRUTURA ESPERADA PELO ENDPOINT /treino/sniff DO api.py
         return {
             // ===== CAMPOS OBRIGATÓRIOS DO ENDPOINT /treino/sniff =====
             channelName: channelName,
             content: content,
             timestamp: timestamp,
-            
+
             // ===== METADADOS COMPLEMENTARES (Enriquecimento Dataset) =====
             channel_id: remoteJid,
             channel_name: channelName,
             message_id: m.key?.id,
             timestamp_ms: timestamp,
             date: new Date(timestamp).toISOString(),
-            
+
             // ===== TIPO DE CONTEÚDO =====
             message_type: messageType,
             content_type: this._classifyContentType(messageType),
             content_length: content.length,
-            
+
             // ===== ORIGEM E CLASSIFICAÇÃO =====
             source: 'newsletter_sniff',
             source_type: 'passivo', // sempre passivo pois é newsletter
             is_training_data: true,
             dataset_category: 'raw_corpus', // para diferenciar de outros tipos
-            
+
             // ===== METADADOS TÉCNICOS =====
             is_newsletter: true,
             is_channel: remoteJid.endsWith('@newsletter'),
             message_jid: m.key?.id,
             from_me: m.key?.fromMe || false,
-            
+
             // ===== ENRIQUECIMENTO SEMÂNTICO (para IA aprender padrões) =====
             content_preview: content.substring(0, 150),
             content_full: content,
@@ -764,7 +807,7 @@ class BotCore {
     ): any {
         const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
         const timestamp = m.messageTimestamp ? Number(m.messageTimestamp) * 1000 : Date.now();
-        
+
         // ✅ ESTRUTURA ESPERADA PELO ENDPOINT /escutar DO api.py
         return {
             // ===== CAMPOS OBRIGATÓRIOS DO ENDPOINT /escutar =====
@@ -776,7 +819,7 @@ class BotCore {
             grupo_id: ehGrupo ? remoteJid : '',
             grupo_nome: grupoNome || '',
             mensagem_citada: replyInfo?.textoMensagemCitada || '',
-            
+
             // ===== METADADOS DE REPLY (Esperados pelo endpoint) =====
             reply_metadata: {
                 is_reply: !!replyInfo,
@@ -788,14 +831,14 @@ class BotCore {
                 context_hint: replyInfo?.contextHint || 'contexto_geral',
                 quoted_message_id: replyInfo?.quotedMsgId
             },
-            
+
             // ===== CAMPOS EXTRAS PARA CONTEXTO MELHORADO (Enriquecimento LSTM) =====
             contexto_grupo: ehGrupo ? remoteJid : '',
             message_id: m.key?.id,
             timestamp: timestamp,
             timestamp_ms: timestamp,
             date: new Date(timestamp).toISOString(),
-            
+
             // ===== TIPO DE MÍDIA =====
             media_info: {
                 has_image: temImagem,
@@ -806,7 +849,7 @@ class BotCore {
                 is_media_only: !textoFinal || textoFinal.startsWith('['),
                 media_type: temImagem ? 'imagem' : temAudio ? 'áudio' : temVideo ? 'vídeo' : temSticker ? 'figurinha' : temDocumento ? 'documento' : 'texto'
             },
-            
+
             // ===== DETECÇÃO DE INTENÇÃO =====
             detection_info: {
                 is_command: isCommand,
@@ -815,13 +858,13 @@ class BotCore {
                 mentions_bot: isMention || isCallingBot,
                 is_passive: !isCommand && !isMention && !isCallingBot && !replyInfo?.ehRespostaAoBot
             },
-            
+
             // ===== PARTICIPANT INFO (GRUPOS) =====
             ...(ehGrupo && {
                 participant_jid: m.key?.participant,
                 participant_number: m.key?.participant ? JidUtils.getNumber(m.key.participant) : null
             }),
-            
+
             // ===== ORIGEM E ROTEAMENTO =====
             from_me: m.key?.fromMe || false,
             remote_jid: remoteJid,
@@ -1455,6 +1498,11 @@ class BotCore {
 
     async handleTextMessage(m: any, nome: string, numeroReal: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio: boolean = false): Promise<void> {
         try {
+            // 🛡️ SECURITY CHECK: Sanitização de input antes de qualquer processamento
+            if (this._sanitizeInput(texto, nome, m.key.remoteJid)) {
+                return; // Ignora mensagem maliciosa silenciosamente
+            }
+
             // ✅ BUG FIX #1: isDono deve receber o NOME (pushName) do usuário, NÃO o texto da mensagem.
             // O texto da mensagem nunca contém 'morema', o NOME sim.
             const isOwner = typeof this.config?.isDono === 'function'
@@ -1674,7 +1722,7 @@ class BotCore {
                     // 🔴 BUG FIX #3: Tratamento robusto de erro para sock.sendMessage
                     try {
                         const sentMsg = await this.sock.sendMessage(m.key.remoteJid, { text: resposta }, opcoes);
-                        
+
                         if (!sentMsg || !sentMsg.key) {
                             this.logger.error(`❌ [DISPATCH FAIL] Resposta não enviada - sentMsg inválido para ${m.key.remoteJid}`);
                         } else {
@@ -1684,10 +1732,10 @@ class BotCore {
                         const remoteJid = m.key?.remoteJid || 'unknown';
                         const isPrivate = !String(remoteJid).endsWith('@g.us');
                         const errorType = isPrivate ? '[PV ERROR]' : '[GROUP ERROR]';
-                        
+
                         this.logger.error(`❌ ${errorType} Falha ao enviar resposta para ${remoteJid}: ${sendErr.message || sendErr}`);
                         this.logger.debug(`📋 [STACK] ${sendErr.stack}`);
-                        
+
                         // Retry automático para PV (mais crítico)
                         if (isPrivate) {
                             this.logger.warn(`🔄 [PV RETRY] Tentando reenvio da resposta...`);
@@ -1981,14 +2029,14 @@ class BotCore {
             // 🔴 BUG FIX #2: Log diagnosticado + DOUBLE-CHECK para garantir decisão
             const remoteJid = m.key?.remoteJid || 'desconhecido';
             const messageId = m.key?.id || 'sem-id';
-            
+
             this.logger.info(`📩 [PV DECISION] ✅ RESPONDENDO | User: ${nomeRemetente} | JID: ${remoteJid} | MsgID: ${messageId}`);
-            
+
             // Double-check: se chegou aqui, SEMPRE deve responder
             if (m.messageStubType) {
                 this.logger.warn(`📩 [PV DECISION] ⚠️ PV é um STUB, mas continuaremos: tipo=${m.messageStubType}`);
             }
-            
+
             return true;  // ✅ SEMPRE true para PV
         }
 
@@ -2116,68 +2164,6 @@ class BotCore {
             this.logger.info('✅ Desconectado');
         } catch (error: any) {
             this.logger.error('❌ Erro desconectar:', error.message);
-        }
-    }
-
-    /**
-     * 🔴 BUG FIX #3: Sincroniza chaves de sessão de todos os grupos após reconexão
-     * Isso resolve o erro "No session found to decrypt message" (STUB type=2)
-     * que deixa grupos respondendo com erro de descriptografia
-     */
-    private async _syncGroupSessionKeys(): Promise<void> {
-        try {
-            if (!this.sock) return;
-
-            this.logger.info('🔄 [SYNC] Sincronizando chaves de sessão de grupos...');
-
-            // 1. Tentar obter lista de chats via fetchChatList (novo no Baileys v6+)
-            let groups: string[] = [];
-            try {
-                // fetchChatList retorna os chats mais recentes
-                const chatList = await (this.sock.fetchChatList as any)?.({
-                    onChat: (chat: any) => {
-                        if (chat.id && String(chat.id).endsWith('@g.us')) {
-                            groups.push(chat.id);
-                        }
-                    }
-                }).catch(() => null);
-            } catch (err) {
-                this.logger.debug(`⚠️ [SYNC] fetchChatList não disponível, usando store...`);
-            }
-
-            // 2. Fallback: usar store local
-            if (groups.length === 0 && this.store && this.store.chats) {
-                const chats = this.store.chats || {};
-                for (const chatJid in chats) {
-                    if (String(chatJid).endsWith('@g.us')) {
-                        groups.push(chatJid);
-                    }
-                }
-            }
-
-            if (groups.length === 0) {
-                this.logger.info('📊 [SYNC] Nenhum grupo encontrado para sincronizar (primeira conexão?)');
-                return;
-            }
-
-            this.logger.info(`📊 [SYNC] Encontrados ${groups.length} grupos. Sincronizando chaves...`);
-
-            // 3. Para cada grupo, chamar groupMetadata para carregar chaves
-            let syncedCount = 0;
-            for (const groupJid of groups) {
-                try {
-                    // Chamar groupMetadata força o Baileys a sincronizar as chaves
-                    await this.sock.groupMetadata(groupJid);
-                    syncedCount++;
-                    this.logger.debug(`✅ [SYNC] Chaves carregadas para ${groupJid}`);
-                } catch (err: any) {
-                    this.logger.debug(`⚠️ [SYNC] Erro ao sincronizar ${groupJid}: ${err.message}`);
-                }
-            }
-
-            this.logger.info(`✅ [SYNC] ${syncedCount}/${groups.length} grupos sincronizados com sucesso`);
-        } catch (err: any) {
-            this.logger.warn(`⚠️ [SYNC] Erro geral na sincronização de grupos: ${err.message}`);
         }
     }
 
@@ -2378,9 +2364,9 @@ class BotCore {
                     }
 
                     case 'generate_image': {
-                        const { 
-                            image_buffer_b64, 
-                            mime_type = 'image/png', 
+                        const {
+                            image_buffer_b64,
+                            mime_type = 'image/png',
                             model: imgModel = 'flux',
                             prompt: originalPrompt = ''
                         } = params;
@@ -2389,10 +2375,10 @@ class BotCore {
                             // ✅ Decodifica base64 de volta para Buffer
                             if (image_buffer_b64) {
                                 const imgBuffer = Buffer.from(image_buffer_b64, 'base64');
-                                
+
                                 if (Buffer.isBuffer(imgBuffer) && imgBuffer.length > 0) {
                                     const modelLabel = imgModel?.includes('cellcog') ? 'CellCog 🧠' : 'Flux 💠';
-                                    
+
                                     await this.sock.sendMessage(jid, {
                                         image: imgBuffer,
                                         caption: `🎨 Gerado por Akira (${modelLabel})`
@@ -2403,10 +2389,10 @@ class BotCore {
                                     throw new Error('Buffer vazio após decodificação base64');
                                 }
                             }
-                            
+
                             // Fallback se não houver buffer_b64
                             this.logger.warn(`⚠️ Nenhum buffer base64 fornecido. Tentando fallback direto Pollinations...`);
-                            
+
                             const prompt = originalPrompt || 'Abstract art';
                             const encodedPrompt = encodeURIComponent(prompt);
                             const imgUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?model=${imgModel}&width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 99999)}`;
