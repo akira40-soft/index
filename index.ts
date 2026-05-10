@@ -378,6 +378,44 @@ function initializeServer() {
     res.json({ bot_status: status, timestamp: new Date().toISOString() });
   });
 
+  // ═══ Rota: Webhook Autónomo (Comunicação Push do Python) ═══
+  app.post('/api/webhook/autonomous', async (req: any, res: any) => {
+    if (!botCore || !botCore.sock) {
+      return res.status(503).json({ error: 'BotCore offline' });
+    }
+
+    // Simples autenticação por token para segurança (opcional, configurável)
+    const authHeader = req.headers['authorization'];
+    const expectedToken = process.env.WEBHOOK_SECRET || 'akira-internal-secret-v21';
+
+    if (authHeader !== `Bearer ${expectedToken}`) {
+      console.warn('⚠️ Tentativa de acesso não autorizado ao Webhook Autónomo');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    try {
+      const payload = req.body;
+      console.log(`🤖 [WEBHOOK] Pedido autónomo recebido:`, payload.action);
+
+      // Constrói um objeto "m" mockado para satisfazer o handleRemoteActions
+      const mockMessage = {
+        key: { remoteJid: payload.params?.group_jid || 'system', id: 'auto_' + Date.now() },
+        message: {}
+      };
+
+      // Delega diretamente para o handler de ações remotas do BotCore
+      await botCore.handleRemoteActions(
+        [payload],
+        mockMessage
+      );
+
+      return res.status(200).json({ success: true, message: 'Ação executada com sucesso' });
+    } catch (error: any) {
+      console.error('❌ Erro no webhook autónomo:', error);
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
   // 404 handler
   app.use((req: any, res: any) => {
     res.status(404).json({ status: 'error', error: 'Rota não encontrada' });
