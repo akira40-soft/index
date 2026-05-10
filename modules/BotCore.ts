@@ -146,6 +146,34 @@ class BotCore {
     private stubRetryCount: Map<string, number> = new Map(); // messageId -> count
     private readonly MAX_STUB_RETRIES = 2; // máximo 2 retries por mensagem
 
+    // Cache de nomes de grupo para não sobrecarregar a API
+    private groupNameCache: Map<string, { name: string, timestamp: number }> = new Map();
+
+    private async getGroupName(jid: string): Promise<string> {
+        if (!jid || !jid.endsWith('@g.us')) return 'PV';
+
+        const now = Date.now();
+        // Check cache (valid for 1 hour)
+        const cached = this.groupNameCache.get(jid);
+        if (cached && (now - cached.timestamp < 3600000)) {
+            return cached.name;
+        }
+
+        try {
+            if (this.sock) {
+                const metadata = await this.sock.groupMetadata(jid);
+                if (metadata && metadata.subject) {
+                    this.groupNameCache.set(jid, { name: metadata.subject, timestamp: now });
+                    return metadata.subject;
+                }
+            }
+        } catch (error) {
+            // Silently fail and fallback to default
+        }
+
+        return jid.split('@')[0] || 'Grupo Desconhecido';
+    }
+
     // Deduplicação
     private processedMessages: Map<string, number> = new Map(); // compositeKey -> timestamp
     private readonly MAX_PROCESSED_MESSAGES = 5000;
@@ -788,7 +816,7 @@ class BotCore {
      * ✅ COMPATÍVEL COM: endpoint /escutar do api.py
      * Garante que TODAS as mensagens enviadas ao LSTM tenham contexto máximo
      */
-    private buildCompleteMessageMetadata(
+    private async buildCompleteMessageMetadata(
         m: any,
         nome: string,
         numeroReal: string,
@@ -804,8 +832,8 @@ class BotCore {
         isCommand: boolean = false,
         isMention: boolean = false,
         isCallingBot: boolean = false
-    ): any {
-        const grupoNome = ehGrupo ? (remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
+    ): Promise<any> {
+        const grupoNome = ehGrupo ? await this.getGroupName(remoteJid) : null;
         const timestamp = m.messageTimestamp ? Number(m.messageTimestamp) * 1000 : Date.now();
 
         // ✅ ESTRUTURA ESPERADA PELO ENDPOINT /escutar DO api.py
@@ -1113,7 +1141,7 @@ class BotCore {
                 // Removemos a restrição de 'textoFinal.length > 0' para rastrear literalmente TUDO (incluindo mídias sem legenda)
                 // ✅ NOVO: Metadados COMPLETOS para melhor contexto de LSTM
                 this.logger.info(`🎧 [LSTM LISTENING] ${nome}: "${textoFinal.substring(0, 100)}${textoFinal.length > 100 ? '...' : ''}"`);
-                const fullMetadata = this.buildCompleteMessageMetadata(
+                const fullMetadata = await this.buildCompleteMessageMetadata(
                     m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, remoteJid,
                     temImagem, temAudio, temVideoReal, temSticker, temDocumentoReal,
                     isCommand, isMention, isCallingBot
@@ -1171,7 +1199,7 @@ class BotCore {
             if (!deveResponder) {
                 this.logger.debug(`⏭️ [ESCUTA PASSIVA] ${nome}: "${textoFinal.substring(0, 50)}"`);
                 // ✅ NOVO: Metadados COMPLETOS para melhor contexto de LSTM
-                const fullMetadata = this.buildCompleteMessageMetadata(
+                const fullMetadata = await this.buildCompleteMessageMetadata(
                     m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, remoteJid,
                     temImagem, temAudio, temVideoReal, temSticker, temDocumentoReal,
                     isCommand, isMention, isCallingBot
@@ -1365,10 +1393,12 @@ class BotCore {
                 return;
             }
 
-            const grupoNome = ehGrupo ? (m.key.remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
+            const grupoNome = ehGrupo ? await this.getGroupName(m.key.remoteJid) : null;
             const payload = this.apiClient.buildPayload({
                 usuario: nome,
                 numero: numeroReal,
+                nome_usuario: nome, // ✅ Identidade real do remetente
+                sender_jid: m.key.participant || m.key.remoteJid, // ✅ JID completo
                 mensagem: caption || 'O que tem nesta imagem?',
                 tipo_conversa: ehGrupo ? 'grupo' : 'pv',
                 grupo_id: ehGrupo ? m.key.remoteJid : null,
@@ -1592,11 +1622,13 @@ class BotCore {
 
             // XP já foi premiado em cima para cada mensagem do grupo
 
-            const grupoNome = ehGrupo ? (m.key.remoteJid.split('@')[0] || 'Grupo Desconhecido') : null;
+            const grupoNome = ehGrupo ? await this.getGroupName(m.key.remoteJid) : null;
             const tipoConversa = ehGrupo ? 'grupo' : 'pv';
             const payload = this.apiClient.buildPayload({
                 usuario: nome,
                 numero: numeroReal,
+                nome_usuario: nome, // ✅ Identidade real do remetente
+                sender_jid: m.key.participant || m.key.remoteJid, // ✅ JID completo
                 mensagem: texto,
                 tipo_conversa: tipoConversa,
                 grupo_id: ehGrupo ? m.key.remoteJid : null,

@@ -50,7 +50,9 @@ class APIClient {
             is_group = false,
             sender_is_bot = false,
             isGameCommand = false, // ✅ NOVA: Detectar se é comando de jogo
-            message_id // ✅ Adicionado para idempotência
+            message_id, // ✅ Adicionado para idempotência
+            nome_usuario = '',    // ✅ Nome real do remetente (pushName do WhatsApp)
+            sender_jid = '',      // ✅ JID completo do remetente (incluindo @lid/@s.whatsapp.net)
         } = messageData;
 
         // ✅ CORREÇÃO: Garantir que numero é sempre apenas dígitos (sem @lid, @s.whatsapp.net, etc)
@@ -71,6 +73,9 @@ class APIClient {
             tipo_mensagem: finalTipoMensagem, // ✅ Agora pode ser 'game'
             historico: [],
             forcar_busca: Boolean(forcar_pesquisa),
+            // ✅ CAMPOS DE IDENTIDADE DO REMETENTE (para consciência de contexto)
+            nome_usuario: String(nome_usuario || usuario || '').substring(0, 80),
+            sender_jid: String(sender_jid || '').substring(0, 100),
             // ✅ NOVOS CAMPOS DE VALIDAÇÃO
             is_bot_self_response: Boolean(is_bot_self_response),
             is_group: Boolean(is_group),
