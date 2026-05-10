@@ -3427,8 +3427,407 @@ class BotCore {
                         break;
                     }
 
+                    case 'get_system_info': {
+                        try {
+                            const os = require('os');
+                            const uptime = os.uptime();
+                            const freeMem = os.freemem() / 1024 / 1024;
+                            const totalMem = os.totalmem() / 1024 / 1024;
+                            const cpuLoad = os.loadavg();
+
+                            await this.sock.sendMessage(jid, {
+                                text: `🖥️ *ESTADO DO SISTEMA (RAILWAY)*\n\n⏱️ Uptime: ${(uptime / 3600).toFixed(2)}h\n💾 RAM: ${freeMem.toFixed(0)}MB / ${totalMem.toFixed(0)}MB\n⚙️ CPU Load: ${cpuLoad[0].toFixed(2)}\n🌐 Ambiente: Node.js ${process.version}`
+                            }, { quoted: m });
+                        } catch (e: any) {
+                            this.logger.error(`Erro ao obter info do sistema: ${e.message}`);
+                        }
+                        break;
+                    }
+
+                    case 'get_logs': {
+                        const { lines = 50 } = params;
+                        try {
+                            // Em ambientes Docker/Railway, os logs costumam estar no stdout. 
+                            // Se houver um ficheiro de log persistente, lemos daqui.
+                            const fs = require('fs');
+                            const logPath = './akira.log'; // Ajuste conforme o seu setup
+                            if (fs.existsSync(logPath)) {
+                                const logContent = fs.readFileSync(logPath, 'utf8').split('\n').slice(-lines).join('\n');
+                                await this.sock.sendMessage(jid, { text: `📋 *ÚLTIMOS LOGS (${lines} linhas):*\n\n\`\`\`${logContent}\`\`\`` }, { quoted: m });
+                            } else {
+                                await this.sock.sendMessage(jid, { text: '⚠️ Ficheiro akira.log não encontrado no Railway.' }, { quoted: m });
+                            }
+                        } catch (e: any) {
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao ler logs: ${e.message}` }, { quoted: m });
+                        }
+                        break;
+                    }
+
+                    case 'send_dm': {
+                        const { to, text: dmText } = params;
+                        if (!to || !dmText) break;
+                        try {
+                            const targetJid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
+                            await this.sock.sendMessage(targetJid, { text: `🕵️‍♂️ *RELATÓRIO SIGILOSO AKIRA*\n\n${dmText}` });
+                            // Não responde no grupo para manter o sigilo, apenas loga internamente
+                            this.logger.info(`✅ DM sigiloso enviado para ${targetJid}`);
+                        } catch (e: any) {
+                            this.logger.error(`Erro ao enviar DM: ${e.message}`);
+                        }
+                        break;
+                    }
+
+                    case 'set_timer': {
+                        const { duration_ms, label, display_time } = params;
+                        if (!duration_ms) break;
+
+                        // Confirmação imediata
+                        await this.sock.sendMessage(jid, {
+                            text: `⏳ *Temporizador Ativado:* @${userId.split('@')[0]}, vou avisar-te sobre "*${label}*" daqui a ${display_time || (duration_ms / 1000) + 's'}.`,
+                            mentions: [userId]
+                        }, { quoted: m });
+
+                        // Agenda o aviso
+                        setTimeout(async () => {
+                            try {
+                                await this.sock.sendMessage(jid, {
+                                    text: `⏰ *TEMPO ESGOTADO:* @${userId.split('@')[0]}\n\n🔔 *Lembrete:* ${label}`,
+                                    mentions: [userId]
+                                });
+                                this.logger.info(`🔔 [TIMER] Alarme '${label}' disparado para ${userId}`);
+                            } catch (timerErr: any) {
+                                this.logger.error(`❌ Erro ao disparar alarme: ${timerErr.message}`);
+                            }
+                        }, duration_ms);
+                        break;
+                    }
+
+                    case 'autonomous_moderation': {
+                        const { moderation_type, target_jid, group_jid, reason, duration_minutes = 30, owner_report } = params;
+                        const targetGroup = group_jid || jid;
+                        this.logger.info(`🤖 [AUTO-MOD] ${moderation_type} em ${target_jid} | Motivo: ${reason}`);
+                        try {
+                            switch (moderation_type) {
+                                case 'mute':
+                                    if (this.moderationSystem) {
+                                        this.moderationSystem.muteUser(targetGroup, target_jid, duration_minutes);
+                                        this.logger.info(`🔇 [AUTO-MOD] Mute: ${target_jid} por ${duration_minutes}min`);
+                                    }
+                                    break;
+                                case 'kick':
+                                    await this.sock.groupParticipantsUpdate(targetGroup, [target_jid], 'remove');
+                                    this.logger.info(`👢 [AUTO-MOD] Kick: ${target_jid}`);
+                                    break;
+                                case 'warn':
+                                    if (this.moderationSystem) {
+                                        const warnCount = this.moderationSystem.addWarning(targetGroup, target_jid, reason);
+                                        this.logger.warn(`⚠️ [AUTO-MOD] Aviso ${warnCount}/3: ${target_jid}`);
+                                        if (warnCount >= 3) {
+                                            await this.sock.groupParticipantsUpdate(targetGroup, [target_jid], 'remove');
+                                            this.logger.warn(`🚨 [AUTO-MOD] Kick automático após 3 avisos: ${target_jid}`);
+                                        }
+                                    }
+                                    break;
+                                case 'lock_group':
+                                    await this.sock.groupSettingUpdate(targetGroup, 'announcement');
+                                    this.logger.warn(`🔒 [AUTO-MOD] Grupo bloqueado: ${targetGroup}`);
+                                    break;
+                                case 'delete_message': {
+                                    const qId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || m.key.id;
+                                    if (qId) await this.sock.sendMessage(targetGroup, { delete: { remoteJid: targetGroup, fromMe: false, id: qId, participant: target_jid } });
+                                    break;
+                                }
+                            }
+                            // Relatório sigiloso — NÃO anuncia no grupo
+                            if (owner_report?.to && owner_report?.text) {
+                                const ownerJid = `${owner_report.to.replace(/\D/g, '')}@s.whatsapp.net`;
+                                await this.sock.sendMessage(ownerJid, { text: owner_report.text });
+                                this.logger.info(`✅ [AUTO-MOD] Relatório sigiloso enviado ao proprietário.`);
+                            }
+                        } catch (autoModErr: any) {
+                            this.logger.error(`❌ [AUTO-MOD] Erro: ${autoModErr.message}`);
+                        }
+                        break;
+                    }
+
+                    case 'broadcast_message': {
+                        const { message: bcMsg, target: bcTarget = 'current_group' } = params;
+                        if (!bcMsg) break;
+                        try {
+                            if (bcTarget === 'owner_only') {
+                                await this.sock.sendMessage(`244937035662@s.whatsapp.net`, { text: bcMsg });
+                            } else {
+                                // current_group ou all_groups → envia no grupo atual
+                                await this.sock.sendMessage(jid, { text: `📢 *Akira:* ${bcMsg}` });
+                            }
+                            this.logger.info(`📢 [BROADCAST] Enviado (target: ${bcTarget})`);
+                        } catch (bcErr: any) {
+                            this.logger.error(`❌ [BROADCAST] Erro: ${bcErr.message}`);
+                        }
+                        break;
+                    }
+
+                    case 'run_self_diagnostic': {
+                        try {
+                            const os = require('os');
+                            const uptime = os.uptime();
+                            const freeMem = (os.freemem() / 1024 / 1024).toFixed(0);
+                            const totalMem = (os.totalmem() / 1024 / 1024).toFixed(0);
+                            const heapUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(0);
+                            const cpuLoad = os.loadavg();
+                            const sockAlive = !!this.sock?.user;
+                            const report = [
+                                `🖥️ *DIAGNÓSTICO — RAILWAY (Node.js)*`,
+                                `⏱ Uptime: ${(uptime / 3600).toFixed(2)}h`,
+                                `💾 RAM: ${freeMem}MB livres / ${totalMem}MB total`,
+                                `🧠 Heap: ${heapUsed}MB`,
+                                `⚙️ CPU Load: ${cpuLoad[0].toFixed(2)} (1m)`,
+                                `📡 Socket WA: ${sockAlive ? '🟢 Ativo' : '🔴 Offline'}`,
+                                `🌐 Node: ${process.version}`,
+                                `🕐 ${new Date().toLocaleString('pt-PT')}`
+                            ].join('\n');
+                            await this.sock.sendMessage(jid, { text: report }, { quoted: m });
+                        } catch (diagErr: any) {
+                            this.logger.error(`❌ Diagnóstico: ${diagErr.message}`);
+                        }
+                        break;
+                    }
+
+                    // ─── AUTONOMIA TOTAL: Akira executa qualquer ação de moderação ───────
+                    // Verifica admin antes de agir. Opera em silêncio. Relata ao dono.
+                    case 'autonomous_action': {
+                        const {
+                            cmd,              // Comando a executar (ex: 'kick', 'mute', 'antilink')
+                            target,           // JID do utilizador alvo (opcional)
+                            group_jid: aGrp,  // JID do grupo (usa atual se não fornecido)
+                            args: cmdArgs = [], // Argumentos extras
+                            reason: aReason = 'Ação autónoma',
+                            notify_owner = true,  // Enviar relatório ao dono?
+                            silent = true         // Não anunciar no grupo?
+                        } = params;
+
+                        const targetGroup = aGrp || jid;
+
+                        // ══ 1. VERIFICAÇÃO DE ADMIN (INTERNA) ══
+                        let akiraIsAdmin = false;
+                        try {
+                            if (targetGroup.endsWith('@g.us') && this.sock?.user) {
+                                const myJid = this.sock.user.id.replace(/:\d+/, '') + '@s.whatsapp.net';
+                                const meta = await this.sock.groupMetadata(targetGroup);
+                                akiraIsAdmin = meta?.participants?.some(
+                                    (p: any) => p.id === myJid && (p.admin === 'admin' || p.admin === 'superadmin')
+                                ) ?? false;
+                            }
+                        } catch (adminCheckErr: any) {
+                            this.logger.warn(`⚠️ [AUTO-ACTION] Não foi possível verificar admin: ${adminCheckErr.message}`);
+                        }
+
+                        if (!akiraIsAdmin && targetGroup.endsWith('@g.us')) {
+                            this.logger.warn(`⚠️ [AUTO-ACTION] Ignorei '${cmd}' — não sou admin em ${targetGroup}`);
+                            break;
+                        }
+
+                        this.logger.info(`🤖 [AUTO-ACTION] Executando '${cmd}' em ${targetGroup} | Admin: ${akiraIsAdmin}`);
+
+                        // ══ 2. EXECUÇÃO DA AÇÃO ══
+                        let actionResult = '';
+                        try {
+                            switch (cmd) {
+                                // ─── Moderação de Utilizadores ───
+                                case 'mute': {
+                                    const mins = parseInt(cmdArgs[0] || '30', 10);
+                                    this.moderationSystem?.muteUser(targetGroup, target, mins);
+                                    actionResult = `🔇 Mute: ${target?.split('@')[0]} por ${mins}min`;
+                                    break;
+                                }
+                                case 'unmute':
+                                case 'desmute': {
+                                    this.moderationSystem?.unmuteUser(targetGroup, target);
+                                    actionResult = `🔊 Unmute: ${target?.split('@')[0]}`;
+                                    break;
+                                }
+                                case 'kick':
+                                case 'ban': {
+                                    if (!target) break;
+                                    await this.sock.groupParticipantsUpdate(targetGroup, [target], 'remove');
+                                    actionResult = `👢 Kick: ${target.split('@')[0]}`;
+                                    break;
+                                }
+                                case 'add': {
+                                    if (!target) break;
+                                    await this.sock.groupParticipantsUpdate(targetGroup, [target], 'add');
+                                    actionResult = `➕ Add: ${target.split('@')[0]}`;
+                                    break;
+                                }
+                                case 'promote': {
+                                    if (!target) break;
+                                    await this.sock.groupParticipantsUpdate(targetGroup, [target], 'promote');
+                                    actionResult = `⬆️ Promovido: ${target.split('@')[0]}`;
+                                    break;
+                                }
+                                case 'demote': {
+                                    if (!target) break;
+                                    await this.sock.groupParticipantsUpdate(targetGroup, [target], 'demote');
+                                    actionResult = `⬇️ Despromovido: ${target.split('@')[0]}`;
+                                    break;
+                                }
+                                case 'warn': {
+                                    const count = this.moderationSystem?.addWarning(targetGroup, target, aReason) || 0;
+                                    actionResult = `⚠️ Aviso ${count}/3: ${target?.split('@')[0]}`;
+                                    if (count >= 3) {
+                                        await this.sock.groupParticipantsUpdate(targetGroup, [target], 'remove');
+                                        actionResult += ` → Kick automático após 3 avisos`;
+                                    }
+                                    break;
+                                }
+                                case 'unwarn':
+                                case 'resetwarns': {
+                                    this.moderationSystem?.resetWarnings(targetGroup, target);
+                                    actionResult = `✅ Avisos resetados: ${target?.split('@')[0]}`;
+                                    break;
+                                }
+
+                                // ─── Configurações do Grupo ───
+                                case 'fechar':
+                                case 'close': {
+                                    await this.sock.groupSettingUpdate(targetGroup, 'announcement');
+                                    actionResult = `🔒 Grupo fechado (só admins)`;
+                                    break;
+                                }
+                                case 'abrir':
+                                case 'open': {
+                                    await this.sock.groupSettingUpdate(targetGroup, 'not_announcement');
+                                    actionResult = `🔓 Grupo aberto (todos podem enviar)`;
+                                    break;
+                                }
+                                case 'pin':
+                                case 'fixar': {
+                                    const pinId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || m.key.id;
+                                    if (pinId) {
+                                        await this.sock.sendMessage(targetGroup, { pin: { type: 1, time: 86400, key: { remoteJid: targetGroup, fromMe: false, id: pinId } } });
+                                        actionResult = `📌 Mensagem afixada`;
+                                    }
+                                    break;
+                                }
+                                case 'unpin':
+                                case 'desafixar': {
+                                    const unpinId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || m.key.id;
+                                    if (unpinId) {
+                                        await this.sock.sendMessage(targetGroup, { pin: { type: 2, time: 0, key: { remoteJid: targetGroup, fromMe: false, id: unpinId } } });
+                                        actionResult = `📌 Mensagem desafixada`;
+                                    }
+                                    break;
+                                }
+                                case 'link': {
+                                    const inviteCode = await this.sock.groupInviteCode(targetGroup);
+                                    if (!silent) await this.sock.sendMessage(targetGroup, { text: `🔗 Link do grupo: https://chat.whatsapp.com/${inviteCode}` });
+                                    actionResult = `🔗 Link gerado: https://chat.whatsapp.com/${inviteCode}`;
+                                    break;
+                                }
+                                case 'revlink':
+                                case 'revogar': {
+                                    await this.sock.groupRevokeInvite(targetGroup);
+                                    actionResult = `🔗 Link do grupo revogado`;
+                                    break;
+                                }
+                                case 'setdesc':
+                                case 'descricao': {
+                                    const desc = cmdArgs.join(' ');
+                                    if (desc) {
+                                        await this.sock.groupUpdateDescription(targetGroup, desc);
+                                        actionResult = `📝 Descrição atualizada`;
+                                    }
+                                    break;
+                                }
+
+                                // ─── Proteções do Grupo ───
+                                case 'antilink': {
+                                    const enable = cmdArgs[0] !== 'off';
+                                    this.moderationSystem?.toggleAntiLink(targetGroup, enable);
+                                    actionResult = `🔗 AntiLink: ${enable ? 'ON' : 'OFF'}`;
+                                    break;
+                                }
+                                case 'antispam': {
+                                    const enable = cmdArgs[0] !== 'off';
+                                    (this.moderationSystem as any)?.toggleAntiSpam?.(targetGroup, enable);
+                                    actionResult = `🚫 AntiSpam: ${enable ? 'ON' : 'OFF'}`;
+                                    break;
+                                }
+                                case 'antifake': {
+                                    const enable = cmdArgs[0] !== 'off';
+                                    this.moderationSystem?.toggleAntiFake(targetGroup, enable);
+                                    actionResult = `🚫 AntiFake: ${enable ? 'ON' : 'OFF'}`;
+                                    break;
+                                }
+                                case 'blacklist_add': {
+                                    if (target) this.moderationSystem?.addToBlacklist(target, aReason);
+                                    actionResult = `🚫 Blacklist: ${target?.split('@')[0]} adicionado`;
+                                    break;
+                                }
+                                case 'lock_settings': {
+                                    await this.sock.groupSettingUpdate(targetGroup, 'locked');
+                                    actionResult = `🔐 Edição de info bloqueada`;
+                                    break;
+                                }
+                                case 'delete_message': {
+                                    const dId = m.message?.extendedTextMessage?.contextInfo?.stanzaId || m.key.id;
+                                    if (dId && target) await this.sock.sendMessage(targetGroup, { delete: { remoteJid: targetGroup, fromMe: false, id: dId, participant: target } });
+                                    actionResult = `🗑️ Mensagem eliminada`;
+                                    break;
+                                }
+                                case 'tagall': {
+                                    try {
+                                        const gMeta = await this.sock.groupMetadata(targetGroup);
+                                        const mentions = gMeta?.participants?.map((p: any) => p.id) || [];
+                                        const msg = cmdArgs.join(' ') || '📢 Atenção a todos!';
+                                        await this.sock.sendMessage(targetGroup, { text: msg, mentions });
+                                        actionResult = `📢 TagAll: ${mentions.length} membros`;
+                                    } catch (e) { actionResult = '⚠️ TagAll falhou'; }
+                                    break;
+                                }
+
+                                case 'send_dm': {
+                                    if (target && cmdArgs.length > 0) {
+                                        const text = cmdArgs.join(' ');
+                                        await this.sock.sendMessage(target, { text });
+                                        actionResult = `✉️ Mensagem enviada para ${target.split('@')[0]}`;
+                                    } else {
+                                        actionResult = `⚠️ Falha: alvo ou texto ausente para send_dm`;
+                                    }
+                                    break;
+                                }
+
+                                default:
+                                    this.logger.warn(`[AUTO-ACTION] Comando desconhecido: ${cmd}`);
+                                    actionResult = `❓ Comando '${cmd}' não reconhecido`;
+                            }
+
+                            this.logger.info(`✅ [AUTO-ACTION] ${actionResult} | Motivo: ${aReason}`);
+
+                            // ══ 3. RELATÓRIO SIGILOSO AO DONO ══
+                            if (notify_owner && actionResult) {
+                                const ownerJid = `244937035662@s.whatsapp.net`;
+                                const reportMsg = (
+                                    `🤖 *AÇÃO AUTÓNOMA EXECUTADA*\n\n` +
+                                    `🔧 Ação: \`${cmd}\`\n` +
+                                    `✅ Resultado: ${actionResult}\n` +
+                                    `🗣️ Motivo: ${aReason}\n` +
+                                    `📊 Grupo: ${targetGroup}\n` +
+                                    `🕐 ${new Date().toLocaleString('pt-PT')}`
+                                );
+                                await this.sock.sendMessage(ownerJid, { text: reportMsg });
+                            }
+
+                        } catch (autoActErr: any) {
+                            this.logger.error(`❌ [AUTO-ACTION] Falha em '${cmd}': ${autoActErr.message}`);
+                        }
+                        break;
+                    }
+
                     default:
                         this.logger.warn(`⚠️ [AGENT] Ação desconhecida: ${action} `);
+
+
                 }
             } catch (err: any) {
                 this.logger.error(`❌[AGENT] Erro ao executar ${action}: ${err.message} `);
