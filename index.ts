@@ -60,7 +60,8 @@ let botCore: any = null;
 let app: any = null;
 let server: any = null;
 let watchdogTimer: NodeJS.Timeout | null = null;
-const DISCONNECT_RESTART_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutos offline = RESTART
+const DISCONNECT_RESTART_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutos offline = RESTART
+const WATCHDOG_INITIAL_GRACE_MS = 3 * 60 * 1000; // 3 min de graca no boot
 
 /**
  * Inicializa o servidor Express
@@ -110,70 +111,115 @@ function initializeServer() {
 
     const status = botCore.getStatus();
     const qr = botCore.getQRCode();
-
-    // Se tem QR code mas ainda não está conectado
     const hasQR = qr !== null && qr !== undefined;
 
     res.send(`
       <!DOCTYPE html>
       <html>
       <head>
-        <title>🤖 Akira Bot V21</title>
+        <title>🤖 Akira Bot V21 - Painel de Controlo</title>
+        <meta charset="UTF-8">
         <style>
-          body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 40px; line-height: 1.6; }
-          h1 { text-align: center; color: #00ff00; text-shadow: 0 0 10px #00ff00; }
-          .container { max-width: 600px; margin: 0 auto; background: #0a0a0a; padding: 20px; border: 2px solid #00ff00; border-radius: 5px; }
-          .status { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #00ff00; }
-          .label { font-weight: bold; }
-          .links { text-align: center; margin-top: 20px; }
-          a { color: #00ff00; text-decoration: none; margin: 0 15px; padding: 8px 16px; border: 1px solid #00ff00; border-radius: 5px; display: inline-block; transition: all 0.3s; }
-          a:hover { background: #00ff00; color: #000; text-decoration: none; }
-          .version { color: #0099ff; }
-          .qr-indicator { background: ${hasQR ? '#00ff00' : '#ffaa00'}; color: #000; padding: 5px 10px; border-radius: 3px; font-weight: bold; margin-left: 10px; }
-          .status-indicator { background: ${status.isConnected ? '#00ff00' : '#ff4444'}; color: #000; padding: 5px 10px; border-radius: 3px; font-weight: bold; margin-left: 10px; }
+          :root { --neon: #00ff41; --bg: #0a0a0a; --card: #151515; }
+          body { background: var(--bg); color: var(--neon); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+          .card { background: var(--card); border: 2px solid var(--neon); padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 65, 0.2); max-width: 800px; width: 100%; text-align: center; }
+          h1 { margin-top: 0; font-size: 2.5em; text-shadow: 0 0 10px var(--neon); letter-spacing: 2px; }
+          .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; text-align: left; margin: 20px 0; }
+          .status-item { background: #000; padding: 15px; border-radius: 8px; border-left: 4px solid var(--neon); }
+          .label { font-size: 0.8em; color: #888; text-transform: uppercase; }
+          .value { font-size: 1.1em; font-weight: bold; margin-top: 5px; }
+          .qr-container { background: white; padding: 20px; border-radius: 10px; display: inline-block; margin: 20px 0; border: 4px solid var(--neon); }
+          .btn { background: transparent; color: var(--neon); border: 1px solid var(--neon); padding: 10px 20px; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; transition: 0.3s; margin: 5px; }
+          .btn:hover { background: var(--neon); color: #000; box-shadow: 0 0 15px var(--neon); }
+          .btn-danger { color: #ff4b2b; border-color: #ff4b2b; }
+          .btn-danger:hover { background: #ff4b2b; color: #fff; box-shadow: 0 0 15px #ff4b2b; }
+          .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.9em; font-weight: bold; }
+          .badge-online { background: var(--neon); color: #000; }
+          .badge-offline { background: #ff4444; color: #fff; }
+          .log-area { background: #000; color: #aaa; font-family: monospace; padding: 15px; border-radius: 8px; text-align: left; font-size: 0.85em; max-height: 150px; overflow-y: auto; margin-top: 20px; border: 1px solid #333; }
         </style>
       </head>
       <body>
-        <div class="container">
-          <h1>🤖 AKIRA BOT V21</h1>
-          <div class="status">
-            <span class="label">Status:</span>
-            <span>${status.isConnected ? '✅ ONLINE' : '❌ OFFLINE'} <span class="status-indicator">${status.isConnected ? 'CONECTADO' : 'DESCONECTADO'}</span></span>
+        <div class="card">
+          <h1>AKIRA BOT V21</h1>
+          <p>Automação Cyber-Agent & Moderação</p>
+
+          <div class="status-grid">
+            <div class="status-item">
+              <div class="label">Estado da Conexão</div>
+              <div class="value">${status.isConnected ? '<span class="badge badge-online">✅ CONECTADO</span>' : '<span class="badge badge-offline">❌ DESCONECTADO</span>'}</div>
+            </div>
+            <div class="status-item">
+              <div class="label">Sessão WhatsApp</div>
+              <div class="value">${hasQR ? '📱 QR CODE DISPONÍVEL' : (status.isConnected ? '✅ AUTENTICADO' : '⏳ A GERAR QR...')}</div>
+            </div>
+            <div class="status-item">
+              <div class="label">Número do Bot</div>
+              <div class="value">${status.botNumero || '---'}</div>
+            </div>
+            <div class="status-item">
+              <div class="label">Tempo de Atividade</div>
+              <div class="value">${Math.floor(status.uptime / 60)}m ${status.uptime % 60}s</div>
+            </div>
           </div>
-          <div class="status">
-            <span class="label">QR Code:</span>
-            <span>${hasQR ? '📱 DISPONÍVEL' : '⏳ AGUARDANDO'} <span class="qr-indicator">${hasQR ? 'PRONTO' : 'GERANDO'}</span></span>
+
+          ${!status.isConnected && hasQR ? `
+            <div class="qr-section">
+              <h3>📱 LEITURA OBRIGATÓRIA</h3>
+              <p>O bot precisa de autenticação. Digitaliza o QR Code abaixo:</p>
+              <div class="qr-container">
+                <img src="/qr-image" style="width: 280px; height: 280px; image-rendering: pixelated;" />
+              </div>
+              <p style="font-size: 0.9em; color: #888;">Este ecrã atualiza automaticamente a cada 10s.</p>
+            </div>
+          ` : (status.isConnected ? `
+            <div style="padding: 20px; border: 1px dashed var(--neon); border-radius: 10px; margin: 20px 0;">
+              <p>🟢 <strong>SISTEMA OPERACIONAL</strong></p>
+              <p>O bot está processando mensagens em tempo real.</p>
+            </div>
+          ` : `
+            <div style="padding: 20px; border: 1px dashed #ffaa00; border-radius: 10px; margin: 20px 0;">
+              <p>⏳ <strong>INICIALIZANDO...</strong></p>
+              <p>A aguardar que o Baileys gere o fluxo de autenticação.</p>
+            </div>
+          `)}
+
+          <div class="actions">
+            <a href="/" class="btn">🔄 Recarregar</a>
+            <a href="/force-qr" class="btn">🔁 Forçar QR</a>
+            <a href="/stats" class="btn">📊 Estatísticas</a>
+            <a href="/reset-auth" class="btn btn-danger" onclick="return confirm('ATENÇÃO: Isto vai apagar a sessão atual e exigir novo QR code. Continuar?')">⚠️ Resetar Sessão</a>
           </div>
-          <div class="status">
-            <span class="label">Número:</span>
-            <span>${status.botNumero}</span>
-          </div>
-          <div class="status">
-            <span class="label">JID:</span>
-            <span>${status.botJid || 'Desconectado'}</span>
-          </div>
-          <div class="status">
-            <span class="label">Uptime:</span>
-            <span>${status.uptime}s</span>
-          </div>
-          <div class="status version">
-            <span class="label">Versão:</span>
-            <span>${status.version}</span>
-          </div>
-          <div class="links">
-            <a href="/qr">📱 QR Code</a>
-            <a href="/health">💚 Health</a>
-            <a href="/stats">📊 Stats</a>
-            ${!status.isConnected ? '<a href="/force-qr">🔄 Forçar QR</a>' : ''}
-            <a href="/reset-auth" onclick="return confirm(\'Isso vai desconectar o bot e exigir novo login. Continuar?\')">🔄 Reset Auth</a>
-          </div>
-          <div style="margin-top: 20px; text-align: center; color: #666; font-size: 12px;">
-            Porta: ${config.PORT} | API: ${config.API_URL ? 'Conectada' : 'Desconectada'}
+
+          <div class="log-area">
+            <div style="color: var(--neon); border-bottom: 1px solid #333; margin-bottom: 5px; padding-bottom: 3px;">ÚLTIMOS EVENTOS DO SISTEMA</div>
+            <div id="logs-content">
+              [SYSTEM] Painel de controlo carregado em ${new Date().toLocaleTimeString()}<br>
+              [AUTH] Status: ${status.isConnected ? 'Conectado' : 'A aguardar'}<br>
+              ${hasQR ? '[QR] Novo QR Code gerado e disponível.' : '[SYNC] A aguardar sinal do WhatsApp...'}
+            </div>
           </div>
         </div>
+        <script>
+          // Auto-recarregamento se não estiver conectado
+          ${!status.isConnected ? 'setTimeout(() => location.reload(), 10000);' : 'setTimeout(() => location.reload(), 60000);'}
+        </script>
       </body>
       </html>
     `);
+  });
+
+  // ════ NOVA ROTA: Apenas a Imagem do QR ════
+  app.get('/qr-image', async (req: any, res: any) => {
+    if (!botCore) return res.status(503).send('Bot offline');
+    const qr = botCore.getQRCode();
+    if (!qr) return res.status(404).send('No QR');
+    try {
+      const img = await QRCode.toBuffer(qr, { scale: 10, margin: 2 });
+      res.type('png').send(img);
+    } catch (e) {
+      res.status(500).send('Error');
+    }
   });
 
   // ═══ Rota: QR Code ═══
@@ -388,9 +434,11 @@ function initializeServer() {
 
     // ✅ MELHORIA: Verifica se está realmente conectado
     if (!botCore.isConnected) {
-      console.warn('⚠️ [WEBHOOK] Pedido autónomo recebido mas bot está DESCONECTADO.');
+      const statusReason = botCore.currentQR ? 'Waiting for QR Code' : 'Connecting/Offline';
+      console.warn(`⚠️ [WEBHOOK] Pedido autónomo recebido mas bot está em: ${statusReason}`);
       return res.status(503).json({
         error: 'BotCore disconnected',
+        status: statusReason,
         reconnecting: botCore.reconnectAttempts > 0
       });
     }
@@ -472,17 +520,31 @@ async function initializeBotCoreAsync() {
 
 /**
  * ✅ WATCHDOG: Monitoriza se o bot está "preso" em modo offline
- * Se ficar desconectado por mais de 5 minutos, força reinicialização.
+ * Se ficar desconectado por mais de 15 minutos, força reinicialização.
+ * Possui período de graca inicial de 3 minutos para boot.
  */
 function startConnectionWatchdog() {
   if (watchdogTimer) clearInterval(watchdogTimer);
 
   let disconnectedSince: number | null = null;
+  const bootTime = Date.now();
 
   watchdogTimer = setInterval(() => {
     if (!botCore) return;
 
+    // ✅ Período de graca: não contar nos primeiros 3 minutos após boot
+    if (Date.now() - bootTime < WATCHDOG_INITIAL_GRACE_MS) return;
+
     if (!botCore.isConnected) {
+      // ✅ Se há QR ativo, bot está vivo à espera de scan — pausar contagem
+      if (botCore.currentQR) {
+        if (disconnectedSince) {
+          console.log('👀 [WATCHDOG] Bot em modo QR Code. Pausando contagem de restart.');
+          disconnectedSince = null;
+        }
+        return;
+      }
+
       if (!disconnectedSince) {
         disconnectedSince = Date.now();
         console.log('🕒 [WATCHDOG] Bot desconectado. Iniciando contagem para auto-restart...');
