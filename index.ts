@@ -59,6 +59,8 @@ const config = ConfigManager.getInstance();
 let botCore: any = null;
 let app: any = null;
 let server: any = null;
+let watchdogTimer: NodeJS.Timeout | null = null;
+const DISCONNECT_RESTART_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutos offline = RESTART
 
 /**
  * Inicializa o servidor Express
@@ -384,7 +386,16 @@ function initializeServer() {
       return res.status(503).json({ error: 'BotCore offline' });
     }
 
-    // Simples autenticação por token para segurança (opcional, configurável)
+    // ✅ MELHORIA: Verifica se está realmente conectado
+    if (!botCore.isConnected) {
+      console.warn('⚠️ [WEBHOOK] Pedido autónomo recebido mas bot está DESCONECTADO.');
+      return res.status(503).json({
+        error: 'BotCore disconnected',
+        reconnecting: botCore.reconnectAttempts > 0
+      });
+    }
+
+    // Simples autenticação por token para segurança
     const authHeader = req.headers['authorization'];
     const expectedToken = process.env.WEBHOOK_SECRET || 'akira-internal-secret-v21';
 
@@ -395,15 +406,20 @@ function initializeServer() {
 
     try {
       const payload = req.body;
-      console.log(`🤖 [WEBHOOK] Pedido autónomo recebido:`, payload.action);
+      console.log(`🤖 [WEBHOOK] Pedido autónomo recebido:`, payload.action || payload.cmd);
 
       // Constrói um objeto "m" mockado para satisfazer o handleRemoteActions
+      // ✅ MELHORIA: Fallback de JID para o dono se for uma ação de sistema sem grupo
+      const fallbackJid = `${config.DONO_USERS[0]?.numero || '244937035662'}@s.whatsapp.net`;
       const mockMessage = {
-        key: { remoteJid: payload.params?.group_jid || 'system', id: 'auto_' + Date.now() },
+        key: {
+          remoteJid: payload.params?.group_jid || payload.group_jid || 'system',
+          id: 'auto_' + Date.now()
+        },
         message: {}
       };
 
-      // Delega diretamente para o handler de ações remotas do BotCore
+      // Se for system e não tiver target, pode falhar. BotCore.ts deve lidar.
       await botCore.handleRemoteActions(
         [payload],
         mockMessage
@@ -446,9 +462,51 @@ async function initializeBotCoreAsync() {
     botCore.connect().catch((error: any) => {
       console.error('❌ Erro na conexão:', error.message);
     });
+
+    // ✅ INICIAR WATCHDOG DE CONEXÃO
+    startConnectionWatchdog();
   } catch (error: any) {
     console.error('❌ Erro ao inicializar BotCore:', error.message);
   }
+}
+
+/**
+ * ✅ WATCHDOG: Monitoriza se o bot está "preso" em modo offline
+ * Se ficar desconectado por mais de 5 minutos, força reinicialização.
+ */
+function startConnectionWatchdog() {
+  if (watchdogTimer) clearInterval(watchdogTimer);
+
+  let disconnectedSince: number | null = null;
+
+  watchdogTimer = setInterval(() => {
+    if (!botCore) return;
+
+    if (!botCore.isConnected) {
+      if (!disconnectedSince) {
+        disconnectedSince = Date.now();
+        console.log('🕒 [WATCHDOG] Bot desconectado. Iniciando contagem para auto-restart...');
+      } else {
+        const duration = Date.now() - disconnectedSince;
+        const remaining = DISCONNECT_RESTART_THRESHOLD_MS - duration;
+
+        if (duration >= DISCONNECT_RESTART_THRESHOLD_MS) {
+          console.error('🚨 [WATCHDOG] BOT OFFLINE POR MUITO TEMPO (>5m). FORÇANDO RESTART DO PROCESSO.');
+          process.exit(1); // Railway reinicia o container
+        } else {
+          // Log sutil a cada minuto de desconexão
+          if (Math.floor(duration / 1000) % 60 === 0) {
+            console.warn(`🕒 [WATCHDOG] Bot offline há ${Math.floor(duration / 1000)}s. Restart em ${Math.floor(remaining / 1000)}s.`);
+          }
+        }
+      }
+    } else {
+      if (disconnectedSince) {
+        console.log('✅ [WATCHDOG] Bot reconectado. Resetando contagem de restart.');
+        disconnectedSince = null;
+      }
+    }
+  }, 10000); // Verifica a cada 10s
 }
 
 /**
