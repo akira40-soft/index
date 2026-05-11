@@ -44,9 +44,9 @@ function getWhatsAppIP(): string {
 
 function createHFAgent(): https.Agent | http.Agent | undefined {
     try {
-        // Verifica se há proxy configurado (prioriza ConfigManager)
+        // Verifica se há proxy configurado (prioriza HTTPS_PROXY do ambiente)
         const config = ConfigManager.getInstance();
-        const proxy = config.TTS_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy;
+        const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || config.WHATSAPP_PROXY;
 
         if (proxy && proxy.trim() !== "") {
             console.log(`🌐 HFCorrections: Conectando via Proxy Residencial: ${proxy.split('@').pop()}`);
