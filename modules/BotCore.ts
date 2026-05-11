@@ -2330,7 +2330,16 @@ class BotCore {
             // Fallback para quem enviou a mensagem original
             const targetJid = target || userId;
 
-            this.logger.info(`🚀 [AGENT ACTION] Executando: ${action} | Params: ${JSON.stringify(params)}`);
+            // ✅ MELHORIA: Se o alvo for 'system' ou inválido, redireciona para o dono principal
+            const finalJid = (targetJid === 'system' || !targetJid.includes('@'))
+                ? `${this.config.DONO_USERS[0]?.numero || '244937035662'}@s.whatsapp.net`
+                : targetJid;
+
+            this.logger.info(`🚀 [AGENT ACTION] Executando: ${action} | Alvo: ${finalJid} | Params: ${JSON.stringify(params)}`);
+
+            if (!this.isConnected || !this.sock) {
+                throw new Error('Connection Closed (Bot is offline)');
+            }
 
             try {
                 switch (action) {
@@ -3819,7 +3828,13 @@ class BotCore {
                             }
 
                         } catch (autoActErr: any) {
-                            this.logger.error(`❌ [AUTO-ACTION] Falha em '${cmd}': ${autoActErr.message}`);
+                            const errMessage = autoActErr.message || 'Erro desconhecido';
+                            this.logger.error(`❌ [AUTO-ACTION] Falha em '${cmd}': ${errMessage}`);
+
+                            // Se falhou por conexão fechada, sinaliza para o watchdog do index.ts
+                            if (errMessage.includes('Connection Closed') || errMessage.includes('not opened')) {
+                                this.isConnected = false;
+                            }
                         }
                         break;
                     }
