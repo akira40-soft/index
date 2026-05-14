@@ -56,8 +56,11 @@ class ModerationSystem {
     private MAX_FLOOD_WARNINGS: number = 3;
     private enableDetailedLogging: boolean;
     private qrTimeout: any;
-    private lidMap: Map<string, string>; // {lid} -> {realJid}
     private lidMapPath: string;
+    private mutedUsersPath: string;
+    private muteCountsPath: string;
+    private muteViolationsPath: string;
+    private muteViolations: Map<string, number>;
     public sock: any;
 
     constructor(logger: any = null) {
@@ -78,8 +81,12 @@ class ModerationSystem {
         this.antiSpamPath = path.join(basePath, 'data', 'antispam.json');
         this.antiBadwordsPath = path.join(basePath, 'data', 'antipalavrao.json');
         this.badwordsListPath = path.join(basePath, 'data', 'badwords_list.json');
+        this.mutedUsersPath = path.join(basePath, 'data', 'muted_users.json');
+        this.muteCountsPath = path.join(basePath, 'data', 'mute_counts.json');
+        this.muteViolationsPath = path.join(basePath, 'data', 'mute_violations.json');
 
         this.muteCounts = new Map(); // {groupId_userId} -> {count, lastMuteDate}
+        this.muteViolations = new Map(); // {groupId_userId} -> count
         this.bannedUsers = new Map(); // {userId} -> {reason, bannedAt, expiresAt}
         this.spamCache = new Map(); // {userId} -> [timestamps]
 
@@ -218,14 +225,16 @@ class ModerationSystem {
 
     public isMuted(groupId: string, userId: string): boolean {
         if (!groupId || !userId) return false;
-        const key = `${groupId}_${userId}`;
+        const realId = this.resolveRealJid(userId);
+        const key = `${groupId}_${realId}`;
         const muteData = this.mutedUsers.get(key);
 
         if (!muteData) return false;
 
         if (Date.now() > muteData.expires) {
             this.mutedUsers.delete(key);
-            this.logger.info(`🔊 Mute expirado para ${userId} no grupo ${groupId}`);
+            this._saveAllSettings(); // Persiste a remoção
+            this.logger.info(`🔊 Mute expirado para ${realId} no grupo ${groupId}`);
             return false;
         }
 
@@ -233,7 +242,8 @@ class ModerationSystem {
     }
 
     public muteUser(groupId: string, userId: string, minutes: number = 5): any {
-        const key = `${groupId}_${userId}`;
+        const realId = this.resolveRealJid(userId);
+        const key = `${groupId}_${realId}`;
 
         // Lógica de incremento de mute (reincidência no mesmo dia)
         const today = new Date().toDateString();
@@ -250,7 +260,7 @@ class ModerationSystem {
         let muteMinutes = minutes;
         if (countData.count > 1) {
             muteMinutes = minutes * Math.pow(2, countData.count - 1); // Exponencial: 5, 10, 20...
-            this.logger.warn(`⚠️ [MUTE INTENSIFICADO] ${userId} muteado ${countData.count}x hoje. Tempo: ${muteMinutes} min`);
+            this.logger.warn(`⚠️ [MUTE INTENSIFICADO] ${realId} muteado ${countData.count}x hoje. Tempo: ${muteMinutes} min`);
         }
 
         const expires = Date.now() + (muteMinutes * 60 * 1000);
@@ -261,17 +271,36 @@ class ModerationSystem {
             muteCount: countData.count
         });
 
+        this._saveAllSettings(); // Persiste o novo mute
         return { expires, muteMinutes, muteCount: countData.count };
     }
 
     public unmuteUser(groupId: string, userId: string): boolean {
-        const key = `${groupId}_${userId}`;
+        const realId = this.resolveRealJid(userId);
+        const key = `${groupId}_${realId}`;
         const wasMuted = this.mutedUsers.has(key);
         this.mutedUsers.delete(key);
+        this.muteViolations.delete(key); // Limpa violações ao desmutar
         if (wasMuted) {
-            this.logger.info(`🔊 Usuário ${userId} desmutado manualmente no grupo ${groupId}`);
+            this.logger.info(`🔊 Usuário ${realId} desmutado manualmente no grupo ${groupId}`);
+            this._saveAllSettings();
         }
         return wasMuted;
+    }
+
+    public incrementMuteViolation(groupId: string, userId: string): number {
+        const realId = this.resolveRealJid(userId);
+        const key = `${groupId}_${realId}`;
+        const count = (this.muteViolations.get(key) || 0) + 1;
+        this.muteViolations.set(key, count);
+        this._saveAllSettings(); // Persiste a violação
+        return count;
+    }
+
+    public getMuteViolationCount(groupId: string, userId: string): number {
+        const realId = this.resolveRealJid(userId);
+        const key = `${groupId}_${realId}`;
+        return this.muteViolations.get(key) || 0;
     }
 
     /**
@@ -750,6 +779,9 @@ class ModerationSystem {
         this._loadSettingsSet(this.antiBadwordsPath, this.antiBadwordsGroups);
         this._loadSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._loadSettingsMap(this.warningsPath, this.warnings);
+        this._loadSettingsMap(this.mutedUsersPath, this.mutedUsers);
+        this._loadSettingsMap(this.muteCountsPath, this.muteCounts);
+        this._loadSettingsMap(this.muteViolationsPath, this.muteViolations);
         this._loadBadwordsList();
     }
 
@@ -763,6 +795,9 @@ class ModerationSystem {
         this._saveSettingsSet(this.antiBadwordsPath, this.antiBadwordsGroups);
         this._saveSettingsMap(this.antiLinkExceptionsPath, this.antiLinkExceptions);
         this._saveSettingsMap(this.warningsPath, this.warnings);
+        this._saveSettingsMap(this.mutedUsersPath, this.mutedUsers);
+        this._saveSettingsMap(this.muteCountsPath, this.muteCounts);
+        this._saveSettingsMap(this.muteViolationsPath, this.muteViolations);
     }
 
     private _loadSettingsSet(filePath: string, set: Set<string>): void {
@@ -1000,7 +1035,8 @@ class ModerationSystem {
      * Lógica: 2 msgs em 1s = Warning. 3 Warnings = Kick/Ban.
      */
     public checkFlood(groupId: string, userId: string): { action: 'none' | 'warning' | 'kick' | 'mute', warnings: number, muteCount?: number, muteMinutes?: number } {
-        const key = `${groupId}_${userId}`;
+        const realId = this.resolveRealJid(userId);
+        const key = `${groupId}_${realId}`;
         const now = Date.now();
         const userData = this.spamCache?.get(key) || [];
 

@@ -1074,11 +1074,6 @@ class BotCore {
                 } catch (e) { isAdmin = false; }
 
                 if (!isAdmin) {
-                    // -1. Verifica se usuário está mutado
-                    if (this.moderationSystem.isMuted(remoteJid, participant)) {
-                        await this.sock.sendMessage(remoteJid, { delete: m.key });
-                        return;
-                    }
 
                     // 0. AntiFlood / AntiSpam
                     if (this.moderationSystem.isAntiSpamActive(remoteJid)) {
@@ -1182,8 +1177,15 @@ class BotCore {
 
             if (shouldLog) this.logger.debug(`🔹 [PIPELINE] txt=${!!texto} img=${temImagem} aud=${temAudio} sticker=${temSticker}`);
 
-            if (ehGrupo && this.moderationSystem?.isMuted(remoteJid, participant)) {
-                await this.handleViolation(m, 'mute');
+            // 2. Moderação Imediata (Mute / Blacklist)
+            if (ehGrupo && this.moderationSystem?.isMuted(remoteJid, resolvedJid)) {
+                await this.handleViolation(m, 'mute', null, resolvedJid);
+                return;
+            }
+
+            if (this.moderationSystem?.isBlacklisted(resolvedJid)) {
+                this.logger.warn(`🚫 [BLACKLIST] Tentativa de acesso de usuário banido: ${nome} (${resolvedJid})`);
+                await this.sock.sendMessage(remoteJid, { delete: m.key }).catch(() => { });
                 return;
             }
 
@@ -1222,7 +1224,7 @@ class BotCore {
                 if (!limitStatus.allowed) {
                     this.logger.warn(`⏳ [RATE LIMIT BLOQUEADO] ${nome} (${numeroReal}) - ${limitStatus.reason}`);
                     if (limitStatus.reason === 'RATE_LIMIT_EXCEEDED') {
-                        await this.handleViolation(m, 'rate_limit', limitStatus);
+                        await this.handleViolation(m, 'rate_limit', limitStatus, resolvedJid);
                     }
                     return;
                 } else {
@@ -1230,20 +1232,28 @@ class BotCore {
                 }
             }
 
+            // ═══ 🚀 AGENTIC PIPELINE: Roteamento Inteligente de Mensagens ═══
 
-            const isImageOrReply = temImagem || (replyInfo?.quotedType === 'image');
-
-            if (isImageOrReply) {
-                await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
-            } else if (temAudioReal) {
-                // ═══ LÓGICA DE ÁUDIO REAL (Mensagem de voz direta) ═══
+            // 1. Prioridade Máxima: Conteúdo da mensagem ATUAL (voz ou imagem enviada agora)
+            if (temAudioReal) {
+                // Usuário enviou áudio -> handleAudioMessage fará a transcrição e decidirá a resposta
                 this.logger.info(`🎤 [ÁUDIO RECEBIDO] Processando voz de ${nome}...`);
                 await this.handleAudioMessage(m, nome, numeroReal, replyInfo, ehGrupo, true);
+            } else if (temImagem) {
+                // Usuário enviou imagem -> handleImageMessage fará a análise visual
+                await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+            }
+            // 2. Prioridade Secundária: Contexto de Reply (se a msg atual for texto)
+            else if (replyInfo?.quotedType === 'image') {
+                // Usuário enviou texto respondendo a uma imagem -> analisa a imagem citada
+                await this.handleImageMessage(m, nome, numeroReal, replyInfo, ehGrupo);
+            } else if (replyInfo?.quotedType === 'audio') {
+                // Usuário enviou texto respondendo a um áudio -> força resposta em áudio (TTS)
+                this.logger.info(`🎤 [REPLY TO AUDIO] Texto para áudio - forçando TTS`);
+                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, true);
             } else {
-                // Se for texto (mesmo que dê reply a um áudio)
-                // Mantemos o texto original para não perder comandos como "transcreva"
+                // 3. Caso padrão: Texto puro ou comandos
                 await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo);
-
             }
         } catch (error: any) {
             const errMsg = error?.message || String(error) || 'erro desconhecido';
@@ -1915,10 +1925,10 @@ class BotCore {
         return await this.resolveAuthorName(m.key.participant || m.key.remoteJid, remoteJid);
     }
 
-    async handleViolation(m: any, tipo: string, limitStatus?: any): Promise<void> {
+    async handleViolation(m: any, tipo: string, limitStatus?: any, resolvedJid?: string): Promise<void> {
         if (!this.sock) return;
         const jid = m.key.remoteJid;
-        const participant = m.key.participant || m.key.remoteJid;
+        const participant = resolvedJid || m.key.participant || m.key.remoteJid;
         const nome = m.pushName || 'Usuário';
         const numeroReal = participant?.split('@')[0] || '';
 
@@ -1958,8 +1968,19 @@ class BotCore {
                 // 3. Remover do grupo
                 await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
             } else if (tipo === 'mute') {
-                await this.sock.sendMessage(jid, { text: `🚫 *${nome} removido por falar durante o silenciamento!*` });
-                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                if (this.moderationSystem) {
+                    const count = this.moderationSystem.incrementMuteViolation(jid, participant);
+                    if (count >= 3) {
+                        await this.sock.sendMessage(jid, { text: `🚫 *${nome} removido por ignorar o silenciamento (3 avisos)!*` });
+                        await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                    } else {
+                        // A mensagem já foi deletada no início de handleViolation
+                        await this.sock.sendMessage(jid, {
+                            text: `⚠️ *@${numeroReal}*, você está silenciado! Se continuar enviando mensagens (*${count}/3*), será removido.`,
+                            mentions: [participant]
+                        });
+                    }
+                }
             } else if (tipo === 'rate_limit') {
                 // MENSAGENS AGRESSIVAS BASEADO NO NÚMERO DE VIOLAÇÕES
                 const violations = limitStatus?.violations || 1;
@@ -3211,28 +3232,35 @@ class BotCore {
                             // Limpeza e Unificação (Limite de 500 para estabilidade)
                             statusJids = [...new Set(statusJids)].filter(j => j && j.endsWith('@s.whatsapp.net')).slice(0, 500);
 
-                            // 1. Imagem da própria mensagem (user enviou a foto diretamente -> passamos m inteiro)
-                            const directImg = m.message?.imageMessage ? m : null;
-                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
-                                || m.message?.imageMessage?.contextInfo?.quotedMessage;
-                            const imageSource = directImg || (quotedMsg?.imageMessage ? quotedMsg : null);
+                            // 1. Identifica a mensagem que contém a mídia (atual ou citada)
+                            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+                            const targetMsg = quotedMsg || m;
 
-                            if (imageSource && this.mediaProcessor) {
-                                const dl = await this.mediaProcessor.downloadMedia(imageSource, 'image');
-                                if (dl?.buffer) {
-                                    await this.sock.sendMessage(statusJid, {
-                                        image: dl.buffer,
-                                        caption: statusCaption || '✨',
-                                        mentions: mentions.length > 0 ? mentions : undefined,
-                                        backgroundColor: '#000000',
-                                        font: 1
-                                    }, { statusJidList: statusJids });
-                                    await this.sock.sendMessage(jid, { text: `✅ Story publicado com imagem para os teus contactos${mention_group ? ' e mencionei o grupo' : ''}!` }, { quoted: m });
-                                    break;
+                            if (this.mediaProcessor) {
+                                // Tenta baixar mídia (usa 'document' como base para tentar múltiplos tipos no fallback)
+                                const dl = await this.mediaProcessor.downloadMedia(targetMsg, 'document');
+
+                                if (dl?.buffer && dl.mediaContent) {
+                                    const mimetype = dl.mediaContent.mimetype || '';
+                                    const isVideo = mimetype.includes('video');
+                                    const isImage = mimetype.includes('image');
+
+                                    if (isVideo || isImage) {
+                                        this.logger.info(`📤 [POST_STATUS] Publicando ${isVideo ? 'vídeo' : 'imagem'} extraído de ${quotedMsg ? 'quoted' : 'direct'}`);
+                                        await this.sock.sendMessage(statusJid, {
+                                            [isVideo ? 'video' : 'image']: dl.buffer,
+                                            caption: statusCaption || '✨',
+                                            mentions: mentions.length > 0 ? mentions : undefined,
+                                            backgroundColor: '#000000',
+                                            font: 1
+                                        }, { statusJidList: statusJids });
+                                        await this.sock.sendMessage(jid, { text: `✅ Story publicado com ${isVideo ? 'vídeo' : 'imagem'} para os teus contactos${mention_group ? ' e mencionei o grupo' : ''}!` }, { quoted: m });
+                                        break;
+                                    }
                                 }
                             }
 
-                            // Fallback: story só de texto
+                            // Fallback: story só de texto se não houver mídia
                             const textContent = statusCaption || params.text || '💬';
                             await this.sock.sendMessage(statusJid, {
                                 text: textContent,
@@ -3242,8 +3270,8 @@ class BotCore {
                             }, { statusJidList: statusJids });
                             await this.sock.sendMessage(jid, { text: `✅ Story de texto publicado para os teus contactos${mention_group ? ' e mencionei o grupo' : ''}!` }, { quoted: m });
                         } catch (statusErr: any) {
-                            // SILENCIADO: Se falhar ao postar story (falso positivo da IA), apenas logamos.
                             this.logger.error(`❌ Falha na ação post_status: ${statusErr.message}`);
+                            await this.sock.sendMessage(jid, { text: `❌ Erro ao postar story: ${statusErr.message}` }, { quoted: m });
                         }
                         break;
                     }
