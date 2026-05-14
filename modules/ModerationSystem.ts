@@ -61,6 +61,7 @@ class ModerationSystem {
     private muteCountsPath: string;
     private muteViolationsPath: string;
     private muteViolations: Map<string, number>;
+    private lidMap: Map<string, string>;
     public sock: any;
 
     constructor(logger: any = null) {

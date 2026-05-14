@@ -1058,9 +1058,10 @@ class BotCore {
 
             const nome = await this._resolveUserName(m, numero, remoteJid);
             const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
+            const resolvedJid = this.moderationSystem?.resolveRealJid(participant) || participant;
 
             // 0. VERIFICAÇÃO DE BLACKLIST
-            if (this.moderationSystem?.isBlacklisted(numeroReal)) {
+            if (this.moderationSystem?.isBlacklisted(resolvedJid)) {
                 this.logger.debug(`🚫 Banido: ${nome}`);
                 return;
             }
@@ -3875,6 +3876,54 @@ class BotCore {
             } catch (err: any) {
                 this.logger.error(`❌[AGENT] Erro ao executar ${action}: ${err.message} `);
                 await this.sock.sendMessage(jid, { text: `❌ Erro ao processar a ação \`${action}\`: ${err.message}` }, { quoted: m });
+            }
+        }
+    }
+
+    /**
+     * 📞 CALL HANDLER: Intercepta chamadas e responde via chat
+     * Como o Baileys não suporta streaming de áudio real-time, 
+     * rejeitamos a chamada e educamos o usuário a usar notas de voz (STT/TTS).
+     */
+    private async handleCall(call: any): Promise<void> {
+        const { from, id, status } = call;
+
+        if (status === 'offer' && this.config.FEATURE_CALL_HANDLER) {
+            this.logger.info(`📞 [CHAMADA RECEBIDA] De: ${from} | ID: ${id}`);
+
+            try {
+                // 1. Rejeita a chamada imediatamente (para não ficar tocando)
+                if (this.sock && this.sock.rejectCall) {
+                    await this.sock.rejectCall(id, from).catch(() => { });
+                }
+
+                // 2. Simula "gravando áudio" para dar imersão
+                if (this.presenceSimulator) {
+                    await this.presenceSimulator.simulatePresence(from, 'recording', 3000).catch(() => { });
+                }
+
+                // 3. Envia a mensagem de texto
+                const textMsg = this.config.CALL_REJECT_MESSAGE;
+                await this.sock.sendMessage(from, {
+                    text: textMsg,
+                    mentions: [from]
+                }).catch(() => { });
+
+                // 4. Envia a mesma mensagem em áudio (TTS) para reforçar o modo de voz
+                if (this.config.FEATURE_TTS_ENABLED && this.audioProcessor) {
+                    const ttsResult = await this.audioProcessor.generateTTS(textMsg, this.config.TTS_LANGUAGE);
+                    if (ttsResult.sucesso) {
+                        await this.sock.sendMessage(from, {
+                            audio: ttsResult.buffer,
+                            mimetype: 'audio/mp4',
+                            ptt: true
+                        }).catch(() => { });
+                        this.logger.info(`✅ [CALL RESPONSE] Resposta em áudio enviada para ${from}`);
+                    }
+                }
+
+            } catch (e: any) {
+                this.logger.error(`❌ Erro ao processar chamada: ${e.message}`);
             }
         }
     }
