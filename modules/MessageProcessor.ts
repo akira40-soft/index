@@ -88,11 +88,26 @@ class MessageProcessor {
             }
 
             // ✅ PRIORIDADE 3: Usar remoteJid para PV (não grupo)
-            if (remoteJid && !String(remoteJid).endsWith('@g.us') && !remoteJid.includes('@lid')) {
-                const number = JidUtils.getNumber(String(remoteJid));
-                const rawNum = JidUtils.cleanPhoneNumber(number);
-                if (this._isValidPhoneNumber(rawNum)) {
-                    return rawNum;
+            if (remoteJid && !String(remoteJid).endsWith('@g.us')) {
+                const remoteJidStr = String(remoteJid);
+                if (remoteJidStr.includes('@lid')) {
+                    this.logger?.debug(`🔍 [LID] remoteJid é LID (PV), tentando resolver número real...`);
+                    const resolvedReal = await this._resolveLidToReal(remoteJidStr, sock);
+                    if (resolvedReal && this._isValidPhoneNumber(resolvedReal)) {
+                        this.logger?.info(`✅ [LID] Resolvido → número real: ${resolvedReal}`);
+                        return resolvedReal;
+                    }
+                    const lidNumeric = JidUtils.cleanPhoneNumber(remoteJidStr);
+                    if (lidNumeric && lidNumeric.length >= 6) {
+                        this.logger?.debug(`⚠️ [LID] Não resolvido, usando LID como identificador (PV): ${lidNumeric}`);
+                        return lidNumeric;
+                    }
+                } else {
+                    const number = JidUtils.getNumber(remoteJidStr);
+                    const rawNum = JidUtils.cleanPhoneNumber(number);
+                    if (this._isValidPhoneNumber(rawNum)) {
+                        return rawNum;
+                    }
                 }
             }
 
@@ -351,8 +366,12 @@ class MessageProcessor {
 
             if (quotedIsFromBot) {
                 this.logger?.debug(
-                    `✅ [REPLY DETECTADO] Quoted message is from bot self (${quotedAuthorNumero}). ` +
-                    `Marking ehRespostaAoBot=true to allow fluid conversation.`
+                    `✅ [REPLY DETECTADO] Citada é do próprio bot (${quotedAuthorNumero}). ` +
+                    `Ativando resposta fluida (ehRespostaAoBot=true).`
+                );
+            } else {
+                this.logger?.debug(
+                    `ℹ️ [REPLY INFO] Citada NÃO é do bot. Autor JID: ${participantJidCitado} | Autor Num: ${quotedAuthorNumero}`
                 );
             }
 
@@ -387,6 +406,7 @@ class MessageProcessor {
                 contextHint: contextHint,
                 priorityLevel: priorityLevel,
                 isReply: true,
+                quotedMsgId: context.stanzaId, // ✅ Adicionado para rastreamento de thread
                 // Novas propriedades para detecção de jogos
                 isReplyToGame: isGameReply.isGame,
                 gameType: isGameReply.gameType
@@ -492,25 +512,26 @@ class MessageProcessor {
     isReplyToBot(jid: string | null | undefined): boolean {
         if (!jid) return false;
 
-        const jidNumero = JidUtils.getNumber(String(jid));
+        const jidNormalized = JidUtils.normalize(String(jid));
+        const jidNumero = JidUtils.getNumber(jidNormalized);
         const botNumeroEnv = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
         let sockNumero = null;
         if (this.sock?.user?.id) {
-            sockNumero = JidUtils.getNumber(String(this.sock.user.id));
+            sockNumero = JidUtils.getNumber(JidUtils.normalize(this.sock.user.id));
         }
 
-        // Normalização agressiva para garantir match independente de sufixos :1, :2 etc
-        const normalize = (n: string) => n.replace(/\D/g, '').slice(-12); // Pega os últimos 12 dígitos (padrão DDI+DDD+NUM)
+        // Normalização agressiva para garantir match independente de sufixos :1, :2, @lid, etc
+        const getPureDigits = (n: string) => n.replace(/\D/g, '').slice(-12);
 
-        const targetNum = normalize(jidNumero);
-        const envNum = botNumeroEnv ? normalize(botNumeroEnv) : null;
-        const sockNum = sockNumero ? normalize(sockNumero) : null;
+        const targetDigits = getPureDigits(jidNumero);
+        const envDigits = botNumeroEnv ? getPureDigits(botNumeroEnv) : null;
+        const sockDigits = sockNumero ? getPureDigits(sockNumero) : null;
 
-        const isMatch = (envNum && targetNum === envNum) || (sockNum && targetNum === sockNum);
+        const isMatch = (envDigits && targetDigits === envDigits) || (sockDigits && targetDigits === sockDigits);
 
         if (isMatch) {
-            this.logger?.debug(`✅ [BOT IDENTITY MATCH] JID ${jid} (${targetNum}) matched Bot (Env: ${envNum}, Sock: ${sockNum})`);
+            this.logger?.debug(`✅ [BOT IDENTITY MATCH] JID ${jid} (digits: ${targetDigits}) matched Bot (Env: ${envDigits}, Sock: ${sockDigits})`);
         }
 
         return !!isMatch;
@@ -528,14 +549,20 @@ class MessageProcessor {
             if (tipo === 'audioMessage') return true;
 
             // View Once
-            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
+            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2' || tipo === 'viewOnceMessageV2Extension') {
                 const subMsg = msg[tipo].message;
                 if (getContentType(subMsg) === 'audioMessage') return true;
             }
 
-            // Quoted Message
-            const quoted = msg.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (quoted && getContentType(quoted) === 'audioMessage') return true;
+            // Ephemeral
+            if (tipo === 'ephemeralMessage') {
+                const subMsg = msg.ephemeralMessage.message;
+                const subTipo = getContentType(subMsg);
+                if (subTipo === 'audioMessage') return true;
+                if (subTipo === 'viewOnceMessage' || subTipo === 'viewOnceMessageV2') {
+                    if (getContentType(subMsg[subTipo].message) === 'audioMessage') return true;
+                }
+            }
 
             return false;
         } catch (e: any) {
@@ -555,14 +582,20 @@ class MessageProcessor {
             if (tipo === 'imageMessage') return true;
 
             // View Once
-            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
+            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2' || tipo === 'viewOnceMessageV2Extension') {
                 const subMsg = msg[tipo].message;
                 if (getContentType(subMsg) === 'imageMessage') return true;
             }
 
-            // Quoted Message
-            const quoted = msg.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (quoted && getContentType(quoted) === 'imageMessage') return true;
+            // Ephemeral
+            if (tipo === 'ephemeralMessage') {
+                const subMsg = msg.ephemeralMessage.message;
+                const subTipo = getContentType(subMsg);
+                if (subTipo === 'imageMessage') return true;
+                if (subTipo === 'viewOnceMessage' || subTipo === 'viewOnceMessageV2') {
+                    if (getContentType(subMsg[subTipo].message) === 'imageMessage') return true;
+                }
+            }
 
             return false;
         } catch (e: any) {
@@ -575,7 +608,21 @@ class MessageProcessor {
     */
     getMediaType(message: any): string {
         try {
-            const tipo = getContentType(message.message);
+            let msg = message.message;
+            let tipo = getContentType(msg);
+
+            // Unwrap View Once / Ephemeral
+            if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2' || tipo === 'viewOnceMessageV2Extension') {
+                msg = msg[tipo].message;
+                tipo = getContentType(msg);
+            } else if (tipo === 'ephemeralMessage') {
+                msg = msg.ephemeralMessage.message;
+                tipo = getContentType(msg);
+                if (tipo === 'viewOnceMessage' || tipo === 'viewOnceMessageV2') {
+                    msg = msg[tipo].message;
+                    tipo = getContentType(msg);
+                }
+            }
 
             const mimeMap: { [key: string]: string } = {
                 'imageMessage': 'imagem',

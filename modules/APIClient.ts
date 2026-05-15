@@ -95,7 +95,10 @@ class APIClient {
                 quoted_author_numero: quotedAuthorNumerolimpo,
                 quoted_type: String(reply_metadata?.quoted_type || 'texto'),
                 quoted_text_original: String(reply_metadata?.quoted_text_original || '').substring(0, 6000),
-                context_hint: String(reply_metadata?.contextHint || reply_metadata?.context_hint || 'contexto_geral')
+                context_hint: String(reply_metadata?.contextHint || reply_metadata?.context_hint || 'contexto_geral'),
+                // 🧵 Enriquecimento de Thread (Multi-Agent Awareness)
+                replied_to_author_name: String(reply_metadata?.replied_to_author_name || '').substring(0, 100),
+                replied_to_text: String(reply_metadata?.replied_to_text || '').substring(0, 1000)
             };
         } else {
             payload.reply_metadata = {

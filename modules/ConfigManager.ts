@@ -97,6 +97,8 @@ class ConfigManager {
     public TIKTOK_SESSION_ID: string = "";
     [key: string]: any;
     public FORCE_PV_SESSION_REFRESH: boolean = false;
+    /** Lista de JIDs/números de outras IAs no grupo. Mensagens destas fontes só acionam resposta se for reply directo à Akira. */
+    public KNOWN_BOTS: string[] = [];
 
     constructor() {
         if (ConfigManager.instance) {
@@ -270,6 +272,11 @@ class ConfigManager {
         this.TIKTOK_SESSION_ID = process.env?.TIKTOK_SESSION_ID || "";
         this.FORCE_PV_SESSION_REFRESH = process.env?.FORCE_PV_SESSION_REFRESH === 'true';
         this.WHATSAPP_PROXY = process.env?.WHATSAPP_PROXY || "";
+
+        // ═══ BOTS CONHECIDOS (números de outras IAs no grupo) ═══
+        // Mensagens destes números só acionam resposta se for reply directo à Akira.
+        const knownBotsEnv = process.env?.KNOWN_BOTS || '83692085067963'; // ISA IA por padrão
+        this.KNOWN_BOTS = knownBotsEnv.split(',').map(s => s.trim()).filter(Boolean);
 
         ConfigManager.instance = this;
     }

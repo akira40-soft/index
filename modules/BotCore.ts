@@ -149,6 +149,12 @@ class BotCore {
     // Cache de nomes de grupo para não sobrecarregar a API
     private groupNameCache: Map<string, { name: string, timestamp: number }> = new Map();
 
+    // 🆕 Cache de nomes de usuários para evitar múltiplas resoluções
+    // Chave: jid normalizado, Valor: { name, timestamp }
+    // TTL: 5 minutos (suficiente para uma sessão mas permite atualizações)
+    private userNameCache: Map<string, { name: string, timestamp: number }> = new Map();
+    private readonly USER_NAME_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+
     private async getGroupName(jid: string): Promise<string> {
         if (!jid || !jid.endsWith('@g.us')) return 'PV';
 
@@ -648,6 +654,13 @@ class BotCore {
                 }
             });
 
+            // ✅ CALL HANDLER: Intercepta chamadas e educa o usuário (STT/TTS)
+            this.sock.ev.on('call', async (calls: any[]) => {
+                for (const call of calls) {
+                    await this.handleCall(call);
+                }
+            });
+
         } catch (error: any) {
             this.logger.error('❌ Erro conexão:', error.message);
             await delay(5000);
@@ -1039,10 +1052,37 @@ class BotCore {
             const connectedBotNumber = JidUtils.getNumber(this.BOT_JID || '');
             const envBotNumber = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
+            // ── 🤖 TAGGING DE BOT CONHECIDO (Anti-Hallucination) ─────────────────────
+            const senderNumeroClean = JidUtils.cleanPhoneNumber(numero) || numero;
+            const isKnownBot = this.config.KNOWN_BOTS?.some(
+                (b: string) => JidUtils.cleanPhoneNumber(b) === senderNumeroClean || b === senderNumeroClean
+            ) ?? false;
+
+            const rawNome = await this._resolveUserName(m, numero, remoteJid);
+            const nome = isKnownBot ? `BOT:${rawNome}` : rawNome;
+
             const replyInfo = await this.messageProcessor.extractReplyInfo(m);
             // Se for reply, vamos tentar resolver o nome do autor citado para enriquecer o contexto
             if (replyInfo && replyInfo.isReply && replyInfo.participantJidCitado) {
                 replyInfo.quoted_author_name = await this.resolveAuthorName(replyInfo.participantJidCitado, remoteJid);
+
+                // 🧵 THREAD TRACKING: Se o usuário está respondendo à Akira, vamos ver a quem Akira estava respondendo originalmente
+                if (replyInfo.ehRespostaAoBot && this.store && replyInfo.quotedMsgId) {
+                    try {
+                        const quotedMsg = await this.store.loadMessage(remoteJid, replyInfo.quotedMsgId);
+                        if (quotedMsg) {
+                            const quotedReplyInfo = await this.messageProcessor.extractReplyInfo(quotedMsg);
+                            if (quotedReplyInfo && quotedReplyInfo.isReply) {
+                                // Akira estava respondendo a alguém (ex: Fulano)
+                                replyInfo.replied_to_author_name = await this.resolveAuthorName(quotedReplyInfo.participantJidCitado, remoteJid);
+                                replyInfo.replied_to_text = quotedReplyInfo.textoMensagemCitada;
+                                this.logger.debug(`🧵 [THREAD] Detectado que ${nome} respondeu a Akira que estava falando com ${replyInfo.replied_to_author_name}`);
+                            }
+                        }
+                    } catch (err: any) {
+                        this.logger.debug(`⚠️ Falha ao rastrear thread: ${err.message}`);
+                    }
+                }
             }
 
             const isMention = textoFinal.includes(`@${connectedBotNumber}`) || textoFinal.includes(`@${envBotNumber}`);
@@ -1054,9 +1094,16 @@ class BotCore {
             const apelidosBot = this.config.DONO_APELIDOS || [];
 
             const textLower = textoFinal.toLowerCase();
-            const isCallingBot = textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido));
 
-            const nome = await this._resolveUserName(m, numero, remoteJid);
+            // isKnownBot já foi processado acima
+
+            const isCallingBot = !isKnownBot
+                ? textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido))
+                // Bot conhecido: só ativa por menção de JID ou reply directo — NUNCA por nome no texto
+                : isMention || isReplyToMe;
+
+
+            // O nome já foi resolvido acima
             const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
             const resolvedJid = this.moderationSystem?.resolveRealJid(participant) || participant;
 
@@ -1649,7 +1696,7 @@ class BotCore {
                 reply_metadata: replyMetadata,
                 is_bot_self_response: false,
                 is_group: ehGrupo,
-                sender_is_bot: false,
+                sender_is_bot: String(nome).startsWith('BOT:'),
                 message_id: m.key.id // ✅ IDEMPOTENCY KEY
             });
 
@@ -1872,58 +1919,179 @@ class BotCore {
 
     /**
      * Resolve nome real do usuário a partir de um JID
-     * Tentará: pushName → metadata do grupo → onWhatsApp → fallback
+     * Tentará: cache → pushName → metadata do grupo → onWhatsApp → número como fallback
+     * 
+     * ✅ MELHORIAS:
+     * - Cache local (5 min) para evitar múltiplas resoluções
+     * - JID normalization consistente para comparações
+     * - Fallback para número do usuário se nome não puder ser resolvido
+     * - Melhor logging para debugging
+     * - Tratamento robusto de JIDs malformados ou inválidos
      */
-    private async resolveAuthorName(jid: string, remoteJid: string): Promise<string> {
-        if (!jid || jid === 'desconhecido') return 'Usuário';
-
-        // 1. Verificar se é o próprio bot
-        const botJid = JidUtils.normalize(this.sock?.user?.id);
-        if (JidUtils.normalize(jid) === botJid) {
-            return this.config.BOT_NAME || 'Akira';
+    private async resolveAuthorName(jid: string, remoteJid: string, pushName?: string): Promise<string> {
+        // ✅ BUG FIX: Não retornar 'Usuário' diretamente se jid é 'desconhecido'
+        // Em vez disso, tenta resolver o número real do JID primeiro
+        if (!jid || jid.trim() === '') {
+            this.logger.warn('⚠️ [NAME RESOLVE] JID vazio recebido, retornando fallback');
+            return 'Usuário';
         }
 
-        // 2. Se for grupo, tentar buscar nos metadados
-        const isGroup = remoteJid?.endsWith('@g.us');
-        if (isGroup && this.sock) {
-            try {
-                const metadata = await this.sock.groupMetadata(remoteJid);
-                const member = metadata.participants.find((p: any) => JidUtils.normalize(p.id) === JidUtils.normalize(jid));
-                if (member && member.notify && member.notify !== 'undefined' && member.notify !== '~') {
-                    return member.notify;
-                }
-                if (member && member.name) {
-                    return member.name;
-                }
-            } catch (e: any) {
-                this.logger?.debug(`⚠️ [NAME] Falha ao resolver nome no grupo: ${e.message}`);
-            }
-        }
-
-        // 3. Fallback: onWhatsApp (apenas para números reais)
-        if (this.sock && !jid.includes('@lid') && jid.includes('@s.whatsapp.net')) {
-            try {
-                const onWp = await this.sock.onWhatsApp(jid);
-                if (onWp && Array.isArray(onWp) && onWp.length > 0 && onWp[0].notify) {
-                    return onWp[0].notify;
-                }
-            } catch (e: any) {
-                this.logger?.debug(`⚠️ [NAME] Falha no onWhatsApp: ${e.message}`);
-            }
-        }
-
-        return 'Usuário';
-    }
-
-    private async _resolveUserName(m: any, numero: string, remoteJid: string): Promise<string> {
-        // Prioridade 1: pushName da mensagem direta (mais rápido)
-        const pushName = m.pushName;
+        // ✅ PASSO 1: Usar pushName se fornecido e válido
         if (pushName && pushName !== 'Usuário' && pushName.trim().length > 0) {
+            this.logger.debug(`✅ [NAME FOUND] pushName fornecido: ${pushName}`);
             return pushName;
         }
 
-        // Prioridade 2: Usar o resolver genérico
-        return await this.resolveAuthorName(m.key.participant || m.key.remoteJid, remoteJid);
+        // ✅ PASSO 1.5: Para JIDs "desconhecido", tentar extrair número dele
+        // Este é um caso especial onde o JID pode estar corrompido mas número pode estar implícito
+        if (jid === 'desconhecido' || jid.includes('undefined')) {
+            this.logger.warn(`⚠️ [NAME RESOLVE] JID corrompido: '${jid}' - não há número válido, retornando fallback`);
+            return 'Usuário';
+        }
+
+        // ✅ PASSO 2: Consultar cache (válido por 5 minutos)
+        const normalizedJid = JidUtils.normalize(jid);
+        const now = Date.now();
+        const cached = this.userNameCache.get(normalizedJid);
+        if (cached && (now - cached.timestamp < this.USER_NAME_CACHE_TTL_MS)) {
+            this.logger.debug(`✅ [NAME CACHE HIT] ${normalizedJid} → ${cached.name}`);
+            return cached.name;
+        }
+
+        // ✅ PASSO 3: Verificar se é o próprio bot
+        const botJid = JidUtils.normalize(this.sock?.user?.id);
+        if (normalizedJid === botJid) {
+            const botName = this.config.BOT_NAME || 'Akira';
+            this.userNameCache.set(normalizedJid, { name: botName, timestamp: now });
+            return botName;
+        }
+
+        let resolvedName = 'Usuário'; // Fallback padrão
+
+        // ✅ PASSO 4: Se for grupo, tentar buscar nos metadados do grupo
+        const isGroup = remoteJid?.endsWith('@g.us');
+        if (isGroup && this.sock) {
+            try {
+                this.logger.debug(`🔍 [NAME LOOKUP] Tentando metadata do grupo para ${normalizedJid}...`);
+                const metadata = await this.sock.groupMetadata(remoteJid);
+
+                if (metadata && Array.isArray(metadata.participants)) {
+                    // Procura exato de JID normalizado
+                    const member = metadata.participants.find((p: any) =>
+                        JidUtils.normalize(p.id) === normalizedJid
+                    );
+
+                    if (member) {
+                        // Prioridade: notify > name
+                        if (member.notify && member.notify !== 'undefined' && member.notify !== '~') {
+                            resolvedName = member.notify;
+                            this.logger.debug(`✅ [NAME FOUND] Grupo metadata (notify): ${normalizedJid} → ${resolvedName}`);
+                        } else if (member.name) {
+                            resolvedName = member.name;
+                            this.logger.debug(`✅ [NAME FOUND] Grupo metadata (name): ${normalizedJid} → ${resolvedName}`);
+                        }
+                    } else {
+                        this.logger.debug(`⚠️ [NAME LOOKUP] JID ${normalizedJid} não encontrado na metadata do grupo ${remoteJid}`);
+                        // 🆕 BUG FIX: Se não encontrou, tentar extrair o número e buscar por ele
+                        // Alguns WhatsApp clients enviam JID sem o prefixo @s.whatsapp.net
+                        const numberFromJid = JidUtils.getNumber(jid);
+                        if (numberFromJid) {
+                            const memberByNumber = metadata.participants.find((p: any) => {
+                                const pNumber = JidUtils.getNumber(p.id);
+                                return pNumber === numberFromJid;
+                            });
+                            if (memberByNumber) {
+                                if (memberByNumber.notify && memberByNumber.notify !== 'undefined') {
+                                    resolvedName = memberByNumber.notify;
+                                    this.logger.debug(`✅ [NAME FOUND] Grupo metadata por número: ${numberFromJid} → ${resolvedName}`);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: any) {
+                this.logger?.debug(`⚠️ [NAME LOOKUP] Falha ao resolver nome no grupo: ${e.message}`);
+            }
+        }
+
+        // ✅ PASSO 5: Se ainda não achou, tentar onWhatsApp (apenas para números reais)
+        if (resolvedName === 'Usuário' && this.sock && !jid.includes('@lid') && jid.includes('@s.whatsapp.net')) {
+            try {
+                this.logger.debug(`🔍 [NAME LOOKUP] Tentando onWhatsApp para ${normalizedJid}...`);
+                const onWp = await this.sock.onWhatsApp(jid);
+                if (onWp && Array.isArray(onWp) && onWp.length > 0 && onWp[0].notify) {
+                    resolvedName = onWp[0].notify;
+                    this.logger.debug(`✅ [NAME FOUND] onWhatsApp: ${normalizedJid} → ${resolvedName}`);
+                }
+            } catch (e: any) {
+                this.logger?.debug(`⚠️ [NAME LOOKUP] Falha no onWhatsApp: ${e.message}`);
+            }
+        }
+
+        // ✅ PASSO 6: Extrair número como último recurso (melhor que "Usuário")
+        if (resolvedName === 'Usuário') {
+            const number = JidUtils.getNumber(jid);
+            if (number && number.length >= 6) {
+                resolvedName = `+${number}`;
+                this.logger.warn(`⚠️ [NAME FALLBACK] Usando número para ${jid} → ${resolvedName}`);
+            }
+        }
+
+        // ✅ Armazenar no cache
+        this.userNameCache.set(normalizedJid, { name: resolvedName, timestamp: now });
+
+        // ✅ Limpar cache se ficou muito grande (previne memory leak)
+        if (this.userNameCache.size > 500) {
+            const entries = Array.from(this.userNameCache.entries());
+            // Remove 25% das entradas mais antigas
+            const toRemove = Math.floor(entries.length * 0.25);
+            entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+            for (let i = 0; i < toRemove; i++) {
+                this.userNameCache.delete(entries[i][0]);
+            }
+        }
+
+        return resolvedName;
+    }
+
+    private async _resolveUserName(m: any, numero: string, remoteJid: string): Promise<string> {
+        // ✅ Prioridade 1: pushName da mensagem direta (mais rápido e confiável)
+        // Para mensagens de áudio (voice notes), Baileys às vezes não popula pushName,
+        // então passamos como parâmetro explícito
+        const pushName = m.pushName;
+        if (pushName && pushName !== 'Usuário' && pushName.trim().length > 0) {
+            this.logger.debug(`✅ [_resolveUserName] Usando pushName: ${pushName}`);
+            return pushName;
+        }
+
+        // ✅ Prioridade 2: Tentar resolver via participant JID
+        let participantJid = m.key.participant || m.key.remoteJid;
+
+        // 🆕 BUG FIX: Se participant é 'desconhecido', tentar extrair do número
+        if (!participantJid || participantJid === 'desconhecido' || participantJid.includes('undefined')) {
+            // Se temos número real, construir um JID válido a partir dele
+            if (numero && numero !== 'desconhecido' && !numero.includes('undefined')) {
+                // Tentar normalizar o número para um JID válido
+                const cleanNumber = JidUtils.getNumber(numero);
+                if (cleanNumber) {
+                    participantJid = `${cleanNumber}@s.whatsapp.net`;
+                    this.logger.debug(`🔄 [_resolveUserName] Reconstruindo JID a partir do número: ${numero} → ${participantJid}`);
+                }
+            }
+        }
+
+        // ✅ Prioridade 3: Usar o resolver genérico com pushName como hint
+        // Agora passa pushName para que resolveAuthorName possa usá-lo se tiver sido setado
+        return await this.resolveAuthorName(participantJid || numero, remoteJid, pushName);
+    }
+
+    /**
+     * Verifica se o bot é admin no grupo atual
+     */
+    async _isBotAdmin(jid: string): Promise<boolean> {
+        if (!jid.endsWith('@g.us')) return false;
+        if (!this.groupManagement) return false;
+        return await this.groupManagement._isBotAdmin(jid);
     }
 
     async handleViolation(m: any, tipo: string, limitStatus?: any, resolvedJid?: string): Promise<void> {
@@ -1936,12 +2104,19 @@ class BotCore {
         this.logger.warn(`🚫 [VIOLAÇÃO] ${tipo} de ${participant} (${nome})`);
 
         try {
-            // 1. Deletar mensagem atual
-            await this.sock.sendMessage(jid, { delete: m.key });
+            // 1. Verificar se bot é admin antes de tentar deletar
+            const isBotAdmin = await this._isBotAdmin(jid);
 
-            // 2. Se for FLOOD, deletar TODAS as mensagens recentes do usuário (últimos 5 segundos)
-            if (tipo.startsWith('flood_')) {
-                await this._deleteRecentMessages(jid, participant, 5, m.key.id);
+            if (isBotAdmin) {
+                // Deletar mensagem atual
+                await this.sock.sendMessage(jid, { delete: m.key });
+
+                // 2. Se for FLOOD, deletar TODAS as mensagens recentes do usuário (últimos 5 segundos)
+                if (tipo.startsWith('flood_')) {
+                    await this._deleteRecentMessages(jid, participant, 5, m.key.id);
+                }
+            } else {
+                this.logger.warn(`⚠️ [MODERAÇÃO] Akira não é admin em ${jid}. Não foi possível deletar mensagem.`);
             }
         } catch (delError: any) {
             this.logger.debug(`Não foi possível deletar a mensagem: ${delError.message}`);
@@ -1950,11 +2125,20 @@ class BotCore {
         try {
             // 2. Notificar e agir com base no tipo
             if (tipo === 'link') {
+                const isBotAdmin = await this._isBotAdmin(jid);
+
                 // 1. Notificar
-                await this.sock.sendMessage(jid, {
-                    text: `🚫 *BANIDO POR ANTILINK* 🚫\n\n@${numeroReal}, você enviou um link proibido! Foi removido do grupo e banido da Akira.`,
-                    mentions: [participant]
-                });
+                if (isBotAdmin) {
+                    await this.sock.sendMessage(jid, {
+                        text: `🚫 *BANIDO POR ANTILINK* 🚫\n\n@${numeroReal}, você enviou um link proibido! Foi removido do grupo e banido da Akira.`,
+                        mentions: [participant]
+                    });
+                } else {
+                    await this.sock.sendMessage(jid, {
+                        text: `🚫 *LINK DETECTADO* 🚫\n\n@${numeroReal}, o envio de links é proibido! Eu deveria te remover, mas não sou admin deste grupo.\n\nAdmins, por favor, ajudem.`,
+                        mentions: [participant]
+                    });
+                }
 
                 // 2. Adicionar à Blacklist (Banimento Global)
                 if (this.moderationSystem) {
@@ -1966,18 +2150,33 @@ class BotCore {
                     );
                 }
 
-                // 3. Remover do grupo
-                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                // 3. Remover do grupo (se admin)
+                if (isBotAdmin) {
+                    await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                }
             } else if (tipo === 'mute') {
                 if (this.moderationSystem) {
                     const count = this.moderationSystem.incrementMuteViolation(jid, participant);
+                    const isBotAdmin = await this._isBotAdmin(jid);
+
                     if (count >= 3) {
-                        await this.sock.sendMessage(jid, { text: `🚫 *${nome} removido por ignorar o silenciamento (3 avisos)!*` });
-                        await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                        if (isBotAdmin) {
+                            await this.sock.sendMessage(jid, { text: `🚫 *${nome} removido por ignorar o silenciamento (3 avisos)!*` });
+                            await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                        } else {
+                            await this.sock.sendMessage(jid, {
+                                text: `⚠️ *AVISO CRÍTICO* ⚠️\n\n@${numeroReal} deveria ser removido por ignorar o silenciamento, mas eu não sou admin deste grupo!\n\nAdmins, por favor, tomem as providências.`,
+                                mentions: [participant]
+                            });
+                        }
                     } else {
-                        // A mensagem já foi deletada no início de handleViolation
+                        // A mensagem já foi deletada no início de handleViolation (se bot for admin)
+                        let warningText = `⚠️ *@${numeroReal}*, você está silenciado! Se continuar enviando mensagens (*${count}/3*), será removido.`;
+                        if (!isBotAdmin) {
+                            warningText += `\n\n_(Nota: Minha capacidade de apagar mensagens está desativada pois não sou admin)_`;
+                        }
                         await this.sock.sendMessage(jid, {
-                            text: `⚠️ *@${numeroReal}*, você está silenciado! Se continuar enviando mensagens (*${count}/3*), será removido.`,
+                            text: warningText,
                             mentions: [participant]
                         });
                     }
@@ -2013,11 +2212,19 @@ class BotCore {
                     mentions: [participant]
                 });
             } else if (tipo === 'flood_kick') {
-                await this.sock.sendMessage(jid, {
-                    text: `🚫 *REMOVIDO POR FLOOD* 🚫\n\n@${numeroReal} foi removido por ignorar os avisos de flood e atingir o limite de avisos.`,
-                    mentions: [participant]
-                });
-                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                const isBotAdmin = await this._isBotAdmin(jid);
+                if (isBotAdmin) {
+                    await this.sock.sendMessage(jid, {
+                        text: `🚫 *REMOVIDO POR FLOOD* 🚫\n\n@${numeroReal} foi removido por ignorar os avisos de flood e atingir o limite de avisos.`,
+                        mentions: [participant]
+                    });
+                    await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                } else {
+                    await this.sock.sendMessage(jid, {
+                        text: `⚠️ *AVISO DE FLOOD CRÍTICO* ⚠️\n\n@${numeroReal} atingiu o limite de avisos de flood e deveria ser removido, mas não sou admin!\n\nAdmins, por favor, tomem as providências.`,
+                        mentions: [participant]
+                    });
+                }
             } else if (tipo === 'badword_mute') {
                 const muteMin = limitStatus?.muteMinutes || 5;
                 const muteCount = limitStatus?.muteCount || 1;
@@ -2026,11 +2233,19 @@ class BotCore {
                     mentions: [participant]
                 });
             } else if (tipo === 'badword_kick') {
-                await this.sock.sendMessage(jid, {
-                    text: `🚫 *BANIDO POR PALAVRÃO REINCIDENTE* 🚫\n\n@${numeroReal} foi removido do grupo por ignorar os avisos de linguagem ofensiva.`,
-                    mentions: [participant]
-                });
-                await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                const isBotAdmin = await this._isBotAdmin(jid);
+                if (isBotAdmin) {
+                    await this.sock.sendMessage(jid, {
+                        text: `🚫 *BANIDO POR PALAVRÃO REINCIDENTE* 🚫\n\n@${numeroReal} foi removido do grupo por ignorar os avisos de linguagem ofensiva.`,
+                        mentions: [participant]
+                    });
+                    await this.sock.groupParticipantsUpdate(jid, [participant], 'remove');
+                } else {
+                    await this.sock.sendMessage(jid, {
+                        text: `🚫 *REINCIDÊNCIA DE PALAVRÕES* 🚫\n\n@${numeroReal} atingiu o limite de infrações por linguagem ofensiva e deveria ser removido, mas não sou admin!\n\nAdmins, por favor, ajudem.`,
+                        mentions: [participant]
+                    });
+                }
             } else {
                 await this.sock.sendMessage(jid, {
                     text: `🚫 *ANTI-${tipo.toUpperCase()}* 🚫\n\nEste tipo de mídia não é permitido no momento.`,
@@ -2339,7 +2554,11 @@ class BotCore {
 
         for (const actionData of remoteActions) {
             const { action, params, reason } = actionData;
-            const jid = m.key.remoteJid;
+            let jid = m.key.remoteJid;
+            // ✅ CORREÇÃO: Fallback para o dono se o JID for 'system' (ações autónomas de sistema)
+            if (jid === 'system') {
+                jid = `${this.config.DONO_USERS[0]?.numero || '244937035662'}@s.whatsapp.net`;
+            }
             const userId = m.key.participant || m.key.remoteJid;
             const ehGrupo = jid.endsWith('@g.us');
 
@@ -3649,19 +3868,25 @@ class BotCore {
                         // ══ 1. VERIFICAÇÃO DE ADMIN (INTERNA) ══
                         let akiraIsAdmin = false;
                         try {
-                            if (targetGroup.endsWith('@g.us') && this.sock?.user) {
-                                const myJid = this.sock.user.id.replace(/:\d+/, '') + '@s.whatsapp.net';
-                                const meta = await this.sock.groupMetadata(targetGroup);
-                                akiraIsAdmin = meta?.participants?.some(
-                                    (p: any) => p.id === myJid && (p.admin === 'admin' || p.admin === 'superadmin')
-                                ) ?? false;
+                            if (targetGroup.endsWith('@g.us')) {
+                                akiraIsAdmin = await this.groupManagement?._isBotAdmin(targetGroup);
+                            } else {
+                                akiraIsAdmin = true; // Em PV não precisa ser admin
                             }
                         } catch (adminCheckErr: any) {
                             this.logger.warn(`⚠️ [AUTO-ACTION] Não foi possível verificar admin: ${adminCheckErr.message}`);
                         }
 
                         if (!akiraIsAdmin && targetGroup.endsWith('@g.us')) {
-                            this.logger.warn(`⚠️ [AUTO-ACTION] Ignorei '${cmd}' — não sou admin em ${targetGroup}`);
+                            const failMsg = `⚠️ [AUTO-ACTION] Negado: '${cmd}' em ${targetGroup} - Falta de Permissões de Admin.`;
+                            this.logger.warn(failMsg);
+
+                            // Notifica o dono sobre o erro de permissão se notify_owner for true
+                            if (notify_owner) {
+                                await this.sock.sendMessage(`244937035662@s.whatsapp.net`, {
+                                    text: `🚨 *ERRO DE AUTONOMIA*\nAção: \`${cmd}\`\nGrupo: ${targetGroup}\nErro: Akira não é admin neste grupo.`
+                                });
+                            }
                             break;
                         }
 
@@ -3885,6 +4110,11 @@ class BotCore {
      * Como o Baileys não suporta streaming de áudio real-time, 
      * rejeitamos a chamada e educamos o usuário a usar notas de voz (STT/TTS).
      */
+    /**
+     * 📞 CALL HANDLER: Intercepta chamadas e responde via chat
+     * Como o Baileys não suporta streaming de áudio real-time, 
+     * rejeitamos a chamada e educamos o usuário a usar notas de voz (STT/TTS).
+     */
     private async handleCall(call: any): Promise<void> {
         const { from, id, status } = call;
 
@@ -3897,17 +4127,23 @@ class BotCore {
                     await this.sock.rejectCall(id, from).catch(() => { });
                 }
 
+                // Pequeno delay para o usuário ver que a chamada foi "encerrada" e olhar o chat
+                await delay(1000);
+
                 // 2. Simula "gravando áudio" para dar imersão
                 if (this.presenceSimulator) {
-                    await this.presenceSimulator.simulatePresence(from, 'recording', 3000).catch(() => { });
+                    await this.presenceSimulator.simulatePresence(from, 'recording', 5000).catch(() => { });
                 }
 
                 // 3. Envia a mensagem de texto
-                const textMsg = this.config.CALL_REJECT_MESSAGE;
+                const textMsg = this.config.CALL_REJECT_MESSAGE || "Olá! No momento não posso atender chamadas de voz. Por favor, envie uma mensagem de texto ou áudio que eu te respondo em segundos! 🎤✨";
+
                 await this.sock.sendMessage(from, {
                     text: textMsg,
                     mentions: [from]
                 }).catch(() => { });
+
+                await delay(500);
 
                 // 4. Envia a mesma mensagem em áudio (TTS) para reforçar o modo de voz
                 if (this.config.FEATURE_TTS_ENABLED && this.audioProcessor) {
