@@ -120,25 +120,55 @@ class MessageProcessor {
     }
 
     /**
-     * Tenta resolver LID para número real via onWhatsApp lookup
-     * e groupMetadata participants lookup.
+     * Tenta resolver LID para número real via onWhatsApp lookup com timeout
+     * Para Railway/VPS multi-device: adiciona fallbacks robustos
      */
     private async _resolveLidToReal(lid: string, sock?: any): Promise<string | null> {
         if (!sock) return null;
         try {
-            // Método 1: sock.onWhatsApp — tenta encontrar o número real associado
-            const onWp = await sock.onWhatsApp(lid);
-            if (onWp && Array.isArray(onWp) && onWp.length > 0) {
-                const first = onWp[0];
-                if (first.jid && !String(first.jid).includes('@lid')) {
-                    const num = JidUtils.getNumber(String(first.jid));
-                    if (this._isValidPhoneNumber(num)) return num;
+            // ✅ MÉTODO 1: sock.onWhatsApp com timeout (não travar em Railway)
+            try {
+                const onWpPromise = sock.onWhatsApp(lid);
+                // Timeout de 2 segundos para não travar
+                const onWp = await Promise.race([
+                    onWpPromise,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('onWhatsApp timeout')), 2000))
+                ]);
+                
+                if (onWp && Array.isArray(onWp) && onWp.length > 0) {
+                    const first = onWp[0];
+                    if (first.jid && !String(first.jid).includes('@lid')) {
+                        const num = JidUtils.getNumber(String(first.jid));
+                        if (this._isValidPhoneNumber(num)) {
+                            this.logger?.debug(`✅ [LID → REAL] onWhatsApp resolveu: ${num}`);
+                            return num;
+                        }
+                    }
+                }
+            } catch (onWpErr: any) {
+                this.logger?.debug(`⚠️ [LID] onWhatsApp timeout/falhou em Railway: ${onWpErr.message}`);
+            }
+            
+            // ✅ MÉTODO 2: Extrair número do próprio LID (Baileys sometimes encodes the number)
+            // Formato: "123456789012@lid" ou "123456789012:0@lid"
+            const lidMatch = lid.match(/^(\d+)(?::0)?@lid/);
+            if (lidMatch && lidMatch[1]) {
+                const potentialNumber = lidMatch[1];
+                if (this._isValidPhoneNumber(potentialNumber)) {
+                    this.logger?.debug(`✅ [LID PARSE] Extraído do próprio LID: ${potentialNumber}`);
+                    return potentialNumber;
                 }
             }
+            
+            // ✅ MÉTODO 3: Se está em um chat, tenta pegar do participantJid alternativo
+            // (This would need message context, but we don't have it here - skip for now)
+            
+            this.logger?.debug(`❌ [LID] Não conseguiu resolver ${lid} para número real em Railway`);
+            return null;
         } catch (e: any) {
-            this.logger?.debug(`🔍 [LID] onWhatsApp falhou: ${e.message}`);
+            this.logger?.debug(`🔍 [LID ERROR] Erro ao resolver: ${e.message}`);
+            return null;
         }
-        return null;
     }
 
     /**

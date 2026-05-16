@@ -94,6 +94,7 @@ import ImageEffects from './ImageEffects.js';
 import PermissionManager from './PermissionManager.js';
 import JidUtils from './JidUtils.js';
 import SecurityLogger from './SecurityLogger.js';
+import SafeSessionRepair from './SafeSessionRepair.js';
 
 class BotCore {
     public config: any;
@@ -130,6 +131,7 @@ class BotCore {
     public permissionManager: any;
     public commandHandler: any;
     public securityLogger: any;
+    public sessionRepair: SafeSessionRepair | null = null;
 
     // Event listeners
     public eventListeners: {
@@ -276,6 +278,12 @@ class BotCore {
             this._selfUpdateYtdlp().catch(() => { });
 
             this.securityLogger = new SecurityLogger(this.config);
+
+            // ✅ SafeSessionRepair: reparo cirúrgico sem apagar creds.json
+            this.sessionRepair = new SafeSessionRepair(
+                this.config.AUTH_FOLDER,
+                this.logger
+            );
             this.apiClient = new APIClient(this.logger);
             this.audioProcessor = new AudioProcessor(this.logger);
             this.mediaProcessor = new MediaProcessor(this.logger);
@@ -566,23 +574,29 @@ class BotCore {
 
                         this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | ehGrupo=${ehGrupo} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
-                        // 🔴 BUG FIX: Bad MAC Error (type=2) não pode ser resolvido com retry
-                        // Bad MAC = erro criptográfico real (chaves desincronizadas)
-                        // Retry vai falhar de novo, então apenas ignorar e pedir reenvio manual
-                        if (!ehGrupo) {
-                            // PV com STUB: Não fazer retry - é um erro criptográfico
-                            // Usuário precisa reenviar ou reiniciar chat com o bot
-                            this.logger.warn(`⚠️ [PV BAD MAC] Erro de descriptografia - chaves desincronizadas com ${jid}`);
-                            this.logger.info(`📍 [PV ACTION] Usuário deve reenviar mensagem ou reiniciar o chat.`);
-                            this.stubRetryCount.delete(m.key.id || 'pv-unknown');
-                            continue;  // Pular para próxima mensagem
-                        } else {
-                            // 🔴 BUG FIX: Grupo com stub - IGNORAR
-                            // O retry não funciona porque as chaves não estão carregadas.
-                            // Deixar Baileys recuperar naturalmente quando remetente reenviar.
-                            this.logger.warn(`⚠️ [STUB] Ignorando mensagem de grupo sem chaves. Remetente será solicitado a reenviar.`);
-                            continue;  // Pular para próxima mensagem
+                        // 🔴 Newsletters e broadcasts: isolar completamente do pipeline de reparo
+                        // (newsletters nunca têm sessões para reparar e causariam instabilidade)
+                        const ehNewsletter = String(jid).endsWith('@newsletter');
+                        const ehBroadcast = jid === 'status@broadcast';
+                        if (ehNewsletter || ehBroadcast) {
+                            this.logger.warn(`⚠️ [STUB-IGNORED] Stub de newsletter/broadcast ignorado: ${jid}`);
+                            continue;
                         }
+
+                        // 🔧 REPARO CIRUÜRGICO: apaga session files deste JID específico
+                        // creds.json é estritamente protegido pelo SafeSessionRepair
+                        if (this.sessionRepair) {
+                            const repaired = await this.sessionRepair.repair(jid);
+                            if (repaired) {
+                                this.logger.info(`🔧 [SESSION REPAIR] Reparo aplicado para ${jid}. Baileys reconstituirá as chaves.`);
+                            } else {
+                                this.logger.error(`🛑 [SESSION REPAIR] Threshold atingido para ${jid}. Não é possível reparar mais. Usuário deve reiniciar o chat.`);
+                            }
+                        } else {
+                            this.logger.warn(`⚠️ [BAD MAC] sem sessionRepair instanciado. Ignorando ${jid}.`);
+                        }
+                        // Stub não tem conteúdo — sempre pular para próxima mensagem
+                        continue;
                     }
 
                     await this.processMessage(m);
