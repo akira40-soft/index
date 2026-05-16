@@ -2502,7 +2502,7 @@ class BotCore {
      * Tenta descobrir o número real (JID) por trás de uma identidade (pode ser um LID)
      * Implementa 3 métodos de resolução em cascata
      */
-    private async resolveIdentity(jid: string): Promise<string> {
+    public async resolveIdentity(jid: string): Promise<string> {
         if (!jid) return '';
         const cleanJid = jid.split(':')[0];
 
@@ -2515,6 +2515,25 @@ class BotCore {
             if (resolved && resolved.includes('@s.whatsapp.net')) {
                 this.logger.debug(`✅ [ID RESOLVED] Mapa Local: ${cleanJid} -> ${resolved}`);
                 return resolved;
+            }
+        }
+
+        // MÉTODO 1.5: Busca Profunda na Memória do Baileys (Store Contacts)
+        // Isso força a captura do PN se o WhatsApp já enviou o contato antes
+        if (this.store && this.store.contacts && cleanJid.includes('@lid')) {
+            try {
+                for (const key in this.store.contacts) {
+                    const contact = this.store.contacts[key];
+                    if (contact && contact.lid === cleanJid && key.includes('@s.whatsapp.net')) {
+                        this.logger.info(`✅ [ID RESOLVED] Store Baileys: ${cleanJid} -> ${key}`);
+                        if (this.moderationSystem) {
+                            this.moderationSystem.updateLidMapping(cleanJid, key);
+                        }
+                        return key;
+                    }
+                }
+            } catch (e: any) {
+                this.logger.debug(`⚠️ Falha na busca da Store Baileys: ${e.message}`);
             }
         }
 
