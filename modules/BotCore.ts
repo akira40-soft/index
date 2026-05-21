@@ -94,7 +94,6 @@ import ImageEffects from './ImageEffects.js';
 import PermissionManager from './PermissionManager.js';
 import JidUtils from './JidUtils.js';
 import SecurityLogger from './SecurityLogger.js';
-import SafeSessionRepair from './SafeSessionRepair.js';
 
 class BotCore {
     public config: any;
@@ -131,7 +130,6 @@ class BotCore {
     public permissionManager: any;
     public commandHandler: any;
     public securityLogger: any;
-    public sessionRepair: SafeSessionRepair | null = null;
 
     // Event listeners
     public eventListeners: {
@@ -278,12 +276,6 @@ class BotCore {
             this._selfUpdateYtdlp().catch(() => { });
 
             this.securityLogger = new SecurityLogger(this.config);
-
-            // ✅ SafeSessionRepair: reparo cirúrgico sem apagar creds.json
-            this.sessionRepair = new SafeSessionRepair(
-                this.config.AUTH_FOLDER,
-                this.logger
-            );
             this.apiClient = new APIClient(this.logger);
             this.audioProcessor = new AudioProcessor(this.logger);
             this.mediaProcessor = new MediaProcessor(this.logger);
@@ -574,29 +566,23 @@ class BotCore {
 
                         this.logger.warn(`⚠️ [STUB] messageStubType=${m.messageStubType} de ${jid} | ehGrupo=${ehGrupo} | Params: ${JSON.stringify(m.messageStubParameters)}`);
 
-                        // 🔴 Newsletters e broadcasts: isolar completamente do pipeline de reparo
-                        // (newsletters nunca têm sessões para reparar e causariam instabilidade)
-                        const ehNewsletter = String(jid).endsWith('@newsletter');
-                        const ehBroadcast = jid === 'status@broadcast';
-                        if (ehNewsletter || ehBroadcast) {
-                            this.logger.warn(`⚠️ [STUB-IGNORED] Stub de newsletter/broadcast ignorado: ${jid}`);
-                            continue;
-                        }
-
-                        // 🔧 REPARO CIRUÜRGICO: apaga session files deste JID específico
-                        // creds.json é estritamente protegido pelo SafeSessionRepair
-                        if (this.sessionRepair) {
-                            const repaired = await this.sessionRepair.repair(jid);
-                            if (repaired) {
-                                this.logger.info(`🔧 [SESSION REPAIR] Reparo aplicado para ${jid}. Baileys reconstituirá as chaves.`);
-                            } else {
-                                this.logger.error(`🛑 [SESSION REPAIR] Threshold atingido para ${jid}. Não é possível reparar mais. Usuário deve reiniciar o chat.`);
-                            }
+                        // 🔴 BUG FIX: Bad MAC Error (type=2) não pode ser resolvido com retry
+                        // Bad MAC = erro criptográfico real (chaves desincronizadas)
+                        // Retry vai falhar de novo, então apenas ignorar e pedir reenvio manual
+                        if (!ehGrupo) {
+                            // PV com STUB: Não fazer retry - é um erro criptográfico
+                            // Usuário precisa reenviar ou reiniciar chat com o bot
+                            this.logger.warn(`⚠️ [PV BAD MAC] Erro de descriptografia - chaves desincronizadas com ${jid}`);
+                            this.logger.info(`📍 [PV ACTION] Usuário deve reenviar mensagem ou reiniciar o chat.`);
+                            this.stubRetryCount.delete(m.key.id || 'pv-unknown');
+                            continue;  // Pular para próxima mensagem
                         } else {
-                            this.logger.warn(`⚠️ [BAD MAC] sem sessionRepair instanciado. Ignorando ${jid}.`);
+                            // 🔴 BUG FIX: Grupo com stub - IGNORAR
+                            // O retry não funciona porque as chaves não estão carregadas.
+                            // Deixar Baileys recuperar naturalmente quando remetente reenviar.
+                            this.logger.warn(`⚠️ [STUB] Ignorando mensagem de grupo sem chaves. Remetente será solicitado a reenviar.`);
+                            continue;  // Pular para próxima mensagem
                         }
-                        // Stub não tem conteúdo — sempre pular para próxima mensagem
-                        continue;
                     }
 
                     await this.processMessage(m);
@@ -1066,37 +1052,10 @@ class BotCore {
             const connectedBotNumber = JidUtils.getNumber(this.BOT_JID || '');
             const envBotNumber = JidUtils.getNumber(String(this.config.BOT_NUMERO_REAL));
 
-            // ── 🤖 TAGGING DE BOT CONHECIDO (Anti-Hallucination) ─────────────────────
-            const senderNumeroClean = JidUtils.cleanPhoneNumber(numero) || numero;
-            const isKnownBot = this.config.KNOWN_BOTS?.some(
-                (b: string) => JidUtils.cleanPhoneNumber(b) === senderNumeroClean || b === senderNumeroClean
-            ) ?? false;
-
-            const rawNome = await this._resolveUserName(m, numero, remoteJid);
-            const nome = isKnownBot ? `BOT:${rawNome}` : rawNome;
-
             const replyInfo = await this.messageProcessor.extractReplyInfo(m);
             // Se for reply, vamos tentar resolver o nome do autor citado para enriquecer o contexto
             if (replyInfo && replyInfo.isReply && replyInfo.participantJidCitado) {
                 replyInfo.quoted_author_name = await this.resolveAuthorName(replyInfo.participantJidCitado, remoteJid);
-
-                // 🧵 THREAD TRACKING: Se o usuário está respondendo à Akira, vamos ver a quem Akira estava respondendo originalmente
-                if (replyInfo.ehRespostaAoBot && this.store && replyInfo.quotedMsgId) {
-                    try {
-                        const quotedMsg = await this.store.loadMessage(remoteJid, replyInfo.quotedMsgId);
-                        if (quotedMsg) {
-                            const quotedReplyInfo = await this.messageProcessor.extractReplyInfo(quotedMsg);
-                            if (quotedReplyInfo && quotedReplyInfo.isReply) {
-                                // Akira estava respondendo a alguém (ex: Fulano)
-                                replyInfo.replied_to_author_name = await this.resolveAuthorName(quotedReplyInfo.participantJidCitado, remoteJid);
-                                replyInfo.replied_to_text = quotedReplyInfo.textoMensagemCitada;
-                                this.logger.debug(`🧵 [THREAD] Detectado que ${nome} respondeu a Akira que estava falando com ${replyInfo.replied_to_author_name}`);
-                            }
-                        }
-                    } catch (err: any) {
-                        this.logger.debug(`⚠️ Falha ao rastrear thread: ${err.message}`);
-                    }
-                }
             }
 
             const isMention = textoFinal.includes(`@${connectedBotNumber}`) || textoFinal.includes(`@${envBotNumber}`);
@@ -1109,7 +1068,25 @@ class BotCore {
 
             const textLower = textoFinal.toLowerCase();
 
-            // isKnownBot já foi processado acima
+            // ── 🤖 TAGGING DE BOT CONHECIDO (Anti-Hallucination) ─────────────────────
+            // Se o remetente é um bot registado (ex: ISA IA), taggeamos o nome com "BOT:"
+            // para que o LLM saiba que está a ser interpelado por outro bot, não por um humano.
+            const senderNumeroClean = JidUtils.cleanPhoneNumber(numero) || numero;
+            let isKnownBot = this.config.KNOWN_BOTS?.some(
+                (b: string) => JidUtils.cleanPhoneNumber(b) === senderNumeroClean || b === senderNumeroClean
+            ) ?? false;
+
+            // Enriquecimento dinâmico com bots.json
+            try {
+                const botsJson = this._readBotsConfig();
+                for (const key of Object.keys(botsJson)) {
+                    const cleanKey = JidUtils.cleanPhoneNumber(key) || key;
+                    if (cleanKey === senderNumeroClean) {
+                        isKnownBot = true;
+                        break;
+                    }
+                }
+            } catch (err: any) {}
 
             const isCallingBot = !isKnownBot
                 ? textLower.includes(botName) || apelidosBot.some((apelido: string) => textLower.includes(apelido))
@@ -1117,7 +1094,10 @@ class BotCore {
                 : isMention || isReplyToMe;
 
 
-            // O nome já foi resolvido acima
+            let nome = await this._resolveUserName(m, numero, remoteJid);
+            if (isKnownBot && !nome.startsWith('BOT:')) {
+                nome = `BOT:${nome}`;
+            }
             const numeroReal = JidUtils.normalizeUserNumber(numero) || 'desconhecido';
             const resolvedJid = this.moderationSystem?.resolveRealJid(participant) || participant;
 
@@ -1253,7 +1233,7 @@ class BotCore {
 
             if (isCommand) {
                 if (shouldLog) this.logger.debug(`🔹 [PIPELINE] comando detectado: ${textoFinal.substring(0, 50)}`);
-                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo);
+                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, false, isKnownBot);
                 return;
             }
 
@@ -1312,10 +1292,10 @@ class BotCore {
             } else if (replyInfo?.quotedType === 'audio') {
                 // Usuário enviou texto respondendo a um áudio -> força resposta em áudio (TTS)
                 this.logger.info(`🎤 [REPLY TO AUDIO] Texto para áudio - forçando TTS`);
-                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, true);
+                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, true, isKnownBot);
             } else {
                 // 3. Caso padrão: Texto puro ou comandos
-                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo);
+                await this.handleTextMessage(m, nome, numeroReal, textoFinal, replyInfo, ehGrupo, false, isKnownBot);
             }
         } catch (error: any) {
             const errMsg = error?.message || String(error) || 'erro desconhecido';
@@ -1591,14 +1571,14 @@ class BotCore {
             this.logger.info(`📝 Transcrição: ${transcricao.texto.substring(0, 80)}`);
 
             // foiAudio=ativarRespostaEmAudio: handleTextMessage sabe se deve responder em voz
-            await this.handleTextMessage(m, nome, numeroReal, transcricao.texto, replyInfo, ehGrupo, ativarRespostaEmAudio);
+            await this.handleTextMessage(m, nome, numeroReal, transcricao.texto, replyInfo, ehGrupo, ativarRespostaEmAudio, false);
         } catch (error: any) {
             this.logger.error('❌ Erro áudio interno:', error.message);
             if (this.presenceSimulator) await this.presenceSimulator.stop(m.key.remoteJid).catch(() => { });
         }
     }
 
-    async handleTextMessage(m: any, nome: string, numeroReal: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio: boolean = false): Promise<void> {
+    async handleTextMessage(m: any, nome: string, numeroReal: string, texto: string, replyInfo: any, ehGrupo: boolean, foiAudio: boolean = false, isKnownBot: boolean = false): Promise<void> {
         try {
             // 🛡️ SECURITY CHECK: Sanitização de input antes de qualquer processamento
             if (this._sanitizeInput(texto, nome, m.key.remoteJid)) {
@@ -1710,7 +1690,7 @@ class BotCore {
                 reply_metadata: replyMetadata,
                 is_bot_self_response: false,
                 is_group: ehGrupo,
-                sender_is_bot: String(nome).startsWith('BOT:'),
+                sender_is_bot: isKnownBot, // ✅ BOT ROUTING: true se remetente é bot registado em bots.json
                 message_id: m.key.id // ✅ IDEMPOTENCY KEY
             });
 
@@ -1988,13 +1968,13 @@ class BotCore {
             try {
                 this.logger.debug(`🔍 [NAME LOOKUP] Tentando metadata do grupo para ${normalizedJid}...`);
                 const metadata = await this.sock.groupMetadata(remoteJid);
-
+                
                 if (metadata && Array.isArray(metadata.participants)) {
                     // Procura exato de JID normalizado
-                    const member = metadata.participants.find((p: any) =>
+                    const member = metadata.participants.find((p: any) => 
                         JidUtils.normalize(p.id) === normalizedJid
                     );
-
+                    
                     if (member) {
                         // Prioridade: notify > name
                         if (member.notify && member.notify !== 'undefined' && member.notify !== '~') {
@@ -2053,7 +2033,7 @@ class BotCore {
 
         // ✅ Armazenar no cache
         this.userNameCache.set(normalizedJid, { name: resolvedName, timestamp: now });
-
+        
         // ✅ Limpar cache se ficou muito grande (previne memory leak)
         if (this.userNameCache.size > 500) {
             const entries = Array.from(this.userNameCache.entries());
@@ -2080,7 +2060,7 @@ class BotCore {
 
         // ✅ Prioridade 2: Tentar resolver via participant JID
         let participantJid = m.key.participant || m.key.remoteJid;
-
+        
         // 🆕 BUG FIX: Se participant é 'desconhecido', tentar extrair do número
         if (!participantJid || participantJid === 'desconhecido' || participantJid.includes('undefined')) {
             // Se temos número real, construir um JID válido a partir dele
@@ -2304,9 +2284,51 @@ class BotCore {
     }
 
     /**
+     * Lê a configuração dos bots (bots.json) de forma resiliente
+     */
+    private _readBotsConfig(): any {
+        let botsJson = {};
+        try {
+            const possiblePaths = [
+                path.resolve(process.cwd(), '../AKIRA-SOFTEDGE/bots.json'),
+                path.resolve(process.cwd(), 'bots.json'),
+                path.resolve(process.cwd(), './AKIRA-SOFTEDGE/bots.json'),
+            ];
+            for (const p of possiblePaths) {
+                if (fs.existsSync(p)) {
+                    botsJson = JSON.parse(fs.readFileSync(p, 'utf-8'));
+                    break;
+                }
+            }
+        } catch (err: any) {
+            this.logger.warn(`⚠️ Erro ao carregar bots.json: ${err.message}`);
+        }
+        return botsJson;
+    }
+
+    /**
      * Lógica central de decisão de resposta da IA
      */
     shouldRespondToAI(m: any, texto: string, ehGrupo: boolean, replyInfo: any, nomeRemetente: string = '', numeroRemetente: string = ''): boolean {
+        // ✅ 0. DETECÇÃO DE BOT ATIVO (Bot-to-Bot Routing)
+        // Se o remetente for um bot cadastrado em bots.json com a ação "respond", nós respondemos!
+        try {
+            const botsJson = this._readBotsConfig();
+            const cleanNum = JidUtils.cleanPhoneNumber(numeroRemetente) || numeroRemetente;
+            for (const key of Object.keys(botsJson)) {
+                const cleanKey = JidUtils.cleanPhoneNumber(key) || key;
+                if (cleanKey === cleanNum) {
+                    const botDef = botsJson[key];
+                    if (botDef && botDef.action === 'respond') {
+                        this.logger.info(`🤖 [BOT ROUTING] Respondendo ao bot conhecido em ${ehGrupo ? 'grupo' : 'pv'}: ${botDef.name || key} (${numeroRemetente})`);
+                        return true;
+                    }
+                }
+            }
+        } catch (err: any) {
+            this.logger.warn(`⚠️ Erro na verificação de bots conhecidos no shouldRespondToAI: ${err.message}`);
+        }
+
         // ✅ PV: SEMPRE responde (é conversa direcionada por definição)
         if (!ehGrupo) {
             // 🔴 BUG FIX #2: Log diagnosticado + DOUBLE-CHECK para garantir decisão
@@ -2502,7 +2524,7 @@ class BotCore {
      * Tenta descobrir o número real (JID) por trás de uma identidade (pode ser um LID)
      * Implementa 3 métodos de resolução em cascata
      */
-    public async resolveIdentity(jid: string): Promise<string> {
+    private async resolveIdentity(jid: string): Promise<string> {
         if (!jid) return '';
         const cleanJid = jid.split(':')[0];
 
@@ -2515,25 +2537,6 @@ class BotCore {
             if (resolved && resolved.includes('@s.whatsapp.net')) {
                 this.logger.debug(`✅ [ID RESOLVED] Mapa Local: ${cleanJid} -> ${resolved}`);
                 return resolved;
-            }
-        }
-
-        // MÉTODO 1.5: Busca Profunda na Memória do Baileys (Store Contacts)
-        // Isso força a captura do PN se o WhatsApp já enviou o contato antes
-        if (this.store && this.store.contacts && cleanJid.includes('@lid')) {
-            try {
-                for (const key in this.store.contacts) {
-                    const contact = this.store.contacts[key];
-                    if (contact && contact.lid === cleanJid && key.includes('@s.whatsapp.net')) {
-                        this.logger.info(`✅ [ID RESOLVED] Store Baileys: ${cleanJid} -> ${key}`);
-                        if (this.moderationSystem) {
-                            this.moderationSystem.updateLidMapping(cleanJid, key);
-                        }
-                        return key;
-                    }
-                }
-            } catch (e: any) {
-                this.logger.debug(`⚠️ Falha na busca da Store Baileys: ${e.message}`);
             }
         }
 
@@ -3913,11 +3916,11 @@ class BotCore {
                         if (!akiraIsAdmin && targetGroup.endsWith('@g.us')) {
                             const failMsg = `⚠️ [AUTO-ACTION] Negado: '${cmd}' em ${targetGroup} - Falta de Permissões de Admin.`;
                             this.logger.warn(failMsg);
-
+                            
                             // Notifica o dono sobre o erro de permissão se notify_owner for true
                             if (notify_owner) {
-                                await this.sock.sendMessage(`244937035662@s.whatsapp.net`, {
-                                    text: `🚨 *ERRO DE AUTONOMIA*\nAção: \`${cmd}\`\nGrupo: ${targetGroup}\nErro: Akira não é admin neste grupo.`
+                                await this.sock.sendMessage(`244937035662@s.whatsapp.net`, { 
+                                    text: `🚨 *ERRO DE AUTONOMIA*\nAção: \`${cmd}\`\nGrupo: ${targetGroup}\nErro: Akira não é admin neste grupo.` 
                                 });
                             }
                             break;

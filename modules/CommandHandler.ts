@@ -2626,10 +2626,38 @@ ${P}menu osint — Comandos OSINT avançados`,
             return true;
         }
 
+        // 🛡️ PROTEÇÃO: Não banir o bot ou o dono
+        const botNumber = this.bot?.config?.BOT_NUMERO_REAL ? String(this.bot.config.BOT_NUMERO_REAL).replace(/\D/g, '') : '';
+        const ownerNumber = this.bot?.config?.DONO_NUMERO ? String(this.bot.config.DONO_NUMERO).replace(/\D/g, '') : '';
+        const numericTarget = targetId.replace(/\D/g, '');
+
+        if (botNumber && numericTarget === botNumber) {
+            await this._reply(m, '❌ Eu não posso me adicionar à blacklist!');
+            return true;
+        }
+        if (ownerNumber && numericTarget === ownerNumber) {
+            await this._reply(m, '❌ Você não pode adicionar o desenvolvedor à blacklist!');
+            return true;
+        }
+
+        // ✅ RESOLUÇÃO DE LID PARA PN ANTES DE ADICIONAR (CRÍTICO)
+        if (targetId.includes('@lid') && typeof this.bot?.resolveIdentity === 'function') {
+            try {
+                const resolved = await this.bot.resolveIdentity(targetId);
+                if (resolved && !resolved.includes('@lid')) {
+                    targetId = resolved.includes('@') ? resolved : `${resolved}@s.whatsapp.net`;
+                    console.log(`✅ [CommandHandler] LID resolvido para blacklist: ${targetId}`);
+                }
+            } catch (e) {
+                console.warn(`[CommandHandler] Falha ao resolver LID para blacklist: ${targetId}`);
+            }
+        }
+
         if (action === 'add') {
             const reason = args.slice(2).join(' ') || 'Adicionado manualmente pelo dono';
-            const res = this.moderationSystem?.addToBlacklist ? this.moderationSystem.addToBlacklist(targetId, targetId.split('@')[0], targetId.split('@')[0], reason) : { success: false, message: 'Função indisponível' };
-            await this._reply(m, res.success ? `✅ Usuário ${targetId.split('@')[0]} adicionado à blacklist.` : `❌ Erro: ${res.message}`);
+            const cleanDisplay = targetId.split('@')[0];
+            const res = this.moderationSystem?.addToBlacklist ? this.moderationSystem.addToBlacklist(targetId, cleanDisplay, cleanDisplay, reason) : { success: false, message: 'Função indisponível' };
+            await this._reply(m, res.success ? `✅ Usuário ${cleanDisplay} adicionado à blacklist.` : `❌ Erro: ${res.message}`);
         } else if (action === 'remove' || action === 'del') {
             const success = this.moderationSystem?.removeFromBlacklist ? this.moderationSystem.removeFromBlacklist(targetId) : false;
             await this._reply(m, success ? `✅ Usuário ${targetId.split('@')[0]} removido da blacklist.` : `❌ Usuário não encontrado na blacklist.`);
